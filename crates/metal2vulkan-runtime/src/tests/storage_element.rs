@@ -27,6 +27,12 @@
 //! the same draw before the declaration drew; a draw of `colored_fragment`, which reaches no
 //! texture beyond its slots, draws after it.
 //!
+//! And an `RGBA8Unorm` view of the first texture, made plainly and over a Shared buffer, written by
+//! the fixture's `access::read_write` kernel on every device: where the device's image format query
+//! takes the texture's image with `VK_IMAGE_CREATE_EXTENDED_USAGE_BIT` and the storage usage, the
+//! texture's bytes hold the view's unorm codes and its own read decodes them; elsewhere the dispatch
+//! is `Gap::StorageElement`.
+//!
 //! `llvm-as` assembles the functions; without it the tests skip visibly.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
@@ -36,7 +42,7 @@ pub(crate) mod on_device {
         descriptor as render_descriptor, examples, pass, run, state as render_state, target,
         vertices, Buffers,
     };
-    use crate::texture::TextureObject;
+    use crate::texture::{kept_features, TextureObject};
     use crate::{
         Buffer, ColorAttachmentDescriptor, ComputeCommandEncoder, ComputePipelineDescriptor,
         ComputePipelineState, Device, DispatchType, Error, FunctionDescriptor, Gap, HeapRange,
@@ -532,6 +538,155 @@ declare void @air.write_texture_2d.v4f32(ptr addrspace(1), <2 x i32>, <4 x float
                 "{name}: a draw after a declared write refused for {refused:?}; every other case \
                  and every draw of no such access drew"
             );
+        });
+    }
+
+    /// The 8-bit sRGB decode of `code`.
+    fn decoded(code: u8) -> f32 {
+        let c = f32::from(code) / 255.0;
+        match c <= 0.04045 {
+            true => c / 12.92,
+            false => ((c + 0.055) / 1.055).powf(2.4),
+        }
+    }
+
+    /// A 2 by 2 `RGBA8Unorm_sRGB` texture of shader-read and shader-write usage, Shared, made
+    /// plainly and over a Shared buffer, written through its `RGBA8Unorm` view by
+    /// `rrp_sw_rwwrite_f`, on every device. Where the device does not store the texture's own
+    /// format, its image takes the storage usage exactly where the device's image format query
+    /// takes the image with `VK_IMAGE_CREATE_EXTENDED_USAGE_BIT`, its usage and the storage usage,
+    /// in the image's tiling (and, linear, where the view format's linear tiling holds what storage
+    /// keeps of its optimal tiling). With it, the dispatch writes the view's unorm codes, which the
+    /// texture's bytes hold and its own read decodes; without it, the dispatch is
+    /// `Gap::StorageElement`. Prints the query's answer for the
+    /// extended image, optimal and linear.
+    #[test]
+    fn every_device_writes_an_srgb_texture_through_its_unorm_view() {
+        let Some(library) = library() else {
+            return;
+        };
+        each_device("sRGB unorm views", |name, _, device| {
+            type F = vk::FormatFeatureFlags2;
+            let flags = vk::ImageCreateFlags::MUTABLE_FORMAT | vk::ImageCreateFlags::EXTENDED_USAGE;
+            let formats = [vk::Format::R8G8B8A8_SRGB, vk::Format::R8G8B8A8_UNORM];
+            let query = |tiling, usage| {
+                let mut list = vk::ImageFormatListCreateInfo::default().view_formats(&formats);
+                let info = vk::PhysicalDeviceImageFormatInfo2::default()
+                    .format(formats[0])
+                    .ty(vk::ImageType::TYPE_2D)
+                    .tiling(tiling)
+                    .usage(usage | vk::ImageUsageFlags::STORAGE)
+                    .flags(flags)
+                    .push_next(&mut list);
+                device.core().image_format_properties(&info).is_some()
+            };
+            let sampled = vk::ImageUsageFlags::TRANSFER_SRC
+                | vk::ImageUsageFlags::TRANSFER_DST
+                | vk::ImageUsageFlags::SAMPLED;
+            println!(
+                "{name}: an sRGB image, mutable and extended, of a unorm view format, sampled and \
+                 stored: optimal {}, linear {}",
+                query(vk::ImageTiling::OPTIMAL, sampled),
+                query(vk::ImageTiling::LINEAR, sampled)
+            );
+            let stored = F::STORAGE_IMAGE | F::STORAGE_WRITE_WITHOUT_FORMAT;
+            let (_, own) = device.core().format_features(formats[0]);
+            let own = own.contains(stored);
+            let (linear, optimal) = device.core().format_features(formats[1]);
+            let unorm = optimal.contains(stored);
+            let kept = optimal & kept_features(vk::ImageUsageFlags::STORAGE);
+            let linear_kept = linear.contains(kept);
+            let write = state(&device, &library, "rrp_sw_rwwrite_f");
+            let read = state(&device, &library, "rrp_sw_read_f");
+            let _grant = (device.grant_indices(IndexClass::Texture, 1, 4))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let mut d =
+                TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8UnormSRGB, 2, 2);
+            d.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
+            d.storage_mode = StorageMode::Shared;
+            let align = (device.minimum_linear_texture_alignment(d.pixel_format))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let pitch = 8u64.next_multiple_of(align);
+            let block = (device.take_block(MemoryClass::Shared, pitch * 2))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let under = (device.new_buffer(block.id, 0, pitch * 2, Some(0)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let textures = [
+                ("plain", device.new_texture(&d, Some(1))),
+                ("over a buffer", under.new_texture(&d, Some(3), 0, pitch)),
+            ];
+            let mut arena = Arena::new(&device);
+            for (at, (kind, texture)) in textures.into_iter().enumerate() {
+                let texture = texture.unwrap_or_else(|error| panic!("{name}: {kind}: {error}"));
+                let view = texture.new_texture_view(
+                    PixelFormat::RGBA8Unorm,
+                    TextureType::Type2D,
+                    0..1,
+                    0..1,
+                    Some(2 + 2 * at as u32),
+                );
+                let view = view.unwrap_or_else(|error| panic!("{name}: {kind}: {error}"));
+                let usage = texture.object().image_usage();
+                let extended = usage.contains(vk::ImageUsageFlags::STORAGE);
+                let (form, tiling) = match (at, texture.copied_over()) {
+                    (0, _) => ("optimal", vk::ImageTiling::OPTIMAL),
+                    (_, Some(_)) => ("copied", vk::ImageTiling::OPTIMAL),
+                    (_, None) => ("in place", vk::ImageTiling::LINEAR),
+                };
+                let takes = query(tiling, usage)
+                    && (tiling == vk::ImageTiling::OPTIMAL || linear_kept)
+                    && unorm;
+                println!(
+                    "{name}: {kind} ({form}): the image's usage {:#x}; the device stores the \
+                     texture's format {own}, its query takes it extended {takes}",
+                    usage.as_raw()
+                );
+                assert_eq!(extended, own || takes, "{name}: {kind}: the storage usage");
+                let values = arena.buffer();
+                let contents = values.contents().expect("a Shared buffer");
+                // SAFETY: the buffer is alive, Shared and 256 bytes long, and no work uses it.
+                unsafe { (contents.cast::<[f32; 4]>().as_ptr()).write([0.6, 0.25, 1.0, 0.75]) };
+                match (extended, dispatch(&device, &write, &view, &values)) {
+                    (true, Ok(())) => {}
+                    (
+                        false,
+                        Err(Error::Unsupported(Gap::StorageElement {
+                            slot: Some(0),
+                            pixel_format: PixelFormat::RGBA8Unorm,
+                            ..
+                        })),
+                    ) => {
+                        println!("{name}: {kind}: not extended, refused");
+                        continue;
+                    }
+                    (extended, other) => {
+                        panic!("{name}: {kind}, extended {extended}: {other:?}")
+                    }
+                }
+                let mut texels = [0; 16];
+                let region = Region {
+                    origin: [0; 3],
+                    size: [2, 2, 1],
+                };
+                (texture.get_bytes(&mut texels, 8, 16, region, 0, 0))
+                    .unwrap_or_else(|error| panic!("{name}: {kind}: {error}"));
+                let codes = [153, 64, 255, 191];
+                assert_eq!(texels, [codes; 4].concat()[..], "{name}: {kind}: the bytes");
+                let out = arena.buffer();
+                (dispatch(&device, &read, &texture, &out))
+                    .unwrap_or_else(|error| panic!("{name}: {kind}: the read: {error}"));
+                let got = out.contents().expect("a Shared buffer");
+                // SAFETY: the buffer is alive, Shared and 256 bytes long; its work completed.
+                let got = unsafe { got.cast::<[f32; 4]>().as_ptr().read() };
+                let want = [decoded(153), decoded(64), 1.0, 191.0 / 255.0];
+                for (got, want) in got.iter().zip(want) {
+                    assert!(
+                        (got - want).abs() < 2e-3,
+                        "{name}: {kind}: read {got}, {want}"
+                    );
+                }
+                println!("{name}: {kind}: written through its unorm view, read decoded");
+            }
         });
     }
 }
