@@ -153,7 +153,9 @@ fn store_const_passes_the_pipeline_on_every_m1_profile() {
             compile(&bitcode, "store_const", &p).unwrap_or_else(|e| panic!("{stem}: compile: {e}"));
         check_artifact(&a, stem);
         let (table, words) = link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
-        assert_eq!(table.spec.len(), 4, "{stem}");
+        // The threadgroup's seven: `LocalSize` X, Y and Z, `DeepThreadgroup`, and the `WorkgroupSize`
+        // composite's three parts.
+        assert_eq!(table.spec.len(), 7, "{stem}");
         let ops = opcodes(&words);
         for op in [
             crate::spv::Op::SpecConstantComposite,
