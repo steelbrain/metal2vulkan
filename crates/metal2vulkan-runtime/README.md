@@ -3435,7 +3435,10 @@ cache is answered compile-required on both.
   not yet retired dispatched, and none where work holds every one, so a command buffer that
   dispatches more keys keeps each variant until it retires, and the kernel's next make after that
   evicts the idle ones past 64. A variant evicted and dispatched again is made again, through the
-  device's pipeline cache, a first-use wait where Metal makes nothing.
+  device's pipeline cache, a first-use wait where Metal makes nothing. One small kernel's variant,
+  made, evicted and made again (release build, no validation layer, the drivers' disk caches off,
+  job m3-max-70404): 313 µs and then 104 µs on lavapipe (llvmpipe, LLVM 23.1.4), 2,727 µs and then
+  5.1 µs on an RTX 3090.
   `Gauges::kernel_variants` counts the live variants. A dispatch's threadgroup memory length is
   rounded up to a multiple of 16 bytes, the only lengths Metal takes, so lengths within one
   multiple run one variant; each threadgroup size is a variant of its own, as a `VkPipeline`
