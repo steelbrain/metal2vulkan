@@ -7,7 +7,7 @@
 
 use super::addresses::AddressMap;
 use super::covers::{self, Covers, SlotStage};
-use super::dumps;
+use super::dumps::{self, Part};
 use super::heaps::{placement_heap, placement_offset, places_texture, relay, Layout, Placements};
 use super::pixels::Shape;
 use super::prepass::{Ahead, Prepass};
@@ -101,6 +101,15 @@ pub trait Backend {
     /// other object, and on a backend that does not say.
     fn read_copy(&self, _object: u64) -> Option<ReadCopy> {
         None
+    }
+    /// The bytes of `part` of texture `object`, laid out as [`read`](Self::read) lays out a
+    /// texture's first level and slice: what a render pass attachment stored there, for a dump
+    /// ([`Player::dumping`]). Refused on a backend that reads no part of a texture.
+    fn read_texture_part(&mut self, object: u64, part: Part) -> Result<Vec<u8>, PlayError> {
+        Err(PlayError::Refused {
+            selector: "m2v.dump".into(),
+            why: format!("no read of a texture's part (#{object}, {part:?})"),
+        })
     }
     /// The pixel format and size of texture `object` as the backend made it, which a picture
     /// of its bytes (`read`) is read by; none for an object that is no texture of the backend's.
@@ -999,6 +1008,10 @@ struct Dump {
     encoders: HashMap<u64, u64>,
     /// The buffers each listed command buffer's encoders named, until it completes.
     named: HashMap<u64, BTreeSet<u64>>,
+    /// The colour attachments the play's render passes store.
+    stores: dumps::Stores,
+    /// The texture parts each listed command buffer's render passes stored, until it completes.
+    stored: HashMap<u64, BTreeMap<u64, BTreeSet<Part>>>,
     /// The listed command buffers that completed and are not yet written out.
     completed: Vec<u64>,
 }
@@ -1253,7 +1266,8 @@ impl<'b, B: Backend> Player<'b, B> {
 
     /// The player that, once each command buffer whose stream id `command_buffers` holds
     /// completed, writes every buffer its encoders named into `dir`, with the ranges of it the
-    /// cover rule held covered then (`dumps.rs`): the per-command-buffer compare of two plays
+    /// cover rule held covered then, and every colour attachment its render passes stored, the
+    /// parts of it they stored (`dumps.rs`): the per-command-buffer compare of two plays
     /// ([`compare_dumps`](super::compare_dumps)) reads them. A listed command buffer's buffers are
     /// read after the wait that saw it complete, before the next call plays.
     pub fn dumping(mut self, command_buffers: dumps::CommandBufferList, dir: PathBuf) -> Self {
@@ -1263,6 +1277,8 @@ impl<'b, B: Backend> Player<'b, B> {
             buffers: HashSet::new(),
             encoders: HashMap::new(),
             named: HashMap::new(),
+            stores: dumps::Stores::default(),
+            stored: HashMap::new(),
             completed: Vec::new(),
         });
         self
@@ -1656,6 +1672,7 @@ impl<'b, B: Backend> Player<'b, B> {
                 self.stale.released(call.receiver);
                 if let Some(dump) = &mut self.dump {
                     dump.buffers.remove(&call.receiver);
+                    dump.stores.released(call.receiver);
                 }
                 self.release(call.receiver)
             }
@@ -1663,12 +1680,15 @@ impl<'b, B: Backend> Player<'b, B> {
         }
     }
 
-    /// What a dump (`dumping`) keeps of `call`, played: a buffer it made, an encoder a listed
-    /// command buffer made, and the buffers such an encoder's call names.
+    /// What a dump (`dumping`) keeps of `call`, played: a buffer it made, a render pass
+    /// descriptor's colour attachment it set, an encoder a listed command buffer made, the
+    /// buffers such an encoder's call names and the texture parts its render pass stores.
     fn dump_saw(&mut self, call: &Call) {
         let Some(dump) = &mut self.dump else {
             return;
         };
+        let mut stored = Vec::new();
+        dump.stores.saw(call, &mut stored);
         let selector = &*call.selector;
         // The host's padded and exported buffers reach here as `newBufferWithLength:options:`
         // (`plain`); a buffer in a block is `m2v.newBufferInBlock:offset:length:options:`.
@@ -1695,32 +1715,54 @@ impl<'b, B: Backend> Player<'b, B> {
         covers::named(&call.args, &mut objects);
         let named = dump.named.entry(command_buffer).or_default();
         named.extend(objects.into_iter().filter(|o| dump.buffers.contains(o)));
+        if !stored.is_empty() {
+            let parts = dump.stored.entry(command_buffer).or_default();
+            for (texture, part) in stored {
+                parts.entry(texture).or_default().insert(part);
+            }
+        }
     }
 
     /// Write out the listed command buffers that completed (`dumping`): each buffer they named,
-    /// read now, and its covered ranges now.
+    /// read now, and its covered ranges now; each colour attachment their render passes stored,
+    /// the parts of it they stored, read now.
     fn dump_completed(&mut self, left_out: &mut Counters) -> Result<(), PlayError> {
         let Some(dump) = &mut self.dump else {
             return Ok(());
         };
         let dir = dump.dir.clone();
         let mut buffers = Vec::new();
+        let mut textures = Vec::new();
         while let Some(command_buffer) = dump.completed.pop() {
             dump.encoders.retain(|_, of| *of != command_buffer);
             let named = dump.named.remove(&command_buffer).unwrap_or_default();
             buffers.extend(named.into_iter().map(|object| (command_buffer, object)));
+            let stored = dump.stored.remove(&command_buffer).unwrap_or_default();
+            textures.extend(
+                stored
+                    .into_iter()
+                    .map(|(t, parts)| (command_buffer, t, parts)),
+            );
         }
+        let failed = |command_buffer: u64, object: u64| {
+            let dir = dir.display();
+            move |error: std::io::Error| {
+                PlayError::Dump(format!("{dir}: cb #{command_buffer} #{object}: {error}"))
+            }
+        };
         for (command_buffer, object) in buffers {
             let covered = self.covers.ranges(object);
             let bytes = self.uncounted(left_out, |player| player.read_back(object));
             let bytes = bytes.as_deref().map_err(|error| error.to_string());
             let copy = self.backend.read_copy(object);
-            dumps::write(&dir, command_buffer, object, bytes, &covered, copy).map_err(|error| {
-                PlayError::Dump(format!(
-                    "{}: cb #{command_buffer} #{object}: {error}",
-                    dir.display()
-                ))
-            })?;
+            dumps::write(&dir, command_buffer, object, bytes, &covered, copy)
+                .map_err(failed(command_buffer, object))?;
+        }
+        for (command_buffer, texture, parts) in textures {
+            let bytes = self.uncounted(left_out, |player| player.read_parts(texture, &parts));
+            let bytes = bytes.as_deref().map_err(|error| error.to_string());
+            dumps::write(&dir, command_buffer, texture, bytes, &[], None)
+                .map_err(failed(command_buffer, texture))?;
         }
         Ok(())
     }
@@ -2191,6 +2233,20 @@ impl<'b, B: Backend> Player<'b, B> {
         let bytes = self.backend.read(object);
         self.times.read += since(began);
         bytes
+    }
+
+    /// The bytes of `parts` of texture `texture` on the backend, one after another in their
+    /// order, timed (`Times::read`).
+    fn read_parts(&mut self, texture: u64, parts: &BTreeSet<Part>) -> Result<Vec<u8>, PlayError> {
+        let began = std::time::Instant::now();
+        let mut bytes = Vec::new();
+        let read = (parts.iter()).try_for_each(|&part| {
+            let read = self.backend.read_texture_part(texture, part)?;
+            bytes.extend(read);
+            Ok(())
+        });
+        self.times.read += since(began);
+        read.map(|()| bytes)
     }
 
     /// The runtime's counters now, timed (`Times::count`).

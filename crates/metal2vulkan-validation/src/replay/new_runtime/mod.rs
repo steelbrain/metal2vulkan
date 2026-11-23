@@ -33,6 +33,7 @@ pub use judged::judged_records;
 
 use super::args::{arg, data, metal, option_sets, refuse, uint, variant, Fields};
 use super::covers::SlotStage;
+use super::dumps::Part;
 use super::pixels::Shape;
 use super::player::{Backend, Counters, Made, PlayError, ReadCopy};
 use super::prepass::{Ahead, AheadGrid};
@@ -1304,15 +1305,44 @@ impl NewRuntime {
         copied
     }
 
-    /// The texels of `texture`, a Private texture, which the CPU does not reach: a blit copies
-    /// its first level's first slice into a Shared buffer of the play's own, laid out as
-    /// `texture_bytes` reads a texture the CPU reaches, on the play's read queue (`reads`), and
-    /// the read waits for it.
-    fn private_texture_bytes(&mut self, texture: &rt::Texture) -> Result<Vec<u8>, rt::Error> {
-        let d = texture.descriptor();
-        let raw = u64::from(d.pixel_format.as_raw());
-        let query = rt::TextureLevelQuery::plane_2d(raw, d.width.into(), d.height.into());
-        let level = self.device.texture_level_info(&query);
+    /// The texels of `part` of `texture`, for `selector`'s read: a blit's copy of a Private
+    /// texture's (`private_texture_bytes`), the CPU's read of any other's (`texture_bytes`).
+    fn texture_part(
+        &mut self,
+        texture: &rt::Texture,
+        part: Part,
+        selector: &str,
+    ) -> Result<Vec<u8>, PlayError> {
+        let narrow = |v: u64| {
+            u32::try_from(v).map_err(|_| PlayError::Refused {
+                selector: selector.into(),
+                why: format!("a texture part past u32: {part:?}"),
+            })
+        };
+        let part = [
+            narrow(part.level)?,
+            narrow(part.slice)?,
+            narrow(part.plane)?,
+        ];
+        let bytes = match texture.descriptor().storage_mode {
+            rt::StorageMode::Private => self.private_texture_bytes(texture, part),
+            _ => texture_bytes(&self.device, texture, part),
+        };
+        bytes.map_err(|error| PlayError::Runtime {
+            selector: selector.into(),
+            error: error.to_string(),
+        })
+    }
+
+    /// The texels of `part` of `texture`, a Private texture, which the CPU does not reach: a blit
+    /// copies them into a Shared buffer of the play's own, laid out as `texture_bytes` reads a
+    /// texture the CPU reaches, on the play's read queue (`reads`), and the read waits for it.
+    fn private_texture_bytes(
+        &mut self,
+        texture: &rt::Texture,
+        part: [u32; 3],
+    ) -> Result<Vec<u8>, rt::Error> {
+        let (level, place, size) = part_layout(&self.device, texture, part);
         let length = level.bytes_per_image;
         if length == 0 {
             return Ok(Vec::new());
@@ -1326,17 +1356,12 @@ impl NewRuntime {
             let into = self.device.new_buffer(block.id, 0, length, None)?;
             let command_buffer = queue.command_buffer()?;
             let mut blit = command_buffer.blit_command_encoder()?;
-            let from = rt::TexturePlace {
-                slice: 0,
-                level: 0,
-                origin: [0; 3],
-            };
             let layout = rt::BufferLayout {
                 offset: 0,
                 bytes_per_row: level.bytes_per_row,
                 bytes_per_image: level.bytes_per_image,
             };
-            blit.copy_from_texture_to_buffer(texture, from, [d.width, d.height, 1], &into, layout)?;
+            blit.copy_from_texture_to_buffer(texture, place, size, &into, layout)?;
             blit.end_encoding();
             command_buffer.commit()?;
             command_buffer.wait_until_completed()?;
@@ -2497,21 +2522,54 @@ impl NewRuntime {
     }
 }
 
-/// A texture's bytes for a check: its first level and slice, the rows and the image as far apart as
-/// Metal's level info puts them, the bytes between rows zero.
-fn texture_bytes(device: &rt::Device, texture: &rt::Texture) -> Result<Vec<u8>, rt::Error> {
-    let d = texture.descriptor();
-    let raw = u64::from(d.pixel_format.as_raw());
-    let query = rt::TextureLevelQuery::plane_2d(raw, d.width.into(), d.height.into());
-    let level = device.texture_level_info(&query);
+/// A texture's bytes of `part`, its level, slice and depth plane (its first level and slice for a
+/// check): the part's rows and image as far apart as Metal's level info puts them, the bytes
+/// between rows zero.
+fn texture_bytes(
+    device: &rt::Device,
+    texture: &rt::Texture,
+    part: [u32; 3],
+) -> Result<Vec<u8>, rt::Error> {
+    let (level, place, size) = part_layout(device, texture, part);
     let mut bytes = vec![0; level.bytes_per_image as usize];
     let region = rt::Region {
-        origin: [0; 3],
-        size: [d.width, d.height, 1],
+        origin: place.origin,
+        size,
     };
     let (row, image) = (level.bytes_per_row, level.bytes_per_image);
-    texture.get_bytes(&mut bytes, row, image, region, 0, 0)?;
+    texture.get_bytes(&mut bytes, row, image, region, place.level, place.slice)?;
     Ok(bytes)
+}
+
+/// How `[level, slice, plane]` of `texture` lies: Metal's level info of the level, one image
+/// deep, and the place and size of its texels, the depth plane as the place's `z`.
+fn part_layout(
+    device: &rt::Device,
+    texture: &rt::Texture,
+    [level, slice, plane]: [u32; 3],
+) -> (rt::TextureLevelInfo, rt::TexturePlace, [u32; 3]) {
+    let d = texture.descriptor();
+    let query = rt::TextureLevelQuery {
+        level: level.into(),
+        ..rt::TextureLevelQuery::plane_2d(
+            u64::from(d.pixel_format.as_raw()),
+            d.width.into(),
+            d.height.into(),
+        )
+    };
+    let info = device.texture_level_info(&query);
+    let place = rt::TexturePlace {
+        slice,
+        level,
+        origin: [0, 0, plane],
+    };
+    // A level is no wider or taller than the texture.
+    let size = [
+        u32::try_from(info.width).unwrap_or(d.width),
+        u32::try_from(info.height).unwrap_or(d.height),
+        1,
+    ];
+    (info, place, size)
 }
 
 /// `bytes` into `buffer` at `offset`, through its mapping.
@@ -2929,14 +2987,7 @@ impl Backend for NewRuntime {
         };
         if let Some(Object::Texture(texture)) = self.objects.get(&object) {
             let texture = texture.clone();
-            let bytes = match texture.descriptor().storage_mode {
-                rt::StorageMode::Private => self.private_texture_bytes(&texture),
-                _ => texture_bytes(&self.device, &texture),
-            };
-            return bytes.map_err(|error| PlayError::Runtime {
-                selector: "m2v.check".into(),
-                error: error.to_string(),
-            });
+            return self.texture_part(&texture, Part::default(), "m2v.check");
         }
         // The CPU's bytes of a buffer with a second copy, as Metal's `contents` answers them: its
         // aside from a read-back of a stream that records its announced bytes to its next
@@ -2975,6 +3026,19 @@ impl Backend for NewRuntime {
         // SAFETY: the buffer's mapping holds its length, and the player waited for the work that
         // writes it.
         Ok(unsafe { std::slice::from_raw_parts(contents.as_ptr(), length) }.to_vec())
+    }
+
+    fn read_texture_part(&mut self, object: u64, part: Part) -> Result<Vec<u8>, PlayError> {
+        match self.objects.get(&object) {
+            Some(Object::Texture(texture)) => {
+                let texture = texture.clone();
+                self.texture_part(&texture, part, "m2v.dump")
+            }
+            _ => Err(PlayError::Refused {
+                selector: "m2v.dump".into(),
+                why: "no texture".into(),
+            }),
+        }
     }
 
     fn read_copy(&self, object: u64) -> Option<ReadCopy> {

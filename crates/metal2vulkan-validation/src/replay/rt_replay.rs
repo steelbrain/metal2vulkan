@@ -112,14 +112,16 @@
 //!   digests on, each modules line ends in its state's content digest: three contents, three
 //!   digests, which a second play on a device of its own, on two threads, writes again; without
 //!   them, no modules line carries one.
+//! - A dump of a listed command buffer holds the colour attachment its pass stored: the draw's
+//!   Private target, read back through a blit, green at every texel, and covering nothing.
 //!
 //! The runtime's device is opened behind the hang tripwire, as every device open in this crate
 //! is (`gpu.rs`), its kernels kept in a cache the test owns ([`ScratchCache`]).
 
 use crate::gpu::{self, DeviceType};
 use crate::replay::{
-    Backend, NewRuntime, PlayError, Player, ReadCopy, Report, StreamReader, StreamWriter, Value,
-    WAIT_COMPLETED,
+    Backend, CommandBufferList, NewRuntime, PlayError, Player, ReadCopy, Report, StreamReader,
+    StreamWriter, Value, WAIT_COMPLETED,
 };
 use crate::ScratchDir;
 use metal2vulkan_devtools::metallib::{metallib, wrap, MtlbFunction};
@@ -527,6 +529,30 @@ fn a_draw_into_a_pass_plays_on_the_new_runtime() {
     }
     assert!(executed["passes"] >= 1, "{executed:?}");
     assert_eq!(report.first_skip, None);
+}
+
+/// A dump of the draw's command buffer (#12) holds its pass's colour attachment (#7, stored), a
+/// Private texture the play reads back through a blit: the triangle's green at every texel, its
+/// rows 16 bytes apart as a check reads them, and no cover.
+#[test]
+fn a_dump_holds_the_colour_attachment_a_pass_stored() {
+    let dir = ScratchDir::new("rt-replay-dump-colour").unwrap();
+    let green: Vec<u8> = [0u8, 255, 0, 255].repeat(16);
+    let path = draw_into_a_pass(&dir, &green, Then::Nothing);
+    let dumps = ScratchDir::new("rt-replay-dump-colour-out").unwrap();
+    let cache = ScratchCache::new().unwrap();
+    let mut backend = NewRuntime::new(rt_device(cache.path()), gpu::TEST_DEVICE).unwrap();
+    let mut reader = StreamReader::open(&[path], None).unwrap();
+    let listed = CommandBufferList::parse("12").unwrap();
+    let player = Player::new(&mut backend).dumping(listed, dumps.path().to_path_buf());
+    let (report, ended) = player.play(&mut reader);
+    for line in report.lines() {
+        eprintln!("REPLAY dump-colour {line}");
+    }
+    ended.unwrap();
+    let read = |name: &str| std::fs::read(dumps.path().join(name)).unwrap();
+    assert_eq!(read("cb12-obj7.bin"), green);
+    assert_eq!(read("cb12-obj7.cover"), b"-");
 }
 
 /// A play's report carries the runtime's stage sums among its executed counters, with the part

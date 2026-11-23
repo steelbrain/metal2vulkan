@@ -4,7 +4,7 @@
 use super::addresses::AddressMap;
 use super::compare::{compare_plays, shown_differences};
 use super::covers::SlotStage;
-use super::dumps::{compare_dumps, CommandBufferList, Difference};
+use super::dumps::{compare_dumps, CommandBufferList, Difference, Part};
 use super::new_runtime::indices::Indices;
 use super::new_runtime::places::Waiting;
 use super::new_runtime::second::merge;
@@ -577,6 +577,11 @@ impl Backend for Kept {
 
     fn read_copy(&self, object: u64) -> Option<ReadCopy> {
         self.read_copies.get(&object).copied()
+    }
+
+    fn read_texture_part(&mut self, object: u64, part: Part) -> Result<Vec<u8>, PlayError> {
+        let words = [object, part.level, part.slice, part.plane];
+        Ok(words.iter().flat_map(|word| word.to_le_bytes()).collect())
     }
 
     fn resource_id(&mut self, object: u64) -> Result<Option<u64>, PlayError> {
@@ -3399,6 +3404,117 @@ fn a_listed_command_buffer_dumps_every_buffer_it_names_whatever_made_it() {
         .flat_map(|dump| [format!("{dump}.bin"), format!("{dump}.cover")])
         .collect();
     assert_eq!(names, wanted);
+}
+
+/// A listed command buffer's dump holds each colour attachment its render passes stored, the parts
+/// of it they stored one after another, and no other attachment: of command buffer #20's two
+/// passes, the first stores texture #8 (attachment 0, `MTLStoreActionStore`), not #9 (1,
+/// `MTLStoreActionDontCare`), the resolve texture #11's level 1 and slice 2 of multisample #10,
+/// not #10 itself (2, `MTLStoreActionMultisampleResolve`), #12's level 1 by the encoder's
+/// `setColorStoreAction:atIndex:` (3, `MTLStoreActionUnknown`), and no depth attachment (#13);
+/// the second stores #8's level 2 and depth plane 3. A texture's dump covers nothing.
+#[test]
+fn a_listed_command_buffer_dumps_the_colour_attachments_its_render_passes_store() {
+    let dir = ScratchDir::new("dumps-stores").unwrap();
+    let (_, ended) = dumped(&mut Kept::default(), dir.path(), |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 6, &[], &[])?;
+        w.call("m2v.textureDescriptor", 0, 7, &[map(&[])], &[])?;
+        for texture in 8..=13 {
+            w.call(
+                "newTextureWithDescriptor:",
+                1,
+                texture,
+                &[Value::Object(7)],
+                &[],
+            )?;
+        }
+        let colour = |w: &mut StreamWriter<File>, pass, at, set: &[(&str, Value)]| {
+            let args = [Value::Uint(at), map(set)];
+            w.call("m2v.setColorAttachment", pass, 0, &args, &[])
+        };
+        w.call("MTLRenderPassDescriptor.new", 0, 30, &[], &[])?;
+        let stored = [
+            ("texture", Value::Object(8)),
+            ("storeAction", Value::Uint(1)),
+        ];
+        colour(w, 30, 0, &stored)?;
+        let dropped = [
+            ("texture", Value::Object(9)),
+            ("storeAction", Value::Uint(0)),
+        ];
+        colour(w, 30, 1, &dropped)?;
+        let resolved = [
+            ("texture", Value::Object(10)),
+            ("resolveTexture", Value::Object(11)),
+            ("resolveLevel", Value::Uint(1)),
+            ("resolveSlice", Value::Uint(2)),
+            ("storeAction", Value::Uint(2)),
+        ];
+        colour(w, 30, 2, &resolved)?;
+        let unknown = [
+            ("texture", Value::Object(12)),
+            ("level", Value::Uint(1)),
+            ("storeAction", Value::Uint(4)),
+        ];
+        colour(w, 30, 3, &unknown)?;
+        let depth = map(&[
+            ("texture", Value::Object(13)),
+            ("storeAction", Value::Uint(1)),
+        ]);
+        w.call("m2v.setDepthAttachment", 30, 0, &[depth], &[])?;
+        w.call("MTLRenderPassDescriptor.new", 0, 31, &[], &[])?;
+        let level = [
+            ("texture", Value::Object(8)),
+            ("level", Value::Uint(2)),
+            ("depthPlane", Value::Uint(3)),
+            ("storeAction", Value::Uint(1)),
+        ];
+        colour(w, 31, 0, &level)?;
+        w.call("commandBuffer", 6, 20, &[], &[])?;
+        w.call(
+            "renderCommandEncoderWithDescriptor:",
+            20,
+            21,
+            &[Value::Object(30)],
+            &[],
+        )?;
+        let store = [Value::Uint(1), Value::Uint(3)];
+        w.call("setColorStoreAction:atIndex:", 21, 0, &store, &[])?;
+        w.call("endEncoding", 21, 0, &[], &[])?;
+        w.call(
+            "renderCommandEncoderWithDescriptor:",
+            20,
+            22,
+            &[Value::Object(31)],
+            &[],
+        )?;
+        w.call("endEncoding", 22, 0, &[], &[])?;
+        w.call("commit", 20, 0, &[], &[])
+    });
+    ended.unwrap();
+    let mut names: Vec<String> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    let dumps = ["cb20-obj11", "cb20-obj12", "cb20-obj8"];
+    let wanted: Vec<String> = (dumps.iter())
+        .flat_map(|dump| [format!("{dump}.bin"), format!("{dump}.cover")])
+        .collect();
+    assert_eq!(names, wanted);
+    let read = |name: &str| std::fs::read(dir.path().join(name)).unwrap();
+    let parts = |parts: &[[u64; 4]]| -> Vec<u8> {
+        (parts.iter().flatten())
+            .flat_map(|word| word.to_le_bytes())
+            .collect()
+    };
+    assert_eq!(read("cb20-obj8.bin"), parts(&[[8, 0, 0, 0], [8, 2, 0, 3]]));
+    assert_eq!(read("cb20-obj11.bin"), parts(&[[11, 1, 2, 0]]));
+    assert_eq!(read("cb20-obj12.bin"), parts(&[[12, 1, 0, 0]]));
+    for dump in dumps {
+        assert_eq!(read(&format!("{dump}.cover")), b"-");
+    }
 }
 
 /// Two plays alike agree; a dump one play has alone is reported.

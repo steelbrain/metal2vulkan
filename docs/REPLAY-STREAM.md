@@ -1127,8 +1127,18 @@ it covered then (as above, `start..end` byte offsets joined by commas, or `-`), 
 `cbC-objO.unread` in place of the bytes where the backend could not read it, and for a buffer with
 two copies `cbC-objO.copy`, which copy the bytes are: `CPU copy` or `device copy, read back`
 (above). `LIST` is `FIRST..LAST` ranges (both ends held) and single ids, joined by commas, such as
-`20..29,31`; anything else stops the play before it starts. `command-replay
-compare-dumps --a DIR --b DIR` compares two plays' dumps word by word (4 bytes), leaving out a word
+`20..29,31`; anything else stops the play before it starts. It writes too each colour attachment
+the command buffer's render passes stored: a texture its attachment names under
+`MTLStoreActionStore` or `MTLStoreActionStoreAndMultisampleResolve`, and a resolve texture under
+`MTLStoreActionMultisampleResolve` or that one, an `MTLStoreActionUnknown` decided by the
+encoder's `setColorStoreAction:atIndex:`. `cbC-objT.bin` holds the texture's parts the passes
+stored, each a level, a slice and a depth plane (`level`, `slice` and `depthPlane`, or the
+resolve's), one after another by level, then slice, then plane, each laid out as a check reads a
+texture's first level and slice; its `cbC-objT.cover` is `-`, and `cbC-objT.unread` replaces the
+bytes where the backend could not read a part (a multisample texture stored without its resolve,
+for one). A depth or stencil attachment is not written: a texture of a combined depth and
+stencil format reads back one aspect at a time, through a copy with that aspect's blit option,
+which this read does not make. `command-replay compare-dumps --a DIR --b DIR` compares two plays' dumps word by word (4 bytes), leaving out a word
 wholly inside a range either play held covered, and prints `differs cb #C obj #O: N words outside every cover, the first word
 W; M covered; lengths A and B` for each buffer that differs outside every cover, `only in a|b:
 cbC-objO` for a dump one play lacks, `unread in a|b: cbC-objO: WHY`, `copies differ: cbC-objO: a

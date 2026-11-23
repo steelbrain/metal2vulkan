@@ -76,8 +76,10 @@
 //!
 //! With `--dump-command-buffers LIST --dump-dir DIR`, the play also writes into `DIR`, once each
 //! command buffer whose stream id `LIST` holds completed, every buffer its encoders named, with
-//! the ranges of it the cover rule held covered then (`docs/REPLAY-STREAM.md`, section 10).
-//! `LIST` is `FIRST..LAST` ranges (both ends held) and single ids, joined by commas.
+//! the ranges of it the cover rule held covered then, and every colour attachment its render
+//! passes stored, the parts of it they stored; no depth or stencil attachment
+//! (`docs/REPLAY-STREAM.md`, section 10). `LIST` is `FIRST..LAST` ranges (both ends held) and
+//! single ids, joined by commas.
 //!
 //! A check or dump of a buffer the play keeps two copies of (a Managed buffer of a stream recorded
 //! without unified memory) names the copy it read: its CPU copy, as Metal's `contents` answers, or
