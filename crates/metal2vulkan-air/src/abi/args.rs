@@ -5,20 +5,20 @@
 //! set of attributes and requires some of them.
 
 use super::keys::{Key, BUFFER_ACCESS, TEXTURE_ACCESS};
-use super::md::{kept_bytes, saw_str, Ops, Site, Tok};
+use super::md::{diag, kept_bytes, saw_str, Ops, Site, Tok};
 use super::structs::Structs;
 use super::{
     AbiInt, AccelerationStructureKind, Access, ArgTypeInfo, BufferArg, Builtin, ControlPointField,
-    DepthQualifier, ImageblockArg, ImageblockKind, IndirectArg, Interpolation, MeshField,
-    MeshFieldRole, MeshOutputs, MeshTopology, ObjectArg, OutputBinding, OutputRole, ParamBinding,
-    ParamRole, PatchInput, Predicate, Sampling, Slot, Stage, StructRef, TextureArg, UserKey,
-    Varying,
+    DepthQualifier, GlobalBinding, ImageblockArg, ImageblockKind, IndirectArg, Interpolation,
+    MeshField, MeshFieldRole, MeshOutputs, MeshTopology, ObjectArg, OutputBinding, OutputRole,
+    ParamBinding, ParamRole, PatchInput, Predicate, Sampling, Slot, Stage, StructRef, TextureArg,
+    UserKey, Varying,
 };
 use crate::bitcode::PointeeTable;
 use crate::budget::Meter;
 use crate::error::Error;
 use crate::error::{AbiError, DiagName};
-use crate::ir::{AddrSpace, FuncId, MdId, Module, Type, TypeId, TypeLayouts};
+use crate::ir::{AddrSpace, FuncId, GlobalId, MdId, Module, Type, TypeId, TypeLayouts};
 
 /// The decoder state shared by every node: the module, the meter, the layout arena, and the two
 /// tables that reach the IR type holding an argument buffer (see [`MemberSpace`]).
@@ -338,6 +338,47 @@ impl<'m> Cx<'m, '_> {
             role,
             unused: node.attrs.unused,
             predicate: node.predicate,
+            ty: node.attrs.ty(),
+            name: node.attrs.name.clone(),
+        })
+    }
+
+    /// Decode the node of `global`'s program-scope binding: a parameter node whose index is -1 (it
+    /// binds no parameter), with no predicate and no `air.arg_unused`. A buffer node that states no
+    /// address space takes that of the pointer the global holds.
+    pub(super) fn global_binding(
+        &mut self,
+        id: MdId,
+        global: GlobalId,
+    ) -> Result<GlobalBinding, Error> {
+        let m = self.m;
+        let name = m
+            .global(global)
+            .and_then(|g| m.symbols().get(g.name))
+            .unwrap_or_default();
+        let node = self.node(id, Context::Input, &diag(name))?;
+        if node.index != Some(u32::MAX) || node.predicate.is_some() || node.attrs.unused {
+            return Err(node
+                .site
+                .err(AbiError::BadValue, Some("air.global_binding")));
+        }
+        let pointer = m
+            .global(global)
+            .and_then(|g| match m.types().get(g.value_ty) {
+                Some(Type::Ptr { space }) => Some(*space),
+                _ => None,
+            });
+        let layouts = node.layouts(|id, site| Structs::get(self, id, site, None))?;
+        let role = self.role(
+            &node,
+            layouts,
+            Context::Input,
+            pointer,
+            MemberSpace::Unstated,
+        )?;
+        Ok(GlobalBinding {
+            global,
+            role,
             ty: node.attrs.ty(),
             name: node.attrs.name.clone(),
         })

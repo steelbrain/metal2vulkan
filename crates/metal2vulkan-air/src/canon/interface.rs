@@ -334,16 +334,16 @@ fn past_table(r: &ParamRole) -> bool {
 /// (`RequestError::OverlappingArgument`). Arguments of different tables never overlap, and a
 /// parameter gated off binds no slot. A count of 0 binds none either.
 fn overlapping(name: &DiagName, params: &[ParamBinding]) -> Result<(), Error> {
-    let mut seen: Vec<(Table, u64, u64)> = Vec::with_capacity(params.len());
-    for p in params {
-        let Some((table, location)) = table_slots(&p.role) else {
+    for (i, p) in params.iter().enumerate() {
+        let Some((_, index, count)) = slots(p) else {
             continue;
         };
-        let (AbiInt::Const(index), AbiInt::Const(count)) = (location.index, location.count) else {
-            continue;
-        };
-        let (lo, hi) = (u64::from(index), u64::from(index) + u64::from(count));
-        if seen.iter().any(|&(t, a, b)| t == table && a < hi && lo < b) {
+        if params
+            .get(..i)
+            .unwrap_or_default()
+            .iter()
+            .any(|q| overlap(p, q))
+        {
             return Err(InputError::new(
                 InputErrorKind::Request(RequestError::OverlappingArgument {
                     param: p.param,
@@ -358,9 +358,27 @@ fn overlapping(name: &DiagName, params: &[ParamBinding]) -> Result<(), Error> {
             )
             .into());
         }
-        seen.push((table, lo, hi));
     }
     Ok(())
+}
+
+/// The argument table parameter `p` binds in, and its first slot and count, where both are
+/// resolved ([`table_slots`]).
+fn slots(p: &ParamBinding) -> Option<(Table, u32, u32)> {
+    let (table, location) = table_slots(&p.role)?;
+    match (location.index, location.count) {
+        (AbiInt::Const(index), AbiInt::Const(count)) => Some((table, index, count)),
+        _ => None,
+    }
+}
+
+/// Whether the resolved slots of parameters `a` and `b` overlap in one argument table.
+pub(super) fn overlap(a: &ParamBinding, b: &ParamBinding) -> bool {
+    let (Some((t, i, n)), Some((u, j, k))) = (slots(a), slots(b)) else {
+        return false;
+    };
+    let (i, n, j, k) = (u64::from(i), u64::from(n), u64::from(j), u64::from(k));
+    t == u && i < j + k && j < i + n
 }
 
 /// How an absent argument of role `r` is read. A buffer or argument buffer reads as the null

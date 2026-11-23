@@ -29,6 +29,7 @@ fn abi() -> AirAbi {
         entries: Vec::new(),
         function_constants: Vec::new(),
         static_samplers: Vec::new(),
+        global_bindings: Vec::new(),
         visible_function_refs: Vec::new(),
         visible_functions: Vec::new(),
         core_image_kernels: Vec::new(),

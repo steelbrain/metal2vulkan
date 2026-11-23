@@ -430,18 +430,83 @@ fn an_unknown_key_names_what_it_read() {
     );
 }
 
-/// MSL 3.2's program-scope buffer bindings (`!air.global_bindings`) are valid AIR this version
-/// does not implement: refused as unsupported, not as malformed input.
-#[test]
-fn program_scope_bindings_are_unsupported_not_malformed() {
+/// The global Apple's compiler writes for a program-scope binding: a constant of the constant
+/// space holding a pointer, externally initialized (`external`) and `undef`.
+fn bound_global(b: &mut ModuleBuilder, external: bool) -> GlobalId {
+    let ptr = b.ptr(AddrSpace::Constant);
+    let undef = b.constant(ptr, Const::Undef);
+    let name = b.sym("g");
+    b.global(Global {
+        name,
+        value_ty: ptr,
+        space: AddrSpace::Constant,
+        constant: true,
+        init: Some(undef),
+        externally_initialized: external,
+        visibility: Default::default(),
+        unnamed_addr: Default::default(),
+        linkage: Linkage::Internal,
+        align: None,
+        section: None,
+    })
+}
+
+/// The standard kernel with one `!air.global_bindings` entry binding a global (externally
+/// initialized: `external`) through the parameter node `binding`.
+fn bound(external: bool, binding: &[O<'_>]) -> Result<AirAbi, Error> {
     let mut k = Kernel::standard();
-    let binding = node(&mut k.b, &[S("air.global_binding")]);
-    k.b.named_md("air.global_bindings", &[binding]);
-    let err = k.decode().unwrap_err();
-    let Error::Unsupported(u) = err else {
-        panic!("not unsupported: {err:?}")
+    let g = bound_global(&mut k.b, external);
+    let n = node(&mut k.b, binding);
+    let entry = node(&mut k.b, &[S("air.global_binding"), G(g), N(n)]);
+    k.b.named_md("air.global_bindings", &[entry]);
+    k.decode()
+}
+
+/// MSL 3.2's program-scope bindings (`!air.global_bindings`) decode: each entry names its global
+/// and a parameter node whose index is -1, read as a parameter's role (`constant float *
+/// constant g [[buffer(5)]]`, as `xcrun metal` 32023.922 writes it). A node with a parameter's
+/// index, or a global other than the externally initialized `undef` constant, is malformed.
+#[test]
+fn program_scope_bindings_decode_as_parameter_roles() {
+    let binding = |index: u64| {
+        vec![
+            I(index),
+            S("air.buffer"),
+            S("air.location_index"),
+            I(5),
+            I(1),
+            S("air.read"),
+            S("air.address_space"),
+            I(2),
+            S("air.arg_type_size"),
+            I(4),
+            S("air.arg_type_align_size"),
+            I(4),
+            S("air.arg_type_name"),
+            S("float"),
+            S("air.arg_name"),
+            S("g"),
+        ]
     };
-    assert_eq!(u.feature, Feature::ProgramScopeBinding);
+    let abi = bound(true, &binding(0xffff_ffff)).unwrap();
+    let [b] = abi.global_bindings.as_slice() else {
+        panic!("{:?}", abi.global_bindings)
+    };
+    let ParamRole::Buffer(arg) = &b.role else {
+        panic!("{:?}", b.role)
+    };
+    let slot = Slot {
+        index: AbiInt::Const(5),
+        count: AbiInt::Const(1),
+    };
+    assert_eq!(
+        (arg.location, arg.access, arg.space),
+        (slot, Access::Read, AddrSpace::Constant)
+    );
+    assert_eq!(b.ty.size, Some(4));
+    assert_eq!(b.name, Some(DiagName::new("g")));
+    expect_abi(bound(true, &binding(0)), AbiError::BadValue);
+    expect_abi(bound(false, &binding(0xffff_ffff)), AbiError::BadValue);
     // Any other named list outside the closed set is still a key outside the contract.
     let mut k = Kernel::standard();
     let other = node(&mut k.b, &[S("air.no_such_entry")]);
@@ -2740,6 +2805,7 @@ fn pointee_size_and_layout_checks() {
         entries: vec![],
         function_constants: vec![],
         static_samplers: vec![],
+        global_bindings: vec![],
         visible_function_refs: vec![],
         visible_functions: vec![],
         core_image_kernels: vec![],

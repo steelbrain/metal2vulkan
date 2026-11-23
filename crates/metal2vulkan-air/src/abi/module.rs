@@ -7,15 +7,15 @@ use super::md::{
 use super::sampler::decode_global;
 use super::structs::Structs;
 use super::{
-    AirAbi, Builtin, CompileOptions, EntryPoint, FunctionConstantDecl, LanguageVersion,
-    LinkageSignature, LinkageSignatureKind, ModuleLimits, ParamRole, PatchInfo, PatchKind, Stage,
-    StaticSampler, Version, VisibleFunctionRef, VisibleSymbol, VisibleTarget,
+    AirAbi, Builtin, CompileOptions, EntryPoint, FunctionConstantDecl, GlobalBinding,
+    LanguageVersion, LinkageSignature, LinkageSignatureKind, ModuleLimits, ParamRole, PatchInfo,
+    PatchKind, Stage, StaticSampler, Version, VisibleFunctionRef, VisibleSymbol, VisibleTarget,
 };
 use crate::bitcode::PointeeTable;
 use crate::budget::Meter;
 use crate::error::Error;
-use crate::error::{AbiError, DiagName, Feature, InputError, InputErrorKind, Location};
-use crate::ir::{Md, MdId, Module, Type, TypeId, TypeLayouts};
+use crate::error::{AbiError, DiagName, Location};
+use crate::ir::{AddrSpace, Const, Md, MdId, Module, Type, TypeId, TypeLayouts};
 
 /// The closed set of named metadata lists.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,6 +30,7 @@ enum Named {
     Mesh,
     FunctionConstants,
     SamplerStates,
+    GlobalBindings,
     VisibleFunctionReferences,
     Visible,
     CoreImage,
@@ -54,6 +55,7 @@ const NAMED: &[(&str, Named)] = &[
     ("air.mesh", Named::Mesh),
     ("air.function_constants", Named::FunctionConstants),
     ("air.sampler_states", Named::SamplerStates),
+    ("air.global_bindings", Named::GlobalBindings),
     (
         "air.visible_function_references",
         Named::VisibleFunctionReferences,
@@ -70,10 +72,6 @@ const NAMED: &[(&str, Named)] = &[
     ("llvm.dbg.cu", Named::DebugCompileUnits),
 ];
 
-/// Apple's named list of a module's program-scope buffer bindings (MSL 3.2): each entry
-/// `!{!"air.global_binding", <global>, <binding>}` binds a buffer to a program-scope pointer.
-const GLOBAL_BINDINGS: &str = "air.global_bindings";
-
 /// Decode every named list of `m`. Entries are decoded kernel, vertex, fragment, object, mesh,
 /// each in list order.
 pub(super) fn decode(
@@ -86,14 +84,6 @@ pub(super) fn decode(
     for named in m.named_md() {
         meter.tick(1)?;
         let name = m.symbols().get(named.name).unwrap_or_default();
-        // MSL 3.2's program-scope buffer bindings: valid AIR, not implemented yet, so refused as
-        // unsupported rather than as a key outside the input's contract.
-        if name == GLOBAL_BINDINGS.as_bytes() {
-            return Err(Error::from(InputError::new(
-                InputErrorKind::Unsupported(Feature::ProgramScopeBinding),
-                Location::metadata(Some(diag(name)), None, None),
-            )));
-        }
         let kind = NAMED
             .iter()
             .find(|(s, _)| s.as_bytes() == name)
@@ -115,6 +105,7 @@ pub(super) fn decode(
         entries: Vec::new(),
         function_constants: Vec::new(),
         static_samplers: Vec::new(),
+        global_bindings: Vec::new(),
         visible_function_refs: Vec::new(),
         visible_functions: Vec::new(),
         core_image_kernels: Vec::new(),
@@ -216,6 +207,14 @@ pub(super) fn decode(
                     n.finish()?;
                     let state = decode_global(m, global, &site)?;
                     abi.static_samplers.push(StaticSampler { global, state });
+                }
+            }
+            Named::GlobalBindings => {
+                cx.meter.reserve(&mut abi.global_bindings, ops.len())?;
+                for &id in ops {
+                    cx.meter.tick(1)?;
+                    abi.global_bindings
+                        .push(global_binding(&mut cx, id, &site)?);
                 }
             }
             Named::VisibleFunctionReferences => {
@@ -472,6 +471,34 @@ fn function_constant(
         name,
         type_name,
     })
+}
+
+/// `!{!"air.global_binding", ptr @g, !<parameter node>}`: a program-scope binding. The global is
+/// one Apple's compiler writes for it: a constant of the constant space, externally initialized and
+/// `undef`. The node is decoded as a parameter's ([`Cx::global_binding`]).
+fn global_binding(cx: &mut Cx<'_, '_>, id: MdId, site: &Site) -> Result<GlobalBinding, Error> {
+    let m = cx.m;
+    let key = Some("air.global_binding");
+    let mut n = Ops::node(m, id, site.clone())?;
+    let tag = n.string(key)?;
+    if tag != b"air.global_binding" {
+        return Err(site.unknown(key, saw_str(tag)));
+    }
+    let global = n.global(key)?;
+    let node = n.child(key)?;
+    n.finish()?;
+    let bound = m.global(global).is_some_and(|g| {
+        g.space == AddrSpace::Constant
+            && g.constant
+            && g.externally_initialized
+            && g.init
+                .and_then(|c| m.consts().get(c))
+                .is_some_and(|c| c.value == Const::Undef)
+    });
+    if !bound {
+        return Err(site.err(AbiError::BadValue, key));
+    }
+    cx.global_binding(node, global)
 }
 
 /// An entry node: `!{ptr @fn, !outputs, !inputs, <stage attribute>...}`.

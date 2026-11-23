@@ -234,7 +234,10 @@ impl From<crate::air::error::Feature> for Feature {
             Air::Tensors => Feature::Tensors,
             Air::GpuEncodedIndirectCommands => Feature::GpuEncodedIndirectCommands,
             Air::Imageblocks => Feature::Imageblocks,
-            Air::ProgramScopeBinding => Feature::ProgramScopeBinding,
+            Air::ProgramScopeResource => Feature::ProgramScopeResource,
+            Air::ProgramScopeSharedSlot => Feature::ProgramScopeSharedSlot,
+            Air::ProgramScopeLinked => Feature::ProgramScopeLinked,
+            Air::ProgramScopeRead => Feature::ProgramScopeRead,
             Air::GenericPointer(how) => Feature::GenericPointer(how),
         }
     }
@@ -883,10 +886,25 @@ pub enum Feature {
     /// Metal's) set to a value whose effect the translation has not built: the property it names
     /// ([`PrivateRenderField`]). Metal's answer for each was measured; building it is open work.
     PrivateRenderState(PrivateRenderField),
-    /// A program-scope buffer binding of MSL 3.2 (macOS 15 and later), `constant T* constant p
-    /// [[buffer(n)]];` in Apple's `!air.global_bindings` list, valid AIR this version does not
-    /// implement yet.
-    ProgramScopeBinding,
+    /// A texture, a sampler or threadgroup memory bound at program scope (MSL 3.2's
+    /// `!air.global_bindings`), one or an array, that the entry reads: only a bound buffer becomes
+    /// a parameter. Metal takes each: an Apple M3 Max under macOS 27.0.1 runs kernels that read a
+    /// bound texture and sampler, a bound sampler array and bound threadgroup memory (m3-max-70306).
+    ProgramScopeResource,
+    /// A buffer bound at program scope at a slot that a parameter of the entry, or another binding
+    /// it reads, binds with another role or type. Metal takes it: on an Apple M3 Max under macOS
+    /// 27.0.1, a `device float *` and a `constant uint *` bound at one index read the one buffer
+    /// bound there (m3-max-70268).
+    ProgramScopeSharedSlot,
+    /// A program-scope binding in the module of a function a pipeline links (a visible function,
+    /// or a dynamic library's). Metal takes it: on an Apple M3 Max under macOS 27.0.1, a kernel's
+    /// pipeline links another library's visible function, which reads the buffer the kernel's
+    /// stage binds at the global's index (m3-max-70306).
+    ProgramScopeLinked,
+    /// A read of a buffer bound at program scope other than a load of the pointer its global
+    /// holds. `xcrun metal` 32023.922 writes every read so, `&p` included, so only other AIR reaches
+    /// it.
+    ProgramScopeRead,
     /// A generic pointer (MSL 4.1's `addrspace(8)`) that canonicalization cannot make a pointer of
     /// one address space, by how it comes to hold a space only the run knows
     /// ([`GenericPointer`]). Vulkan's logical addressing has no pointer that may point into either

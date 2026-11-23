@@ -32,6 +32,7 @@ fn abi() -> AirAbi {
         entries: Vec::new(),
         function_constants: Vec::new(),
         static_samplers: Vec::new(),
+        global_bindings: Vec::new(),
         visible_function_refs: Vec::new(),
         visible_functions: Vec::new(),
         core_image_kernels: Vec::new(),
@@ -475,6 +476,36 @@ fn a_linked_module_s_signature_is_read_as_the_entry_s() {
     let stitched = constants(LinkageSignatureKind::StitchingModules);
     let t = text(&stitched.unwrap_or_else(|e| panic!("{e}")));
     assert!(t.contains("add i32 %a1, i32 5"), "{t}");
+}
+
+/// A linked module carrying program-scope bindings is refused at the call of its function, naming
+/// it: what the bindings read is the calling stage's argument table, which the import does not
+/// reach.
+#[test]
+fn a_linked_module_with_program_scope_bindings_is_refused() {
+    let mut l = callee("f", &[]);
+    code(&mut l).abi.global_bindings = vec![crate::abi::GlobalBinding {
+        global: GlobalId::new(0),
+        role: ParamRole::Buffer(BufferArg {
+            location: Slot {
+                index: AbiInt::Const(5),
+                count: AbiInt::Const(1),
+            },
+            access: Access::Read,
+            space: AddrSpace::Constant,
+            buffer_size: None,
+            layout: None,
+            raster_order_group: None,
+        }),
+        ty: ArgTypeInfo::default(),
+        name: None,
+    }];
+    let u = match link(&[l]) {
+        Err(Error::Unsupported(u)) => u,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(u.feature, Feature::ProgramScopeLinked, "{u}");
+    assert_eq!(u.symbol, Some(DiagName::new("f")), "{u}");
 }
 
 /// The visible functions of a linked module that declares the `i32` function constant `c`

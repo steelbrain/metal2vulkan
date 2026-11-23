@@ -296,6 +296,19 @@ pub(super) fn not_implemented(name: &[u8], key: &'static str) -> Error {
         .into()
 }
 
+/// The linked function `name`, whose module carries program-scope bindings: what they read is the
+/// calling stage's argument table, which the import does not reach.
+fn bound(name: &[u8]) -> Error {
+    Unsupported::not_implemented(Feature::ProgramScopeLinked)
+        .naming(diag(name))
+        .at(Location::metadata(
+            Some(diag(name)),
+            None,
+            Some("air.global_bindings"),
+        ))
+        .into()
+}
+
 /// The name of the global listing a module's dynamic-library imports: AIR linker ABI.
 const FLAT_TABLE: &[u8] = b"air.dyld_flat_table";
 
@@ -878,6 +891,9 @@ fn plan<'c>(
     let name = &*f.name;
     if super::unread_signature(&l.abi) {
         return Ok(Err(not_implemented(name, "air.signature")));
+    }
+    if !l.abi.global_bindings.is_empty() {
+        return Ok(Err(bound(name)));
     }
     let constants = match &f.constants {
         Ok(c) => c,
@@ -1833,6 +1849,7 @@ impl<'a> Libraries<'a> {
             return Ok(match (visibility, exports.blocked) {
                 (Visibility::Hidden, _) => Found::Refused(not_implemented(name, "visibility")),
                 (_, Some(key)) => Found::Refused(not_implemented(name, key)),
+                _ if !code.abi.global_bindings.is_empty() => Found::Refused(bound(name)),
                 _ => Found::At(i, item),
             });
         }

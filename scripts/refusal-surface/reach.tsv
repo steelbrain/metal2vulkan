@@ -140,7 +140,10 @@ ratemap	SampleCount	rare	a rate map axis of more distinct samples than measured 
 budget	Time	none	a translation past its deadline: a defect of ours to fix on any supported input (AGENTS.md: 20 seconds)
 feature	PrivateRenderState	none	Apple-private pipeline fields of OpenGL on Metal (no public header)
 feature	CommandPredication	none	Apple-private command predication on a device without buffer device addresses
-feature	ProgramScopeBinding	app	MSL 3.2 program-scope buffer bindings (macOS 15 and later)
+feature	ProgramScopeResource	app	MSL 3.2 textures, samplers and threadgroup memory bound at program scope (macOS 15 and later)
+feature	ProgramScopeSharedSlot	rare	MSL 3.2 program-scope buffers aliasing another argument of another type at one index
+feature	ProgramScopeLinked	rare	MSL 3.2 program-scope bindings in a linked visible function or a dynamic library
+feature	ProgramScopeRead	none	a read of a program-scope buffer's global that Apple's compiler is not seen to write
 feature	GenericPointer	system	MSL 4.1 generic pointers held in memory or of two spaces (macOS 27 and later)
 feature	SeqCstFence	rare	a seq_cst fence in a vertex or fragment stage without its stores and atomics
 feature	WideLines	none	a line under the Apple-private setLineWidth: at a width other than 1 drawn as the band, whose pipeline form the translator does not build (a selected slice or viewport, barycentric weights, multiview, synthesized geometry, too many stage outputs)

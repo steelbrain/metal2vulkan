@@ -117,6 +117,8 @@ pub struct AirAbi {
     pub function_constants: Vec<FunctionConstantDecl>,
     /// `!air.sampler_states`: constexpr samplers.
     pub static_samplers: Vec<StaticSampler>,
+    /// `!air.global_bindings`: the program-scope bindings, in list order.
+    pub global_bindings: Vec<GlobalBinding>,
     /// `!air.visible_function_references`.
     pub visible_function_refs: Vec<VisibleFunctionRef>,
     /// `!air.visible`: the functions this module exports to the Metal linker, in list order.
@@ -1173,6 +1175,22 @@ pub struct StaticSampler {
     pub global: GlobalId,
     /// The state those words decode to.
     pub state: SamplerState,
+}
+
+/// A program-scope binding of MSL 3.2 (`constant T * constant p [[buffer(n)]];` at program scope),
+/// one entry of `!air.global_bindings`: a constant-space global, externally initialized and
+/// `undef`, whose value the executing stage's argument table holds at the slot its node states.
+/// The node is a parameter node whose index is -1, decoded as a parameter's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GlobalBinding {
+    /// The global each read of the binding loads.
+    pub global: GlobalId,
+    /// What the node binds: its role key and role attributes.
+    pub role: ParamRole,
+    /// `air.arg_type_size`, `air.arg_type_align_size`, and `air.arg_type_name`, as stated.
+    pub ty: ArgTypeInfo,
+    /// `air.arg_name`, for diagnostics.
+    pub name: Option<DiagName>,
 }
 
 /// What an `air.visible_function_reference` names.

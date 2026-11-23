@@ -805,6 +805,7 @@ field	metal2vulkan-air::abi::AirAbi.compile	pub compile: CompileOptions
 field	metal2vulkan-air::abi::AirAbi.core_image_kernels	pub core_image_kernels: Vec<CoreImageKernel>
 field	metal2vulkan-air::abi::AirAbi.entries	pub entries: Vec<EntryPoint>
 field	metal2vulkan-air::abi::AirAbi.function_constants	pub function_constants: Vec<FunctionConstantDecl>
+field	metal2vulkan-air::abi::AirAbi.global_bindings	pub global_bindings: Vec<GlobalBinding>
 field	metal2vulkan-air::abi::AirAbi.language	pub language: Option<LanguageVersion>
 field	metal2vulkan-air::abi::AirAbi.limits	pub limits: ModuleLimits
 field	metal2vulkan-air::abi::AirAbi.linkage_signature	pub linkage_signature: Option<LinkageSignature>
@@ -853,6 +854,10 @@ field	metal2vulkan-air::abi::FunctionConstantDecl.index	pub index: u32
 field	metal2vulkan-air::abi::FunctionConstantDecl.name	pub name: DiagName
 field	metal2vulkan-air::abi::FunctionConstantDecl.ty	pub ty: TypeId
 field	metal2vulkan-air::abi::FunctionConstantDecl.type_name	pub type_name: DiagName
+field	metal2vulkan-air::abi::GlobalBinding.global	pub global: GlobalId
+field	metal2vulkan-air::abi::GlobalBinding.name	pub name: Option<DiagName>
+field	metal2vulkan-air::abi::GlobalBinding.role	pub role: ParamRole
+field	metal2vulkan-air::abi::GlobalBinding.ty	pub ty: ArgTypeInfo
 field	metal2vulkan-air::abi::ImageblockArg.alias_implicit	pub alias_implicit: bool
 field	metal2vulkan-air::abi::ImageblockArg.data_size	pub data_size: Option<u32>
 field	metal2vulkan-air::abi::ImageblockArg.kind	pub kind: ImageblockKind
@@ -6678,6 +6683,7 @@ struct	metal2vulkan-air::abi::CoreImageOutput	#[derive(Clone, Debug, PartialEq, 
 struct	metal2vulkan-air::abi::CoreImageParam	#[derive(Clone, Debug, PartialEq, Eq)] pub struct CoreImageParam
 struct	metal2vulkan-air::abi::EntryPoint	#[derive(Clone, Debug, PartialEq, Eq)] pub struct EntryPoint
 struct	metal2vulkan-air::abi::FunctionConstantDecl	#[derive(Clone, Debug, PartialEq, Eq)] pub struct FunctionConstantDecl
+struct	metal2vulkan-air::abi::GlobalBinding	#[derive(Clone, Debug, PartialEq, Eq)] pub struct GlobalBinding
 struct	metal2vulkan-air::abi::Half	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct Half(pub u16)
 struct	metal2vulkan-air::abi::ImageblockArg	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct ImageblockArg
 struct	metal2vulkan-air::abi::IndirectArg	#[derive(Clone, Debug, PartialEq, Eq, Hash)] pub struct IndirectArg
@@ -7522,7 +7528,10 @@ variant	metal2vulkan-air::error::Feature::IntersectionFunctionTable	Intersection
 variant	metal2vulkan-air::error::Feature::LibraryKind	LibraryKind(u8)
 variant	metal2vulkan-air::error::Feature::Linking	Linking
 variant	metal2vulkan-air::error::Feature::ModuleRecord	ModuleRecord { code: u32 }
-variant	metal2vulkan-air::error::Feature::ProgramScopeBinding	ProgramScopeBinding
+variant	metal2vulkan-air::error::Feature::ProgramScopeLinked	ProgramScopeLinked
+variant	metal2vulkan-air::error::Feature::ProgramScopeRead	ProgramScopeRead
+variant	metal2vulkan-air::error::Feature::ProgramScopeResource	ProgramScopeResource
+variant	metal2vulkan-air::error::Feature::ProgramScopeSharedSlot	ProgramScopeSharedSlot
 variant	metal2vulkan-air::error::Feature::RayTracing	RayTracing
 variant	metal2vulkan-air::error::Feature::Recursion	Recursion
 variant	metal2vulkan-air::error::Feature::Stage	Stage(u8)
@@ -9470,7 +9479,10 @@ variant	metal2vulkan::error::Feature::PrimitiveId	PrimitiveId
 variant	metal2vulkan::error::Feature::PrivateMemory	PrivateMemory
 variant	metal2vulkan::error::Feature::PrivatePrimitives	PrivatePrimitives
 variant	metal2vulkan::error::Feature::PrivateRenderState	PrivateRenderState(PrivateRenderField)
-variant	metal2vulkan::error::Feature::ProgramScopeBinding	ProgramScopeBinding
+variant	metal2vulkan::error::Feature::ProgramScopeLinked	ProgramScopeLinked
+variant	metal2vulkan::error::Feature::ProgramScopeRead	ProgramScopeRead
+variant	metal2vulkan::error::Feature::ProgramScopeResource	ProgramScopeResource
+variant	metal2vulkan::error::Feature::ProgramScopeSharedSlot	ProgramScopeSharedSlot
 variant	metal2vulkan::error::Feature::PullModelInterpolation	PullModelInterpolation
 variant	metal2vulkan::error::Feature::PushWindow	PushWindow
 variant	metal2vulkan::error::Feature::QuadOperations	QuadOperations

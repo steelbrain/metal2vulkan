@@ -83,7 +83,9 @@
 //!    row, the origin and the constant transpose flag (`legacy_matrix`). **Aggregate accesses**: a
 //!    load or store of a whole array or struct in buffer or threadgroup memory becomes its scalar
 //!    and vector members' accesses, joined by `insertvalue` or split by `extractvalue`
-//!    (`aggregates`). **Global built-in
+//!    (`aggregates`). **Program-scope buffer bindings**: each load of the pointer a bound buffer's
+//!    global holds becomes a read of the entry's parameter of that buffer, its own or one appended
+//!    (`global_binding`). **Global built-in
 //!    variables**: each `air.get_*` read of a program-scope built-in becomes a read of a built-in
 //!    parameter appended to the entry (`global_builtin`); in OpenCL mode, first, the entry takes
 //!    the three hidden buffers, each OpenCL C work-item read becomes a read of its built-in or of
@@ -120,6 +122,7 @@ mod fold;
 mod forward;
 pub mod function_table;
 mod generic;
+mod global_binding;
 mod global_builtin;
 mod inline;
 mod interface;
@@ -813,6 +816,9 @@ pub fn specialize_dynamic(
     } else {
         (body, None)
     };
+    // Program-scope buffer bindings: each load of a bound buffer's pointer becomes a read of the
+    // entry's own parameter of that buffer, or of one added to it.
+    let (body, bound) = global_binding::expand(body, &mut parts, ep, &abi.global_bindings, m)?;
     // Global built-in variables: each read becomes a read of a built-in parameter added to the
     // entry, but one Metal refuses in the entry's stage.
     let (body, global_builtins) = global_builtin::expand(body, &mut parts, func, &ep.stage, m)?;
@@ -843,6 +849,10 @@ pub fn specialize_dynamic(
     if let Some(first) = hidden {
         (ep, open_cl_1d_images) = opencl::entry(ep, first, &req.open_cl_lines)?;
     }
+    // The buffer parameters the program-scope bindings' reads became, each at a slot no other
+    // parameter binds.
+    global_binding::shared_slot(&ep.name, &ep.params, &bound)?;
+    ep.params.extend(bound);
     // The built-in parameters the global built-ins' reads became.
     ep.params.extend(global_builtins);
     // A table whose every use devirtualization rewrote is read as a buffer of words.
@@ -871,6 +881,11 @@ pub fn specialize_dynamic(
     // What nothing observes goes before pruning, so nothing it alone reaches is kept.
     interface::unobserved_code(&mut parts, func, &ep, m)?;
     let pruned = prune::prune(parts, func, m)?;
+    // A program-scope binding whose global the entry still reaches was read other than as a
+    // buffer parameter.
+    global_binding::left(&ep.name, &abi.global_bindings, |g| {
+        pruned.gmap.get(g.index()).copied().flatten().is_some()
+    })?;
     ep.func = pruned.func;
     remap_control_points(&mut ep, &pruned.fmap);
     // The module's constexpr samplers and those of the linked functions it imported.

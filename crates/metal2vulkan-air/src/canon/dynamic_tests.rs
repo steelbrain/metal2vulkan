@@ -31,6 +31,7 @@ fn abi() -> AirAbi {
         entries: Vec::new(),
         function_constants: Vec::new(),
         static_samplers: Vec::new(),
+        global_bindings: Vec::new(),
         visible_function_refs: Vec::new(),
         visible_functions: Vec::new(),
         core_image_kernels: Vec::new(),
@@ -547,7 +548,7 @@ fn an_imported_variable_is_one_object() {
 /// What the search cannot answer is refused, each only at a surviving use: a library whose
 /// module does not decode before the one exporting it, a hidden definition (whose export Metal's
 /// answer is not measured for), a definition of another kind or type, or a library linking does
-/// not import from (function constants).
+/// not import from (function constants, program-scope bindings).
 #[test]
 fn what_the_search_cannot_answer_is_refused() {
     let refused = |libraries: Vec<DynamicModule>| {
@@ -604,6 +605,31 @@ fn what_the_search_cannot_answer_is_refused() {
         }];
     }
     linking(refused(vec![constants]), "air.function_constants");
+    // A library whose module carries program-scope bindings: what they read is the calling
+    // stage's argument table, which the import does not reach.
+    let mut bound = library("libA", &[def("f", 3)], &[]);
+    if let Ok(code) = bound.code.as_mut() {
+        code.abi.global_bindings = vec![crate::abi::GlobalBinding {
+            global: GlobalId::new(0),
+            role: ParamRole::Sampler {
+                location: Slot {
+                    index: AbiInt::Const(0),
+                    count: AbiInt::Const(1),
+                },
+            },
+            ty: ArgTypeInfo::default(),
+            name: None,
+        }];
+    }
+    match refused(vec![bound]) {
+        Error::Unsupported(u) => {
+            assert_eq!(u.feature, Feature::ProgramScopeLinked, "{u}");
+            let at =
+                Location::metadata(Some(DiagName::new("f")), None, Some("air.global_bindings"));
+            assert_eq!(u.location, Some(at), "{u}");
+        }
+        other => panic!("{other}"),
+    }
 }
 
 /// A declaration no flat table names is no import: a call to it is still `Linking`, whatever
