@@ -319,6 +319,9 @@ pub struct SimdPlan {
     /// the ballot of the lanes executing it, so a lane that does not take part is read through the
     /// calling lane and no shuffle names it; [`partly_live`].
     pub partly_live: BTreeSet<ValueId>,
+    /// A fragment's quad operations whose quads are whole ([`whole_quads`]): each reads its quad's
+    /// four lanes with no vote of which take part.
+    pub whole_quads: BTreeSet<ValueId>,
     /// Some operation reads, combines, or counts other lanes of its simdgroup or quad (every
     /// group operation, an AGX multiply-add): in a fragment function its answer counts the
     /// helpers Metal runs in a partly covered quad ([`full_quads`]).
@@ -718,6 +721,59 @@ pub fn partly_live(
     }
     simd.partly_live = reads;
     Ok(u)
+}
+
+/// Record a fragment's quad operations whose quads are whole (`SimdPlan::whole_quads`): those
+/// that read only their quad (`group::fragment_quad`) in a block `uniform::Uniformity` proves
+/// every invocation executes together, every stage input divergent. Each quad's four invocations
+/// then run the block: the entry declares full quads ([`full_quads`]), a quad's helpers run it as
+/// its covered invocations do, and a discarded invocation runs on as a helper or a predicated
+/// lane (`fragment::discard`), as an M4 keeps a discarded thread a lane of its quad's operations.
+/// So such an operation reads its quad with no vote, the quad's active lanes being all four, as
+/// Metal counts them. An entry Metal runs once per sample (`fragment::per_sample`) keeps the votes.
+pub fn whole_quads(
+    cx: &mut SelectCx<'_>,
+    strategy: &[Option<Strategy>],
+    m: &mut Meter,
+) -> Result<(), Error> {
+    let quad = |s: &Strategy| matches!(s, Strategy::Simd(SimdStrategy::Group(g)) if group::fragment_quad(g));
+    if cx.stage != Stage::Fragment
+        || !strategy.iter().flatten().any(quad)
+        || crate::lower::fragment::per_sample(cx)
+    {
+        return Ok(());
+    }
+    let u = uniform::Uniformity::of(cx.entry, cx.body, m)?;
+    let mut whole = BTreeSet::new();
+    for (b, block) in cx.body.blocks.iter() {
+        if !u.is_uniform(b) {
+            continue;
+        }
+        for id in block.inst_ids() {
+            let Some(v) = cx.values.inst(id) else {
+                continue;
+            };
+            if strategy
+                .get(v.index())
+                .and_then(Option::as_ref)
+                .is_some_and(quad)
+            {
+                whole.insert(v);
+            }
+        }
+    }
+    m.release(u.ledger_bytes());
+    cx.families.simd.whole_quads = whole;
+    Ok(())
+}
+
+/// Whether the operation `at` is a fragment's quad operation whose quad is whole
+/// ([`whole_quads`]).
+pub(super) fn whole_quad_at(cx: &EmitCx<'_>, at: InstId) -> bool {
+    cx.plan
+        .values
+        .inst(at)
+        .is_some_and(|v| cx.plan.families.simd.whole_quads.contains(&v))
 }
 
 /// Whether the operation `at` reads other lanes through the ballot of its live lanes

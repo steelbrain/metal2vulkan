@@ -1648,6 +1648,7 @@ fn finish(
     // control flow, every one of another stage), whose subgroup-tier form needs `Ballot`, before
     // the simd class selects the tier; the emulated tier reads a kernel's same analysis below.
     let uniformity = simd::partly_live(&mut cx, &sel.strategy, m)?;
+    simd::whole_quads(&mut cx, &sel.strategy, m)?;
     simd::finish(&mut cx)?;
     tessellation::finish(&mut cx)?;
     sync::barrier::finish(&mut cx)?;

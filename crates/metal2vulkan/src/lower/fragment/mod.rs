@@ -73,6 +73,7 @@ use crate::spirv::ir::{
 };
 
 pub use color::ColorInput;
+pub(crate) use coverage::per_sample;
 pub use coverage::CoveragePlan;
 pub use discard::DiscardForm;
 pub(crate) use fetch::half_float_format;

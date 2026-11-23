@@ -130,6 +130,17 @@ fn sampled_varying(cx: &SelectCx<'_>, param: u32, role: &ParamRole, sampling: Ai
         .is_some_and(|f| f.is_float())
 }
 
+/// Whether Metal runs `cx`'s fragment function once per covered sample of a multisampled
+/// pipeline: it reads `[[sample_id]]` or a sample-qualified varying (the module docs).
+pub(crate) fn per_sample(cx: &SelectCx<'_>) -> bool {
+    let (e, body) = (cx.entry, cx.body);
+    e.ep.params.iter().any(|b| {
+        arg_used(body, b.param)
+            && (matches!(b.role, ParamRole::Builtin(Builtin::SampleId))
+                || sampled_varying(cx, b.param, &b.role, AirSampling::Sample))
+    })
+}
+
 /// Plan the loop over the covered samples before the stage interface (`fragment::plan_entry`):
 /// a fragment function that reads `[[sample_mask]]` and runs once per covered sample on Metal (it
 /// reads `[[sample_id]]` or a sample-qualified varying) loops, compiled for a multisampled

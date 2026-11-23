@@ -167,7 +167,7 @@ pub fn reads_lanes(g: &GroupPlan) -> bool {
 /// Whether `g` is a fragment's quad operation that reads only its own quad, as every one does but
 /// a fill by a constant modulo whose segment ([`constant_fill_width`]) is wider than the quad. It
 /// reads the quad through quad instructions alone ([`quad_votes`], [`quad_lanes`]).
-fn fragment_quad(g: &GroupPlan) -> bool {
+pub(super) fn fragment_quad(g: &GroupPlan) -> bool {
     let wide = matches!(
         (g.op, g.konst),
         (GroupOp::ShuffleAndFillUp | GroupOp::ShuffleAndFillDown, Some(m))
@@ -286,6 +286,9 @@ pub(super) struct Lane {
     size: Option<GlobalId>,
     /// The function's [`QuadSeen`].
     quad: Rc<RefCell<QuadSeen>>,
+    /// The operation is a fragment's quad operation whose quad is whole (`SimdPlan::whole_quads`):
+    /// its four lanes take part.
+    whole: bool,
 }
 
 /// What a fragment's quad operations made in one SPIR-V block, for the block's later ones
@@ -587,6 +590,7 @@ pub(super) fn lane(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResult
         emu,
         size,
         quad: Rc::clone(&cx.quad),
+        whole: false,
     })
 }
 
@@ -610,7 +614,10 @@ pub(super) fn emit(
         }
         SimdStrategy::Group(g) => {
             let a = args(cx, fb, at)?;
-            let lane = lane(cx, fb)?;
+            let lane = Lane {
+                whole: super::whole_quad_at(cx, at),
+                ..lane(cx, fb)?
+            };
             // A lane read where the group may be partly live reads through its live lanes; the
             // emulated tier's exchange carries its own active flags.
             let live = if lane.emu.is_none() && super::partly_live_at(cx, at) {
@@ -899,12 +906,17 @@ pub(super) fn fill_source(
 /// 9.31, "Helper Invocations"), and AMD's open Linux driver leaves the helpers out of a ballot even
 /// there. So a fragment reads its quad through quad instructions alone: quad lane `j` takes part
 /// when `OpGroupNonUniformQuadAnyKHR` of "the quad lane is `j`" (and of `pred`, where given)
-/// holds. The votes without `pred` are the block's ([`QuadSeen`]).
+/// holds. The votes without `pred` are the block's ([`QuadSeen`]); where the quad is whole
+/// ([`Lane::whole`]) every lane takes part, with no vote.
 fn quad_votes(
     fb: &mut FunctionBuilder<'_>,
     ln: &Lane,
     pred: Option<SValue>,
 ) -> BResult<Vec<SValue>> {
+    if ln.whole && pred.is_none() {
+        let on = true_(fb)?;
+        return Ok(vec![on; 4]);
+    }
     let here = fb.current_block();
     if pred.is_none() {
         let on = ln.quad.borrow_mut().at(here).on.clone();
@@ -988,10 +1000,28 @@ fn quad_read(fb: &mut FunctionBuilder<'_>, ln: &Lane, x: SValue, src: SValue) ->
     let mut r = x;
     for (j, (y, on)) in (0..).zip(quad_lanes(fb, ln, x)?) {
         let me = bin_k(fb, BinOp::IEqual, src, j)?;
-        let hit = fb.binary(BinOp::LogicalAnd, me, on)?;
+        let hit = match ln.whole {
+            true => me,
+            false => fb.binary(BinOp::LogicalAnd, me, on)?,
+        };
         r = fb.select(hit, y, r)?;
     }
     Ok(r)
+}
+
+/// A fragment's quad ballot of `pred` where its quad is whole ([`Lane::whole`]): each lane's bit
+/// at its quad lane, gathered by a horizontal then a vertical `OpGroupNonUniformQuadSwap`, quad
+/// instructions, which run over all four lanes.
+fn whole_ballot(fb: &mut FunctionBuilder<'_>, ln: &Lane, pred: SValue) -> BResult<SValue> {
+    let q = bin_k(fb, BinOp::BitwiseAnd, ln.l, 3)?;
+    let one = k(fb, 1)?;
+    let bit = fb.binary(BinOp::ShiftLeftLogical, one, q)?;
+    let zero = k(fb, 0)?;
+    let own = fb.select(pred, bit, zero)?;
+    let across = fb.group_quad_swap(own, QuadDirection::Horizontal)?;
+    let pair = fb.binary(BinOp::BitwiseOr, own, across)?;
+    let other = fb.group_quad_swap(pair, QuadDirection::Vertical)?;
+    fb.binary(BinOp::BitwiseOr, pair, other)
 }
 
 /// A quad reduction in every subgroup tier: the quad's four lanes, each with whether it takes
@@ -1109,6 +1139,7 @@ fn quad_scan(fb: &mut FunctionBuilder<'_>, ln: &Lane, g: &GroupPlan, v: SValue) 
         None
     };
     let act = match &lanes {
+        Some(_) if ln.whole => k(fb, 0xF)?,
         Some(lanes) => {
             let votes: Vec<SValue> = lanes.iter().map(|&(_, on)| on).collect();
             quad_word(fb, &votes)?
@@ -1257,7 +1288,8 @@ fn quad_op(
         Some(c) => k(fb, c),
         None => bin_k(fb, BinOp::BitwiseAnd, nth(a, 1)?, 3),
     };
-    let instructions = g.quad_instructions && live.is_none();
+    // A whole quad's broadcast or shuffle-xor by a constant lane or mask is its quad instruction.
+    let instructions = (g.quad_instructions || ln.whole) && live.is_none();
     match (g.op, g.konst) {
         (G::Broadcast, Some(i)) if instructions => {
             let i = k(fb, i)?;
@@ -1367,6 +1399,11 @@ fn quad_op(
             ln.read_from(fb, live, v()?, src)
         }
         (G::ShuffleAndFillUp | G::ShuffleAndFillDown, _) => fill(fb, ln, live, g, a),
+        // A whole quad's first lane is its lane 0.
+        (G::BroadcastFirst, _) if ln.whole => {
+            let zero = k(fb, 0)?;
+            fb.group_quad_broadcast(v()?, zero)
+        }
         // A fragment's quad's first lane that takes part ([`quad_lanes`]), the calling lane at the
         // latest.
         (G::BroadcastFirst, _) if g.helpers => {
@@ -1411,6 +1448,14 @@ fn quad_op(
             let act = ln.quad_bits(fb, word)?;
             fb.binary(BinOp::IEqual, held, act)
         }
+        // A whole quad's lanes all take part: its first is lane 0, and its ballot is its four
+        // lanes' bits ([`whole_ballot`]).
+        (G::ActiveThreadsMask, _) if ln.whole => k(fb, 0xF),
+        (G::IsFirst, _) if ln.whole => {
+            let q = quad_lane(fb)?;
+            bin_k(fb, BinOp::IEqual, q, 0)
+        }
+        (G::Ballot, _) if ln.whole => whole_ballot(fb, ln, v()?),
         (G::Ballot | G::IsFirst | G::ActiveThreadsMask, _) => {
             // The quad's four bits of the lanes that take part (and whose predicate holds, for a
             // ballot): a fragment's quad votes ([`quad_votes`]), elsewhere the quad's bits of the

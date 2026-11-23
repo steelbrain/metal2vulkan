@@ -1542,9 +1542,10 @@ fn vertex_lane_reads_past_the_draw_name_no_inactive_lane() {
 
 /// A fragment function whose group operations read, combine, or count other lanes declares
 /// `RequireFullQuadsKHR` on every committed profile with `shaderQuadControl`, needs that feature,
-/// reads every lane of its quad by quad broadcasts, four for each value it reads, that follow its
-/// block's four quad votes, and every other lane of its simdgroup (`fragment_simd_fills`) by a
-/// shuffle through the ballot of the live lanes (a simdgroup may lack a lane); a profile without it
+/// reads every lane of its quad by quad broadcasts with no quad vote, each of these functions'
+/// operations running in a block every invocation executes, so its quads are whole, and every
+/// other lane of its simdgroup (`fragment_simd_fills`) by a shuffle through the ballot of the live
+/// lanes (a simdgroup may lack a lane); a profile without it
 /// (`moltenvk-m3`) whose stage has the classes refuses the function, needing the feature. A
 /// fragment that only reads its quad lane (`simd_masks`' `quad_lane_f`) declares no such mode and
 /// needs no such feature anywhere.
@@ -1575,13 +1576,10 @@ fn fragment_group_operations_run_full_quads() {
                     let (_, words) = link_and_validate(&a, &p).expect("valid");
                     let text = spirv_dis(&words);
                     let count = |op: &str| text.lines().filter(|l| l.contains(op)).count();
-                    let reads = count("OpGroupNonUniformQuadBroadcast");
                     assert!(
                         text.contains("RequireFullQuadsKHR")
                             && text.contains("OpCapability QuadControlKHR")
-                            && reads % 4 == 0
-                            && count("OpGroupNonUniformQuadAnyKHR")
-                                == if reads > 0 { 4 } else { 0 }
+                            && count("OpGroupNonUniformQuadAnyKHR") == 0
                             && !text.contains("OpGroupNonUniformQuadSwap"),
                         "{entry} on {name}"
                     );
@@ -1623,10 +1621,10 @@ fn fragment_group_operations_run_full_quads() {
 /// A fragment's quad reduction reads its quad through quad instructions alone, which Vulkan runs
 /// over the quad's helpers in every entry (section 9.31): on every committed profile with
 /// `shaderQuadControl`, `fragment_quad_bitwise`'s AND, OR and XOR and its quad prefix sum, in one
-/// block, share 4 `OpGroupNonUniformQuadAnyKHR` asking whether each of the four quad lanes takes
-/// part, and read the four lanes of each of their two values by `OpGroupNonUniformQuadBroadcast`:
-/// 8 in all, and no ballot. A kernel's quad reductions (`quad_bitwise`), whose quads hold
-/// no helpers, keep the active lanes' word and take no quad vote.
+/// block every invocation executes, where each quad is whole, read the four lanes of each of their
+/// two values by `OpGroupNonUniformQuadBroadcast`, 8 in all, with no quad vote and no ballot. A
+/// kernel's quad reductions (`quad_bitwise`), whose quads hold no helpers, keep the active lanes'
+/// word and take no quad vote.
 #[test]
 fn fragment_quad_reductions_read_their_quads_by_quad_instructions() {
     let Some(quads) = assemble("gsm2_quad_ops") else {
@@ -1647,7 +1645,7 @@ fn fragment_quad_reductions_read_their_quads_by_quad_instructions() {
                 count(&text, "OpGroupNonUniformQuadBroadcast"),
                 count(&text, "OpGroupNonUniformBallot "),
             ],
-            [4, 8, 0],
+            [0, 8, 0],
             "fragment_quad_bitwise on {name}"
         );
         fragments += 1;
@@ -1752,14 +1750,18 @@ fn fragment_quad_votes_are_quad_vote_instructions() {
 
 /// A fragment's quad operations read their quad through quad instructions alone, which Vulkan
 /// runs over the quad's helpers in every entry (section 9.31), and the operations of one block
-/// share their votes and lanes: on every committed profile with `shaderQuadControl`,
-/// `fragment_quad_scans` (a product and two prefix scans of one value and a first lane's broadcast
-/// of another) asks `OpGroupNonUniformQuadAnyKHR` 4 times, once for each quad lane, and reads 8
-/// lanes by `OpGroupNonUniformQuadBroadcast`, each value's four; `fragment_helper_threads` (two
-/// ballots and the active mask) votes 12 times and reads none; `fragment_quad_fills` (four fills
-/// of one data value and one fill value) and `fragment_quad_fills_and_rotations` (two fills and two
-/// rotations of the same values) vote 4 times and read 8 lanes; none holds a ballot. A kernel's
-/// quad scans (`quad_float_scans`), whose quads hold no helpers, take no quad vote.
+/// share their votes and lanes. Where every invocation executes the block, each quad is whole and
+/// they take no vote: on every committed profile with `shaderQuadControl`, `fragment_quad_scans`
+/// (a product and two prefix scans of one value and a first lane's broadcast of another) reads 5
+/// lanes by `OpGroupNonUniformQuadBroadcast`, the value's four and the other's lane 0;
+/// `fragment_helper_threads` (two ballots and the active mask) reads none and gathers each ballot
+/// by 2 `OpGroupNonUniformQuadSwap`, its mask a constant; `fragment_quad_fills` (four fills of one
+/// data value and one fill value) and `fragment_quad_fills_and_rotations` (two fills and two
+/// rotations of the same values) read 8 lanes. Under a branch on the pixel, a quad may not be
+/// whole: `fragment_quad_ops_divergent` (a product and two prefix scans of one value, and an OR of
+/// another) asks `OpGroupNonUniformQuadAnyKHR` 4 times, once for each quad lane, and reads 8 lanes,
+/// and `fragment_quad_first_in_a_speculated_arm` votes 4 times and reads 4. None holds a ballot. A
+/// kernel's quad scans (`quad_float_scans`), whose quads hold no helpers, take no quad vote.
 #[test]
 fn fragment_quad_operations_read_their_quads_by_quad_instructions() {
     let (Some(quads), Some(helpers)) = (assemble("gsm2_quad_ops"), assemble("gsm2_helper_threads"))
@@ -1772,11 +1774,13 @@ fn fragment_quad_operations_read_their_quads_by_quad_instructions() {
         if !p.fields().subgroup.quad_control {
             continue;
         }
-        for (bc, entry, votes, reads) in [
-            (&quads, "fragment_quad_scans", 4, 8),
-            (&helpers, "fragment_helper_threads", 12, 0),
-            (&quads, "fragment_quad_fills", 4, 8),
-            (&quads, "fragment_quad_fills_and_rotations", 4, 8),
+        for (bc, entry, votes, reads, swaps) in [
+            (&quads, "fragment_quad_scans", 0, 5, 0),
+            (&helpers, "fragment_helper_threads", 0, 0, 4),
+            (&quads, "fragment_quad_fills", 0, 8, 0),
+            (&quads, "fragment_quad_fills_and_rotations", 0, 8, 0),
+            (&quads, "fragment_quad_ops_divergent", 4, 8, 0),
+            (&quads, "fragment_quad_first_in_a_speculated_arm", 4, 4, 0),
         ] {
             let a = compile(bc, entry, &p).expect("compile");
             let (_, words) = link_and_validate(&a, &p).expect("valid");
@@ -1785,9 +1789,10 @@ fn fragment_quad_operations_read_their_quads_by_quad_instructions() {
                 [
                     count(&text, "OpGroupNonUniformQuadAnyKHR"),
                     count(&text, "OpGroupNonUniformQuadBroadcast"),
+                    count(&text, "OpGroupNonUniformQuadSwap"),
                     count(&text, "OpGroupNonUniformBallot "),
                 ],
-                [votes, reads, 0],
+                [votes, reads, swaps, 0],
                 "{entry} on {name}"
             );
         }
