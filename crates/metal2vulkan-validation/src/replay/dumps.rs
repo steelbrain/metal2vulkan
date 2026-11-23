@@ -24,7 +24,7 @@
 use super::player::ReadCopy;
 use std::collections::BTreeMap;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// The command buffers a play dumps ([`Player::dumping`](super::player::Player::dumping)), by
 /// stream id: what `--dump-command-buffers` lists.
@@ -207,10 +207,11 @@ impl Comparison {
     }
 }
 
-/// What one play's directory holds of one dump.
+/// What one play's directory holds of one dump. The bytes stay in their file until the compare
+/// reads them: two plays' dumps of a long range can be far larger than memory.
 #[derive(Default)]
 struct Held {
-    bytes: Option<Vec<u8>>,
+    bytes: Option<PathBuf>,
     unread: Option<String>,
     covered: Vec<(u64, u64)>,
     /// The `.copy` file's words: which of its two copies the bytes are.
@@ -233,7 +234,7 @@ fn read_dir(dir: &Path) -> io::Result<BTreeMap<(u64, u64), Held>> {
         };
         let held = out.entry(key).or_default();
         match extension {
-            "bin" => held.bytes = Some(std::fs::read(&path)?),
+            "bin" => held.bytes = Some(path),
             "unread" => held.unread = Some(std::fs::read_to_string(&path)?),
             "cover" => held.covered = ranges(&std::fs::read_to_string(&path)?, &path)?,
             "copy" => held.copy = Some(std::fs::read_to_string(&path)?.trim().to_owned()),
@@ -269,11 +270,14 @@ fn ranges(text: &str, path: &Path) -> io::Result<Vec<(u64, u64)>> {
 /// `a` against `b` word by word, a word wholly inside one of `covered` left out: the differing
 /// words, those covered, and the first differing word outside every cover.
 pub(super) fn words(a: &[u8], b: &[u8], covered: &[(u64, u64)]) -> (u64, u64, Option<u64>) {
-    let longest = a.len().max(b.len()).div_ceil(4);
     let (mut differing, mut under, mut first) = (0, 0, None);
+    if a == b {
+        return (differing, under, first);
+    }
+    let longest = a.len().max(b.len()).div_ceil(4);
     for word in 0..longest {
         let at = word * 4;
-        let side = |bytes: &[u8]| bytes.get(at..(at + 4).min(bytes.len())).map(<[u8]>::to_vec);
+        let side = |bytes: &[u8]| bytes.get(at..(at + 4).min(bytes.len()));
         if side(a) == side(b) {
             continue;
         }
@@ -313,6 +317,7 @@ pub fn compare_dumps(a: &Path, b: &Path) -> io::Result<Comparison> {
         let (Some(bx), Some(by)) = (&x.bytes, &y.bytes) else {
             continue;
         };
+        let (bx, by) = (std::fs::read(bx)?, std::fs::read(by)?);
         if x.copy != y.copy {
             let copy = |held: &Held| held.copy.clone().unwrap_or_else(|| "one copy".to_owned());
             out.copies.push((name, copy(&x), copy(&y)));
@@ -325,7 +330,7 @@ pub fn compare_dumps(a: &Path, b: &Path) -> io::Result<Comparison> {
             _ => {}
         }
         let covered = [&x.covered[..], &y.covered[..]].concat();
-        let (differing, under, first) = words(bx, by, &covered);
+        let (differing, under, first) = words(&bx, &by, &covered);
         if differing > 0 {
             out.differences.push(Difference {
                 command_buffer: key.0,
