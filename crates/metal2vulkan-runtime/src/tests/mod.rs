@@ -39,6 +39,7 @@ mod function_tables;
 mod gpu_span;
 mod hazard;
 mod heap;
+mod heap_alias;
 mod image_reads;
 mod imageblock;
 mod import;
