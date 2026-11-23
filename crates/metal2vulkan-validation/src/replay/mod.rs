@@ -20,7 +20,7 @@ mod value;
 
 pub use compare::{compare_plays, shown_differences};
 pub use covers::SlotStage;
-pub use dumps::{compare_dumps, Comparison, Difference};
+pub use dumps::{compare_dumps, CommandBufferList, Comparison, Difference};
 pub use new_runtime::{judged_records, Ended, ManagedCopies, NewRuntime, VideoHandle};
 pub use pixels::Shape;
 pub use player::WAIT_COMPLETED;

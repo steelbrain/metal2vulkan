@@ -1115,14 +1115,15 @@ also writes `error teardown: WHAT`. The exit status is 0 for `ok`, 1 for a run t
 by `error teardown`, 2 for a harness failure (a bad command line or an unreadable stream) and 3
 for `ids`, a run that played to the end.
 
-With `--dump-command-buffers FIRST..LAST --dump-dir DIR`, the player also writes, once each
-command buffer whose stream id lies in `FIRST..=LAST` completed (a split command buffer's parts by
-their own ids), every buffer its encoders named, read after the wait that saw the command buffer
+With `--dump-command-buffers LIST --dump-dir DIR`, the player also writes, once each command
+buffer whose stream id `LIST` holds completed (a split command buffer's parts by their own ids),
+every buffer its encoders named, read after the wait that saw the command buffer
 complete and before the next call plays: `cbC-objO.bin` its bytes, `cbC-objO.cover` the ranges of
 it covered then (as above, `start..end` byte offsets joined by commas, or `-`), and
 `cbC-objO.unread` in place of the bytes where the backend could not read it, and for a buffer with
 two copies `cbC-objO.copy`, which copy the bytes are: `CPU copy` or `device copy, read back`
-(above). `command-replay
+(above). `LIST` is `FIRST..LAST` ranges (both ends held) and single ids, joined by commas, such as
+`20..29,31`; anything else stops the play before it starts. `command-replay
 compare-dumps --a DIR --b DIR` compares two plays' dumps word by word (4 bytes), leaving out a word
 wholly inside a range either play held covered, and prints `differs cb #C obj #O: N words outside every cover, the first word
 W; M covered; lengths A and B` for each buffer that differs outside every cover, `only in a|b:

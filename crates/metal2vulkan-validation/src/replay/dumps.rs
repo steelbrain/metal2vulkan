@@ -26,6 +26,55 @@ use std::collections::BTreeMap;
 use std::io;
 use std::path::Path;
 
+/// The command buffers a play dumps ([`Player::dumping`](super::player::Player::dumping)), by
+/// stream id: what `--dump-command-buffers` lists.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CommandBufferList {
+    /// Each range's first id and its last, ranges that overlap or touch merged into one.
+    ranges: BTreeMap<u64, u64>,
+}
+
+impl CommandBufferList {
+    /// The list `listed` names: items joined by commas, in any order, each `FIRST..LAST` (both
+    /// ends held, `FIRST` at most `LAST`) or one id. `None` where any item is neither.
+    pub fn parse(listed: &str) -> Option<CommandBufferList> {
+        let mut list = CommandBufferList::default();
+        for item in listed.split(',') {
+            let (first, last) = match item.split_once("..") {
+                Some((first, last)) => (first.parse().ok()?, last.parse().ok()?),
+                None => {
+                    let id = item.parse().ok()?;
+                    (id, id)
+                }
+            };
+            if first > last {
+                return None;
+            }
+            list.add(first, last);
+        }
+        Some(list)
+    }
+
+    /// Whether the list holds command buffer `id`.
+    pub fn contains(&self, id: u64) -> bool {
+        (self.ranges.range(..=id).next_back()).is_some_and(|(_, &last)| id <= last)
+    }
+
+    /// Hold `first..=last`, merged with the ranges it overlaps or touches.
+    fn add(&mut self, mut first: u64, mut last: u64) {
+        let merged: Vec<u64> = (self.ranges.range(..=last.saturating_add(1)).rev())
+            .take_while(|&(_, &end)| end.saturating_add(1) >= first)
+            .map(|(&start, _)| start)
+            .collect();
+        for start in merged {
+            let end = self.ranges.remove(&start).unwrap_or(start);
+            first = first.min(start);
+            last = last.max(end);
+        }
+        self.ranges.insert(first, last);
+    }
+}
+
 /// The dump of buffer `object` named by command buffer `command_buffer`: its bytes, or why the
 /// backend could not read them, which of its two copies they are where it has two, and the ranges
 /// of it covered then, written into `dir`.

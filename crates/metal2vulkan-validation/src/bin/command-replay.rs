@@ -69,10 +69,10 @@
 //! passed over, a state plays as a skipped object, which a states-only play binds nowhere, so its
 //! `render states made` count leaves them out.
 //!
-//! With `--dump-command-buffers FIRST..LAST --dump-dir DIR`, the play also writes into `DIR`, once
-//! each command buffer whose stream id lies in `FIRST..=LAST` completed, every buffer its encoders
-//! named, with the ranges of it the cover rule held covered then (`docs/REPLAY-STREAM.md`, section
-//! 10).
+//! With `--dump-command-buffers LIST --dump-dir DIR`, the play also writes into `DIR`, once each
+//! command buffer whose stream id `LIST` holds completed, every buffer its encoders named, with
+//! the ranges of it the cover rule held covered then (`docs/REPLAY-STREAM.md`, section 10).
+//! `LIST` is `FIRST..LAST` ranges (both ends held) and single ids, joined by commas.
 //!
 //! A check or dump of a buffer the play keeps two copies of (a Managed buffer of a stream recorded
 //! without unified memory) names the copy it read: its CPU copy, as Metal's `contents` answers, or
@@ -105,13 +105,12 @@ use metal2vulkan_validation::gpu::wait::{parse_wait_timeout, set_wait_timeout, W
 use metal2vulkan_validation::gpu::DeviceType;
 use metal2vulkan_validation::replay::{
     compare_dumps, compare_plays, display_library, judged_records, recording_range, segments,
-    shown_differences, Backend, ManagedCopies, NewRuntime, PlayError, Player, RangeSource,
-    RecordingRange, StreamError, StreamReader, Value, VideoHandle, FLAG_COMPLETION_BYTES_RECORDED,
-    RECORDED_RANGES,
+    shown_differences, Backend, CommandBufferList, ManagedCopies, NewRuntime, PlayError, Player,
+    RangeSource, RecordingRange, StreamError, StreamReader, Value, VideoHandle,
+    FLAG_COMPLETION_BYTES_RECORDED, RECORDED_RANGES,
 };
 use std::collections::{BTreeMap, HashSet};
 use std::io::Write as _;
-use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 
 const USAGE: &str = "usage: command-replay play --stream FILE --out DIR --device-type cpu|gpu \
@@ -120,7 +119,7 @@ const USAGE: &str = "usage: command-replay play --stream FILE --out DIR --device
                      [--states-only yes|no] [--state-log FILE] [--state-threads N] \
                      [--state-keys KEY,...] [--gpu-wait-timeout SECONDS] [--video-handle dma-buf|opaque-fd|opaque-win32] \
                      [--check-presents F,...] [--read-device-copies yes|no] [--prepass-width N] \
-                     [--dump-command-buffers FIRST..LAST --dump-dir DIR]\n       \
+                     [--dump-command-buffers LIST --dump-dir DIR]\n       \
                      command-replay compare-dumps --a DIR --b DIR\n       \
                      command-replay compare-plays --a REPORT --b REPORT [--frame F]\n       \
                      command-replay dump \
@@ -574,12 +573,10 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
     let dump = match (options.get("dump-command-buffers"), options.get("dump-dir")) {
         (None, None) => None,
         (Some(listed), Some(dir)) => {
-            let parsed = listed.split_once("..").and_then(|(first, last)| {
-                Some(first.parse::<u64>().ok()?..=last.parse::<u64>().ok()?)
-            });
-            let Some(command_buffers) = parsed else {
+            let Some(command_buffers) = CommandBufferList::parse(listed) else {
                 report.line(&format!(
-                    "error dump-command-buffers: {listed} is no FIRST..LAST"
+                    "error dump-command-buffers: {listed} is no list of FIRST..LAST ranges and \
+                     ids joined by commas"
                 ));
                 return 2;
             };
@@ -753,7 +750,7 @@ fn open_rt(device_type: DeviceType, cache: PathBuf) -> Result<(NewRuntime, Strin
 }
 
 /// The command buffers a play dumps and where (`--dump-command-buffers`, `--dump-dir`).
-type Dumped = Option<(RangeInclusive<u64>, PathBuf)>;
+type Dumped = Option<(CommandBufferList, PathBuf)>;
 
 /// The frames whose present a play checks (`--check-presents`), and where it keeps their bytes.
 type Presents = (Vec<u64>, PathBuf);

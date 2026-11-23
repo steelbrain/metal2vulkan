@@ -19,7 +19,6 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::io::Write;
-use std::ops::RangeInclusive;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -989,7 +988,7 @@ pub struct Player<'b, B: Backend> {
 
 /// A play's dump of command buffers ([`Player::dumping`]): which, where, and what each named.
 struct Dump {
-    command_buffers: RangeInclusive<u64>,
+    command_buffers: dumps::CommandBufferList,
     dir: PathBuf,
     /// The live buffers.
     buffers: HashSet<u64>,
@@ -1248,12 +1247,12 @@ impl<'b, B: Backend> Player<'b, B> {
         self
     }
 
-    /// The player that, once each command buffer whose stream id lies in `command_buffers`
+    /// The player that, once each command buffer whose stream id `command_buffers` holds
     /// completed, writes every buffer its encoders named into `dir`, with the ranges of it the
     /// cover rule held covered then (`dumps.rs`): the per-command-buffer compare of two plays
     /// ([`compare_dumps`](super::compare_dumps)) reads them. A listed command buffer's buffers are
     /// read after the wait that saw it complete, before the next call plays.
-    pub fn dumping(mut self, command_buffers: RangeInclusive<u64>, dir: PathBuf) -> Self {
+    pub fn dumping(mut self, command_buffers: dumps::CommandBufferList, dir: PathBuf) -> Self {
         self.dump = Some(Dump {
             command_buffers,
             dir,
@@ -1675,7 +1674,7 @@ impl<'b, B: Backend> Player<'b, B> {
             dump.buffers.insert(call.result);
         }
         let listed = match self.kinds.get(&call.receiver) {
-            Some(Kind::CommandBuffer) => dump.command_buffers.contains(&call.receiver),
+            Some(Kind::CommandBuffer) => dump.command_buffers.contains(call.receiver),
             _ => false,
         };
         let command_buffer = match listed {
