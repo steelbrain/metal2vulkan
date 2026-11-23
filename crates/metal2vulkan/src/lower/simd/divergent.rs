@@ -259,7 +259,8 @@ pub const VOTE_BYTES: u32 = 4;
 /// barriers are uniform and whose word does not fit runs no partial threadgroup instead
 /// (`MeshPlan::partial_groups` cleared, so the binder refuses such a draw), and a kernel's
 /// partial-threadgroups variant (`LoweringInputs::partial_threadgroups`) is refused,
-/// `Unsupported{PartialThreadgroups, NotImplemented}`.
+/// `Unsupported{PartialThreadgroups}` needing the `Limit` of `maxComputeSharedMemorySize` its
+/// arena and word pass.
 pub fn barriers(
     cx: &mut SelectCx<'_>,
     strategy: &[Option<Strategy>],
@@ -330,11 +331,15 @@ pub fn barriers(
         match crate::lower::mesh::workgroup_limit(cx).check(required) {
             Ok(()) => {}
             // Uniform barriers need the walk only for partial threadgroups, which then stay
-            // refused: an object function's draw by the binder, a kernel's variant here, so its
-            // dispatches keep their exact split.
-            Err(Error::Unsupported(_)) if !divergent => {
+            // refused: an object function's draw by the binder, a kernel's variant here, naming
+            // the limit its arena and vote word pass.
+            Err(Error::Unsupported(limit)) if !divergent => {
                 if cx.stage == Stage::Kernel {
-                    return Err(Unsupported::not_implemented(Feature::PartialThreadgroups).into());
+                    return Err(Unsupported {
+                        feature: Feature::PartialThreadgroups,
+                        ..limit
+                    }
+                    .into());
                 }
                 cx.families.mesh.partial_groups = false;
                 return Ok(());

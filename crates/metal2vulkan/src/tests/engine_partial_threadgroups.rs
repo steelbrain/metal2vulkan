@@ -146,3 +146,85 @@ fn partial_threadgroups_are_refused_with_another_form() {
         }
     }
 }
+
+/// `scan`: an inclusive scan of the threadgroup's threads over a declared array of `words` words:
+/// thread `t` stores `t + 1` at word `t`, then for each stride `s` of 1, 2, 4 and on below
+/// `threads_per_threadgroup`, past a barrier adds word `t - s` where `t >= s`, and past another
+/// stores its sum. The loop holds the barriers, so the variant's predicated walk votes in it.
+fn scan(words: u32) -> String {
+    format!(
+        "{HEADER}@tg = internal addrspace(3) global [{words} x i32] undef, align 4\n\n\
+define void @scan(ptr addrspace(1) noundef %out, i32 noundef %t, i32 noundef %g, i32 noundef %n) {{\n\
+entry:\n\
+  %pt = getelementptr inbounds i32, ptr addrspace(3) @tg, i32 %t\n\
+  %v0 = add i32 %t, 1\n\
+  store i32 %v0, ptr addrspace(3) %pt, align 4\n\
+  br label %head\n\
+head:\n\
+  %s = phi i32 [ 1, %entry ], [ %s2, %body ]\n\
+  %acc = phi i32 [ %v0, %entry ], [ %acc2, %body ]\n\
+  %more = icmp ult i32 %s, %n\n\
+  br i1 %more, label %body, label %done\n\
+body:\n\
+  tail call void @air.wg.barrier(i32 2, i32 1) #0\n\
+  %has = icmp uge i32 %t, %s\n\
+  %back = sub i32 %t, %s\n\
+  %at = select i1 %has, i32 %back, i32 %t\n\
+  %pa = getelementptr inbounds i32, ptr addrspace(3) @tg, i32 %at\n\
+  %x = load i32, ptr addrspace(3) %pa, align 4\n\
+  %add = select i1 %has, i32 %x, i32 0\n\
+  %acc2 = add i32 %acc, %add\n\
+  tail call void @air.wg.barrier(i32 2, i32 1) #0\n\
+  store i32 %acc2, ptr addrspace(3) %pt, align 4\n\
+  %s2 = shl i32 %s, 1\n\
+  br label %head\n\
+done:\n\
+  %o = getelementptr inbounds i32, ptr addrspace(1) %out, i32 %g\n\
+  store i32 %acc, ptr addrspace(1) %o, align 4\n\
+  ret void\n\
+}}\n\n\
+declare void @air.wg.barrier(i32, i32) #0\n\n\
+attributes #0 = {{ convergent mustprogress nounwind willreturn }}\n\n\
+!air.kernel = !{{!0}}\n!air.version = !{{!7}}\n!air.language_version = !{{!8}}\n\
+!0 = !{{ptr @scan, !1, !2}}\n!1 = !{{}}\n!2 = !{{!3, !4, !5, !6}}\n\
+!3 = !{{i32 0, !\"air.buffer\", !\"air.location_index\", i32 0, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"out\"}}\n\
+!4 = !{{i32 1, !\"air.thread_index_in_threadgroup\", !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"t\"}}\n\
+!5 = !{{i32 2, !\"air.thread_position_in_grid\", !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"g\"}}\n\
+!6 = !{{i32 3, !\"air.threads_per_threadgroup\", !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"n\"}}\n\
+!7 = !{{i32 2, i32 8, i32 0}}\n!8 = !{{!\"Metal\", i32 4, i32 0, i32 0}}\n"
+    )
+}
+
+/// The variant of a kernel whose barriers in a loop take the vote word beside its threadgroup
+/// memory is refused where the two pass the device's `maxComputeSharedMemorySize` (32,768 bytes
+/// on the MoltenVK M3 profile), naming that limit and the bytes, Metal's own 32 KiB and the word;
+/// with 16 bytes less memory it is made.
+#[test]
+fn a_vote_word_past_the_shared_memory_limit_refuses_the_variant_naming_the_limit() {
+    use crate::device::VkLimit;
+    use crate::error::{Capability, Needs};
+    let dev = device("moltenvk-m3", |_| {});
+    let mut inputs = LoweringInputs::new();
+    inputs.partial_threadgroups = true;
+    let Some(full) = assemble_text("scan_full", &scan(8192)) else {
+        return;
+    };
+    match pipeline(&dev, &full, "scan", &inputs) {
+        Err(Error::Unsupported(u)) => {
+            assert_eq!(u.feature, Feature::PartialThreadgroups);
+            let limit = Capability::Limit {
+                limit: VkLimit::MaxComputeSharedMemorySize,
+                required: 32_772,
+                available: 32_768,
+            };
+            assert_eq!(u.needs, Needs::AnyOf(vec![vec![limit]]));
+        }
+        other => panic!("32,768 bytes: {:?}", other.map(|_| ())),
+    }
+    let Some(less) = assemble_text("scan_less", &scan(8188)) else {
+        return;
+    };
+    if let Err(error) = pipeline(&dev, &less, "scan", &inputs) {
+        panic!("32,752 bytes: {error:?}");
+    }
+}
