@@ -982,7 +982,7 @@ the Direct3D 11 texture's payload until it is freed.
   Its sparse buffers import no dma-buf either, so `Device::import_dma_bufs` refuses there, as it
   does on the RTX 3090 (NVIDIA 620.70.06).
 - An exported surface takes the copy form, its planes copied at each acquire and release, in
-  three cases the build found. A copy form's planes are textures over a buffer in the exported
+  four cases the build found. A copy form's planes are textures over a buffer in the exported
   block, which is Private, so the CPU's `replace_region` and `get_bytes` on them are refused
   (`Refusal::TextureBytesPrivate`):
   - A dma-buf surface on a device without `VK_EXT_image_drm_format_modifier`, or whose
@@ -1007,6 +1007,14 @@ the Direct3D 11 texture's payload until it is freed.
     start the consumer asks that the driver's linear images do not take. A pitch multiple of
     4,096 takes `SurfaceCopy::Pitch` on every device measured: the Radeon 780M, the RTX 3090,
     the Iris Xe, the RX 550 and lavapipe.
+  - A plane whose image the device exports only in an allocation of its own
+    (`SurfaceCopy::Dedicated`): the external image format query answers
+    `VK_EXTERNAL_MEMORY_FEATURE_DEDICATED_ONLY_BIT` for the plane's tiling and usage, or, on the
+    opaque handle's route, the plane's image requires a dedicated allocation. Under AMD's open
+    Linux driver (AMDVLK 2025.Q2.1) every route the runtime tries takes it, on the RX 7900 XTX
+    and the Radeon 780M (the runtime's surface test, jobs m3-max-70391, m3-max-70425 and
+    m3-max-70426), so the conformance cases `surface-textures-*` are refused at `replace_region`
+    there; RADV on the same cards answers all ten exactly (jobs m3-max-70513 and m3-max-70514).
 - On the Iris Xe (ANV, Mesa 26.2.6) a 4K dma-buf surface takes 3.05 ms for P010 and 1.80 ms for
   NV12 from the start of its make to the return of `Surface::wait_until_ready()` (medians of ten),
   where the M3 Max takes 1.62 and 1.22 ms to create an IOSurface of the same planes, make its two
@@ -3873,8 +3881,8 @@ cache is answered compile-required on both.
 - On a device without `alphaToOne` (Alpha to one, under Floor), a render pipeline whose descriptor
   sets `alphaToOneEnabled` is refused at creation, an `Error::Translation` naming `AlphaToOne` and
   `alphaToOne`: the translator has no other form, and Metal has no query for it. A Radeon under
-  AMD's own Windows driver reports no `alphaToOne` (a user's report; no lab venue runs that
-  driver). No replay stream sets it: 0 of the 58,976 render states of the nine streams'
+  AMD's own drivers reports no `alphaToOne`: AMD's open Linux driver (AMDVLK 2025.Q2.1) on the
+  Radeon 780M (`vulkaninfo`, job m3-max-70426), and AMD's Windows driver by a user's report. No replay stream sets it: 0 of the 58,976 render states of the nine streams'
   states-only plays on lavapipe (job m3-max-66153).
 - On a device without `fragmentShaderBarycentric` (Barycentrics, under Floor), a fragment function
   that reads `[[barycentric_coord]]` is refused at creation, an `Error::Translation` naming
@@ -4363,6 +4371,15 @@ cache is answered compile-required on both.
   inside the clipped primitive ("Basic Polygon Rasterization"), and the scissor test holds the
   application's rectangle ("Scissor Test"). No Vulkan control or query reaches that scissor; it is
   a driver bug, and the row stays undrawn on that driver.
+- AMD's open Linux driver (AMDVLK 2025.Q2.1) on the RX 7900 XTX and the Radeon 780M differs from
+  Metal in the same case as the Iris Xe, with the same count of differing elements (480), the
+  same first texel and the same largest difference: where the far pixel's centre lies inside the
+  viewport it is not drawn, which Metal draws and the two rules above require (the 780M reports 8
+  bits of viewport sub-pixel precision, job m3-max-70426); where the centre lies outside the
+  viewport or on its edge, the difference is inside the accepted difference of docs/API.md
+  section 10. RADV on the same cards draws Metal's pixels (jobs m3-max-70513 and m3-max-70514).
+  The driver's source was not read; it is a driver bug, and the pixels stay undrawn on that
+  driver.
 - Visibility results (`set_visibility_result_mode`, Metal's `setVisibilityResultMode:offset:`):
   each `Boolean` or `Counting` mode set counts the samples its later draws pass, up to the next
   mode set or the encoder's end, in one precise occlusion query (`occlusionQueryPrecise`, the
@@ -4740,6 +4757,9 @@ command buffer reads: a render pass's end orders its writes before every later c
   indirect command buffer is refused the same way.
 - On the Mac host (KosmicKrisp, Mesa 26.3.1, on an Apple M3 Max), which does not list
   `VK_EXT_device_generated_commands`, an indirect command buffer is refused the same way.
+- On AMD's open Linux driver (AMDVLK 2025.Q2.1) on the Radeon 780M, which lists
+  `VK_KHR_maintenance5` but not `VK_EXT_device_generated_commands` (`vulkaninfo`, job
+  m3-max-70426), an indirect command buffer is refused the same way.
 - Refused by `Gap::IndirectCommandBuffers`, naming its `IndirectCommandsKind`: command types other
   than indexed draws alone (`CommandTypes`), commands that set their own pipeline state
   (`CommandPipelines`, on every device), commands that inherit the encoder's buffers
