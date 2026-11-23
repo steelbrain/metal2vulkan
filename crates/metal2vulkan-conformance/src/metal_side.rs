@@ -10717,6 +10717,9 @@ impl MetalSide {
                     encoder.setThreadgroupMemoryLength_atIndex(*length as usize, *index as usize);
                 }
             }
+            ComputeStep::ImageblockSize { width, height } => {
+                encoder.setImageblockWidth_height(*width as usize, *height as usize);
+            }
             ComputeStep::UseResource {
                 resource: one,
                 usage,

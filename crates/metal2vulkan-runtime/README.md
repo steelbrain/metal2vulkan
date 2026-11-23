@@ -2805,15 +2805,15 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   `maxTotalThreadsPerThreadgroup`. The device's own limit is no declared bound, and a kernel's
   bound of Metal's own 1024 is not told apart from none. The consumer's `finish_pipeline` call
   makes it after the answer (below); a kernel past the stage bound makes it at the creation
-  (Kernels past the stage bound, below). A kernel's `VkPipeline` at a threadgroup size and
-  threadgroup memory lengths only a dispatch gives is made at the consumer's `prepare_dispatch`
-  call (below) or at the dispatch: one per module, threadgroup size and threadgroup memory
-  lengths, on the encoding thread that first dispatches any of its states with them, which waits
-  for it. Nothing the runtime records depends on when a compile finishes: there is one recorded
+  (Kernels past the stage bound, below). A kernel's `VkPipeline` at a threadgroup size,
+  threadgroup memory lengths and an explicit imageblock's size only a dispatch gives is made at
+  the consumer's `prepare_dispatch` call (below) or at the dispatch: one per module, threadgroup
+  size, threadgroup memory lengths and imageblock size, on the encoding thread that first
+  dispatches any of its states with them, which waits for it. Nothing the runtime records depends on when a compile finishes: there is one recorded
   form, made after the wait. Each such wait is counted in `Metrics::first_use_waits`, with its
   time in `first_use_wait_nanos` and the longest in `first_use_wait_max_nanos`, and again by where
   it waited, each with its count, time and longest: `first_use_variant_waits` (a kernel's pipeline
-  for a new workgroup size, threadgroup memory lengths or tiles), `first_use_line_waits` (a
+  for a new workgroup size, threadgroup memory lengths, imageblock size or tiles), `first_use_line_waits` (a
   render content's line-class pipeline), `first_use_point_waits` (its point-class pipeline),
   `first_use_raster_waits` (its pipeline under the depth clip mode `Clamp` or the triangle fill
   mode `Lines`) and `first_use_unfinished_waits` (a state's main pipeline, compute or render,
@@ -2842,21 +2842,24 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   reads beside the time of its own two calls; `failed_finishes` counts the calls whose make
   failed (Known gaps of pipeline states, below). Its only error is `Error::Vulkan`.
 - `ComputePipelineState::prepare_dispatch(Dispatch, threads_per_threadgroup,
-  threadgroup_memory_lengths)` has no Metal counterpart: it is a hook for a consumer's pre-pass.
-  Metal compiles a compute state whole when the state is made; here the state's creation makes
-  every module, and a kernel's `VkPipeline`, but for the state's main one, waits for the
-  dispatch's threadgroup size and threadgroup memory lengths. A consumer that reads a command
-  buffer's dispatches before it encodes them may pass each one's own arguments: its grid as its
-  call took it (`Dispatch::Threads` for `dispatchThreads:`, `Dispatch::Threadgroups` for
-  `dispatchThreadgroups:`, `Dispatch::Indirect` for the indirect form), its threadgroup size, and
-  the encoder's `setThreadgroupMemoryLength:atIndex:` settings, in stream order, on threads of
-  its own; rt
+  threadgroup_memory_lengths, imageblock_size)` has no Metal counterpart: it is a hook for a
+  consumer's pre-pass. Metal compiles a compute state whole when the state is made; here the
+  state's creation makes every module, and a kernel's `VkPipeline`, but for the state's main one,
+  waits for the dispatch's threadgroup size, threadgroup memory lengths and imageblock size. A
+  consumer that reads a command buffer's dispatches before it encodes them may pass each one's own
+  arguments: its grid as its call took it (`Dispatch::Threads` for `dispatchThreads:`,
+  `Dispatch::Threadgroups` for `dispatchThreadgroups:`, `Dispatch::Indirect` for the indirect
+  form), its threadgroup size, the encoder's `setThreadgroupMemoryLength:atIndex:` settings, in
+  stream order, and the encoder's last `setImageblockWidth:height:` size, `[1, 1]` where it set
+  none, on threads of its own; rt
   starts none. The call decides what the dispatch runs as the dispatch decides it (one function
   serves both), then makes that module's `VkPipeline`. It returns at once where that is made, or
   another thread is making it. A make runs outside the kernel's lock, its variant marked
   pending, so makes of different variants run at once; only a dispatch waits, and only for its
   own variant's make, a first-use wait. The call makes nothing where the dispatch would refuse
-  its threadgroup size, its variant or its threadgroup memory, or would record nothing (a grid
+  its threadgroup size, its variant or its threadgroup memory, where the imageblock size is one
+  the encoder refuses (`Refusal::ImageblockSize`) for a kernel that reaches an imageblock, or
+  where the dispatch would record nothing (a grid
   with no threads, a kernel that writes no memory), and reports no error: the dispatch reports
   its own. The one error it reports is a make refused for the stage bound (`Error::StageUnfilled`,
   or `Gap::StageSize`; Kernels past the stage bound, below), which the dispatch reports too until
@@ -2868,10 +2871,11 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   counterpart either: it answers a `DispatchVariant`, the key of the `VkPipeline` the dispatch
   runs, decided by the same function, so a pre-pass can call `prepare_dispatch` once for each key
   it has not met. Two keys are equal exactly when their dispatches run one `VkPipeline`: of one
-  compiled content (the states of one content share theirs), the same module, workgroup size and
-  threadgroup memory lengths. What the decision does not read does not change the key: an
-  observing kernel's grid beyond whether its last threadgroups are partial, a tiling kernel's
-  direct grid and threadgroup size. Keys of different contents never compare equal. With the
+  compiled content (the states of one content share theirs), the same module, workgroup size,
+  threadgroup memory lengths and, for a kernel that reaches an explicit imageblock, imageblock
+  size. What the decision does not read does not change the key: an observing kernel's grid
+  beyond whether its last threadgroups are partial, a tiling kernel's direct grid and threadgroup
+  size, the imageblock size of a kernel that reaches none. Keys of different contents never compare equal. With the
   key it answers whether that `VkPipeline` is made, so a pre-pass can leave a made one alone:
   read from the kernel's first eight variants with no lock, and past them under the short lock of
   the kernel's list, which no make holds while the driver compiles. It may answer false for a key
@@ -3403,8 +3407,8 @@ cache is answered compile-required on both.
   line or point class where `inputPrimitiveTopology` names that class) is made after the answer,
   by the consumer's `finish_pipeline` call, or by the first dispatch or draw that needs it before
   that call has made it. What only a dispatch or a draw gives waits for it: a kernel's
-  `VkPipeline` at a threadgroup size and threadgroup memory lengths is made at the consumer's
-  `prepare_dispatch` call or at the dispatch, a render content's line or point class, unless its
+  `VkPipeline` at a threadgroup size, threadgroup memory lengths and an explicit imageblock's size
+  is made at the consumer's `prepare_dispatch` call or at the dispatch, a render content's line or point class, unless its
   descriptor names that class, at its first draw of it (one `VkPipeline` for every class needs
   `dynamicPrimitiveTopologyUnrestricted`, which the floor does not require, and no second form is
   chosen by it), and its `VkPipeline` under the depth clip mode `Clamp` or the triangle fill mode
@@ -3413,18 +3417,24 @@ cache is answered compile-required on both.
   cold cache it compiles in that call, where Metal changes these with no compile: on a cold play,
   `Metrics::first_use_waits` against `Metrics::made_ahead_variants` reads what the consumer's
   pre-pass left to the encoding threads.
-- A compute kernel with an explicit imageblock has a state, and its dispatch is refused
-  (`Gap::KernelInput` of `KernelInputKind::RuntimeFact` naming `ImageblockSize`): the extent a
-  dispatch runs is what `setImageblockWidth:height:` sets, and the compute encoder has no
-  counterpart for that call. Such a kernel that writes no memory records nothing, as any such
-  kernel's dispatch does. A pre-pass gets no key or pipeline of its dispatches (`dispatch_variant`,
-  `prepare_dispatch`), and `finish_pipeline` makes none. The Metal Shading Language specification
+- A compute kernel with an explicit imageblock runs at the size the compute encoder's
+  `set_imageblock_size` (`setImageblockWidth:height:`) set last, 1 by 1 where it set none, as
+  Metal's does. The size is a specialization of the kernel's `VkPipeline`, as a threadgroup memory
+  length is, so each size a kernel runs at is one more `VkPipeline`, made at the consumer's
+  `prepare_dispatch` call or at the dispatch, a first-use wait (`first_use_variant_waits`), and
+  `finish_pipeline` makes none for such a kernel. Metal changes the size with no compile: on an
+  Apple M3 Max, a dispatch's first use of a size cost what its second did (medians of 25 runs at 4
+  by 4, 16 by 16 and 32 by 32: 202, 228 and 312 µs against 205, 207 and 228 µs, a dispatch at a
+  size already used 222 µs; job m3-max-69983). Metal's rule for the size, powers of two of at most
+  1024 cells, holds a kernel to 66 sizes. The Metal Shading Language specification
   supports imageblocks on macOS for Apple silicon only (sections 5.6 and 6.14), so a device that
   answers `supportsImageBlocks` NO gives a guest no imageblock to use. Over 34 recorded guest
   streams, one of them an arm64 macOS 27 boot, two such kernels are made, no dispatch binds one, and
   no stream calls `setImageblockWidth:height:`. One recording, the M3's, makes 10 states of
   explicit-imageblock kernels and dispatches none (jobs m3-max-58471, m3-max-58477, m3-max-58478
-  and m3-max-58483, and m3-max-57983 for the count).
+  and m3-max-58483, and m3-max-57983 for the count). The conformance case
+  `compute-imageblock-sizes` holds one encoder's dispatches before any size and at two sizes
+  equal to Metal's.
 - An image-only kernel's first dispatch over a grid more than one deep at a tile no state of its
   content has run makes that tile's `VkPipeline` on the calling thread, which waits for it
   (`Metrics::first_use_waits`), through the device's pipeline cache. In each of the two recorded

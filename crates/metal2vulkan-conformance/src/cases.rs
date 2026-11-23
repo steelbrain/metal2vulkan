@@ -107,6 +107,7 @@ pub mod heap_facts;
 pub mod heap_metal_sizes;
 pub mod host_detach;
 pub mod host_page_writes;
+pub mod imageblock_sizes;
 pub mod indirect_command_depth;
 pub mod indirect_commands;
 pub mod indirect_private_types;
@@ -632,6 +633,7 @@ pub fn all() -> Vec<Box<dyn Case>> {
     }
     cases.push(Box::new(buffer_bind_off_alignment::BufferBindOffAlignment));
     cases.push(Box::new(threadgroup_start::ThreadgroupStart));
+    cases.push(Box::new(imageblock_sizes::ImageblockSizes));
     cases.push(Box::new(nan_integer_conversions::NanIntegerConversions));
     cases.push(Box::new(function_constants_half3::FunctionConstantsHalf3));
     cases.push(Box::new(bicubic_texel_classes::BicubicTexelClasses));

@@ -109,6 +109,9 @@ impl RtSide<'_> {
             ComputeStep::ThreadgroupMemory { length, index } => {
                 (encoder.set_threadgroup_memory_length(*length, *index)).map_err(of_rt)
             }
+            ComputeStep::ImageblockSize { width, height } => {
+                (encoder.set_imageblock_size(*width, *height)).map_err(of_rt)
+            }
             ComputeStep::UseResource {
                 resource,
                 usage: bits,

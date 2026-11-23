@@ -935,7 +935,9 @@ records as text, and
   of a range (`withRange:`) of buffers, textures or sampler states plays as the single-slot bind
   of each, from the range's location, on render and compute encoders alike.
   Compute encoders play `setStageInRegion:` (the runtime takes it and it changes nothing a
-  dispatch of a kernel without a stage-in argument does, the only kernel it builds).
+  dispatch of a kernel without a stage-in argument does, the only kernel it builds) and
+  `setImageblockWidth:height:`, whose size the player's pre-pass passes with each dispatch it
+  prepares, 1 by 1 until the encoder sets one.
 
 `report.txt` holds one line per item: the mode line (`mode full: every call` or `mode
 states-only: ...`) first, then the line `recorded before the recorder's completion fix: the

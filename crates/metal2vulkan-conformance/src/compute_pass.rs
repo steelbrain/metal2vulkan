@@ -178,6 +178,9 @@ pub enum ComputeStep {
     /// `setThreadgroupMemoryLength:atIndex:`: the bytes the kernel's `[[threadgroup(n)]]`
     /// allocation takes, which the kernel itself does not declare.
     ThreadgroupMemory { length: u32, index: u32 },
+    /// `setImageblockWidth:height:`: the size of the explicit imageblock each threadgroup of a
+    /// later dispatch takes, which the kernel itself does not declare.
+    ImageblockSize { width: u32, height: u32 },
     /// `useResource:usage:`.
     UseResource { resource: PassResource, usage: u64 },
     /// `useResources:count:usage:`.
@@ -233,6 +236,7 @@ impl ComputeStep {
             ComputeStep::ClampedSampler { .. } => "setSamplerStateWithLodClamps",
             ComputeStep::ClampedSamplers { .. } => "setSamplerStatesWithLodClamps",
             ComputeStep::ThreadgroupMemory { .. } => "setThreadgroupMemoryLength",
+            ComputeStep::ImageblockSize { .. } => "setImageblockWidth",
             ComputeStep::UseResource { .. } => "useResource",
             ComputeStep::UseResources { .. } => "useResources",
             ComputeStep::UseHeap { .. } => "useHeap",
@@ -345,6 +349,10 @@ impl ComputeStep {
             ComputeStep::ThreadgroupMemory { length, index } => {
                 words.extend(length.to_le_bytes());
                 words.extend(index.to_le_bytes());
+            }
+            ComputeStep::ImageblockSize { width, height } => {
+                words.extend(width.to_le_bytes());
+                words.extend(height.to_le_bytes());
             }
             ComputeStep::UseResource { usage, .. } => words.extend(usage.to_le_bytes()),
             ComputeStep::UseResources { resources, usage } => {
@@ -588,7 +596,11 @@ mod tests {
                 length: 16,
                 index: 0,
             },
-            ComputeStep::ThreadgroupMemory { .. } => ComputeStep::UseResource {
+            ComputeStep::ThreadgroupMemory { .. } => ComputeStep::ImageblockSize {
+                width: 4,
+                height: 2,
+            },
+            ComputeStep::ImageblockSize { .. } => ComputeStep::UseResource {
                 resource: PassResource::Buffer(handle()),
                 usage: USAGE_READ,
             },

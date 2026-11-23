@@ -511,8 +511,9 @@ cargo run -p metal2vulkan-validation --release --bin corpus-vulkan -- \
   texture carries `sparse_texture`, which the runtime does not make; a bound texture buffer runs
   on both executors (the runtime makes it over its buffer's bytes); a kernel's visible-function
   table runs on both: the run makes it of the state, as the oracle does, each authored entry the
-  handle of its linked function, and binds it at its index. A kernel's imageblock (a tile
-  function's included) carries `kernel_imageblock`, its acceleration structure or
+  handle of its linked function, and binds it at its index. A kernel's explicit imageblock runs
+  on both executors at the size the case sets (`setImageblockWidth:height:`); a tile function's
+  implicit one carries `kernel_imageblock`, a kernel's acceleration structure or
   intersection-function table `kernel_acceleration_structure`, its stage inputs or stage-in region
   `kernel_stage_input`, and a rasterization-rate map, a render pass's or one whose data a buffer
   holds, `rasterization_rate_map`: each the runtime's limit, run on Metal alone. The runtime's
