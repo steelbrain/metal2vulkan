@@ -34,9 +34,9 @@
 //! attachment layout, the rest from home), and the rendering begins again with the attachment in
 //! that layout; the pass's second barrier moves the whole image home. While it is there, every
 //! draw of the pass reads the image's textures through their elements in that layout
-//! (`crate::arrays`). Every pipeline takes the feedback loop's enable as dynamic state, which the
-//! encoder sets at its first draw and where it changes: colour for a draw that reads an
-//! attachment, none otherwise.
+//! (`crate::arrays`). Every render pipeline is made with the feedback loop's colour flag
+//! (`VK_PIPELINE_CREATE_COLOR_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT`), so any draw may read an
+//! attachment in the feedback layout and a draw that reads none needs nothing set.
 //!
 //! What such a draw reads that an earlier draw of the pass rendered, Metal orders by a memory
 //! barrier between the two. A memory barrier after draws that wrote no memory, where the pass
@@ -190,11 +190,10 @@ pub struct IndexBuffer<'a> {
 const MAX_VIEWPORTS: usize = 16;
 
 /// The dynamic state a draw records before it: the viewport and scissor, the cull mode, the
-/// front face, the depth test, the stencil references, the blend constants, the depth bias, the
-/// feedback loop's enable where the device reads attachments, and the stencil test. A setter
-/// marks its state only where the value it sets differs from the one it replaces, and a draw
-/// records of the depth and stencil tests only the fields that differ from the ones the encoder
-/// last recorded.
+/// front face, the depth test, the stencil references, the blend constants, the depth bias and
+/// the stencil test. A setter marks its state only where the value it sets differs from the one
+/// it replaces, and a draw records of the depth and stencil tests only the fields that differ from
+/// the ones the encoder last recorded.
 const VIEWPORT: u32 = 1;
 const CULL: u32 = 2;
 const FRONT: u32 = 4;
@@ -202,9 +201,8 @@ const DEPTH: u32 = 8;
 const REFERENCE: u32 = 16;
 const BLEND: u32 = 32;
 const BIAS: u32 = 64;
-const LOOP: u32 = 128;
-const STENCIL: u32 = 256;
-const ALL: u32 = 511;
+const STENCIL: u32 = 128;
+const ALL: u32 = 255;
 
 /// An image the pass moved whole to the feedback layout, which its second barrier moves home.
 struct Moved {
@@ -696,8 +694,6 @@ pub struct RenderCommandEncoder {
     owed: bool,
     /// The images the pass moved to the feedback layout.
     moved: Vec<Moved>,
-    /// The feedback loop's aspects the last draw set: colour for a draw that reads an attachment.
-    loop_aspects: vk::ImageAspectFlags,
     /// The images the pass's draws read through their shadows, without the feedback loop.
     shadowed: Vec<Shadowed>,
     /// The texture slots of the draw being recorded that read a shadow: function and slot.
@@ -782,7 +778,6 @@ impl CommandBuffer {
                     pass_drew: false,
                     owed: false,
                     moved: Vec::new(),
-                    loop_aspects: vk::ImageAspectFlags::NONE,
                     shadowed: Vec::new(),
                     shadow_slots: Vec::new(),
                     facts: Facts::default(),
@@ -2519,7 +2514,6 @@ impl RenderCommandEncoder {
                     self.shadow_slots.clear();
                     self.push_filled = false;
                 }
-                self.loop_reads(false);
                 self.overs_after(commands);
             }
         }
@@ -3092,7 +3086,7 @@ impl RenderCommandEncoder {
         if self.results.counting() && self.ends_rendering(reads.as_ref(), index, overs) {
             return Err(self.interrupt_refused());
         }
-        let reads_attachment = match reads {
+        match reads {
             Some(found) => {
                 if !found.moves.is_empty() {
                     self.feedback_moves(found.moves)?;
@@ -3109,17 +3103,14 @@ impl RenderCommandEncoder {
                         .expect("an encoder holds its command buffer's recording until it ends")
                         .count(Metric::AttachmentLoopReads);
                 }
-                found.reads
             }
             None => {
                 if !self.shadow_slots.is_empty() {
                     self.shadow_slots.clear();
                     self.push_filled = false;
                 }
-                false
             }
-        };
-        self.loop_reads(reads_attachment);
+        }
         let Some(state) = &self.pipeline else {
             return Err(Error::Refused(Refusal::NoPipeline));
         };
@@ -3292,21 +3283,6 @@ impl RenderCommandEncoder {
             );
     }
 
-    /// Sets the feedback loop's aspects for a draw that reads an attachment (`reads`) or none,
-    /// where the device reads attachments through it: dirty where they change.
-    fn loop_reads(&mut self, reads: bool) {
-        if self.core.feedback.is_some() {
-            let aspects = match reads {
-                true => vk::ImageAspectFlags::COLOR,
-                false => vk::ImageAspectFlags::NONE,
-            };
-            if aspects != self.loop_aspects {
-                self.loop_aspects = aspects;
-                self.dirty |= LOOP;
-            }
-        }
-    }
-
     /// Records the dynamic state that changed since the last draw, and the draw's topology and
     /// primitive restart where they changed; the scissor empty where the draw is `hidden`, and
     /// the encoder's again at the next draw that is not.
@@ -3321,7 +3297,6 @@ impl RenderCommandEncoder {
         hidden: bool,
     ) {
         let device = &self.core.device;
-        let feedback = self.core.feedback.as_ref();
         let command = self.command;
         let dirty = self.dirty;
         self.dirty = 0;
@@ -3428,13 +3403,6 @@ impl RenderCommandEncoder {
             if dirty & BIAS != 0 || biased != self.biased {
                 device.cmd_set_depth_bias_enable(command, biased);
                 self.biased = biased;
-            }
-            // Every pipeline takes the enable as dynamic state where the device reads attachments.
-            if let (true, Some(feedback)) = (dirty & LOOP != 0, feedback) {
-                (feedback.fp().cmd_set_attachment_feedback_loop_enable_ext)(
-                    command,
-                    self.loop_aspects,
-                );
             }
             if self.topology != Some((topology, restart)) {
                 device.cmd_set_primitive_topology(command, topology);

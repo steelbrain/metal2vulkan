@@ -3994,8 +3994,8 @@ cache is answered compile-required on both.
   make pays the content's whole compile. A recorded session's heaviest content, a fragment
   function of about 30,800 SPIR-V instructions, takes 1,408 ms of driver time cold on an RTX 3090
   (NVIDIA 620.70.06, job m3-max-58251), and 1,335 ms on a second RTX 3090 (m3-max-58134). Made
-  without either dynamic state rt adds (the feedback loop's enable, depth bias's enable), its time
-  changes by under 1% (m3-max-58251). It is paid once per cold cache: warm, with the driver's disk
+  without depth bias's enable and the feedback loop's enable as dynamic state, its time changes by
+  under 1% (m3-max-58251). It is paid once per cold cache: warm, with the driver's disk
   cache on, that session's 383 render pipelines take 34.5 ms of driver time through rt's cache on
   the second RTX 3090 (m3-max-58285). A warm make in a new process reads each render content's
   record (The cache directory), so it decodes and specializes no function: on lavapipe, a recorded
@@ -4277,9 +4277,10 @@ cache is answered compile-required on both.
   from the layout the pass renders it in, the rest from home), and the rendering begins again
   with the attachment in that layout; the pass's second barrier moves the whole image home. Until then every draw of the
   pass reads the image's textures through their second elements (Set 1), a texture that reaches
-  no rendered level among them. Every render pipeline takes the feedback loop's enable as dynamic
-  state, which the encoder sets at its first draw and where it changes: colour for a draw that
-  reads an attachment, none otherwise, so a pass of no such draw sets it once. Each draw that
+  no rendered level among them. Every render pipeline is made with the feedback loop's colour
+  flag (`VK_PIPELINE_CREATE_COLOR_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT`), which lets a draw read an
+  attachment in the feedback layout and asks nothing of a draw that reads none, so no draw records
+  a state for the loop. Each draw that
   reads an attachment through the loop, through a texture or by a fetch (below), counts in
   `Metrics::attachment_loop_reads`, its barriers in `Metrics::barriers`.
 - Through a copy, on a device without the feedback loop, and for a surface plane whose image took
@@ -4617,8 +4618,8 @@ cache is answered compile-required on both.
   RX 550 and 5.2 µs on the XTX in a pass that loads an image the last pass moved home from the
   feedback layout with no draw between, 370.6 and 19.6 µs after the pass's clear (the table's),
   and 477.3 and 22.7 µs after a draw over the image in the pass.
-- On a device that does not report `attachmentFeedbackLoopLayout` and
-  `attachmentFeedbackLoopDynamicState` (the UHD 630 among the lab's, Windows driver 101.2145), a
+- On a device that does not report `attachmentFeedbackLoopLayout` (the UHD 630 among the lab's,
+  Windows driver 101.2145), a
   draw reads an attachment through a copy into the image's shadow, which Metal does not make: at
   the pass's first draw that reads the image, at the first after a memory barrier after draws,
   and where a draw reads what the shadow does not hold, the rendering ended and begun again
@@ -5022,8 +5023,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `VK_EXT_shader_stencil_export` | device, where listed | a fragment function's `[[stencil]]` output as the fragment's stencil reference (`FragStencilRefEXT`); RADV, ANV, lavapipe, KosmicKrisp and the UHD 630's Windows driver list it, NVIDIA's 615 and 620 drivers do not |
 | `VK_KHR_portability_enumeration` | instance, where offered | listing portability devices, each checked against the floor as any other |
 | `VK_KHR_portability_subset` | device, where listed | Vulkan requires it enabled where a device lists it; the device is asked for the portability features below |
-| `VK_EXT_attachment_feedback_loop_layout` | device, with the feedback loop | a draw's read of an attachment of its own pass through a texture, in the feedback layout (below) |
-| `VK_EXT_attachment_feedback_loop_dynamic_state` | device, with the feedback loop | the feedback loop's enable as dynamic state of every render pipeline |
+| `VK_EXT_attachment_feedback_loop_layout` | device, with the feedback loop | a draw's read of an attachment of its own pass through a texture, in the feedback layout, with the colour flag every render pipeline takes (below) |
 | `VK_KHR_vertex_attribute_divisor` | device, where listed | a vertex layout stepped per instance at a rate above 1, through the step-rate feature below |
 | `VK_EXT_vertex_attribute_divisor` | device, where listed | the same, on a device that lists only this extension, which the KHR was promoted from with the same feature and pipeline structures |
 | `VK_EXT_external_memory_host` | device, where listed | importing host memory by its address (`Device::import_host_memory`) |
@@ -5358,15 +5358,14 @@ second elements beside the floor's arrays: 65,536 sampled images more than the l
 `maxUpdateAfterBindDescriptorsInAllPools`); a device without them refuses such a draw
 (`Gap::Draw` of `DrawKind::AttachmentRead`), and is otherwise the same
 (`floor::Capabilities::attachment_reads`). The draw reads through the attachment feedback loop
-where the device also lists the two extensions marked "with the feedback loop" above and reports
-each feature below, which device creation then enables, and none otherwise
+where the device also lists the extension marked "with the feedback loop" above and reports the
+feature below, which device creation then enables, and neither otherwise
 (`floor::Capabilities::feedback_loop`). A device that reads attachments without them reads
 through a copy of the image into its shadow (Render encoders), a known gap.
 
 | Attachment-read feature | Structure | Used for |
 |---|---|---|
 | `attachmentFeedbackLoopLayout` | `VkPhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT` | the feedback layout and usage |
-| `attachmentFeedbackLoopDynamicState` | `VkPhysicalDeviceAttachmentFeedbackLoopDynamicStateFeaturesEXT` | the enable as dynamic state |
 
 ### Border swizzle
 

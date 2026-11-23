@@ -38,8 +38,7 @@ impl DeviceExtension {
     /// `VkPhysicalDeviceShaderQuadControlFeaturesKHR`,
     /// `VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT`,
     /// `VkPhysicalDeviceFragmentShaderBarycentricFeaturesKHR`,
-    /// `VkPhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT`,
-    /// `VkPhysicalDeviceAttachmentFeedbackLoopDynamicStateFeaturesEXT` or
+    /// `VkPhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT` or
     /// `VkPhysicalDeviceVertexAttributeDivisorFeaturesKHR`.
     pub fn with_features<T>(name: &CStr, wanted: T, needs: fn(&T) -> bool) -> DeviceExtension
     where

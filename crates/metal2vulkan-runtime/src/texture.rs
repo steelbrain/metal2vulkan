@@ -1716,7 +1716,7 @@ impl Device {
             });
         let attachment_reads = plan.attachment_reads && !laid_over;
         // On a device without the feedback loop, a draw reads such an image through its shadow.
-        let shadowing = (attachment_reads && core.feedback.is_none()).then(|| {
+        let shadowing = (attachment_reads && !core.feedback_loop).then(|| {
             Box::new(Shadowing {
                 made: (d, shape, plan.shadow()),
                 shadow: Mutex::new(None),
@@ -2625,7 +2625,7 @@ fn planned(
     // it has the attachment feedback loop, else through a copy into the image's shadow. The image
     // takes the sampled usage for it where shaders do not read the texture.
     let mut attachment_reads = plan.reads_attachments(core);
-    let looped = attachment_reads && core.feedback.is_some();
+    let looped = attachment_reads && core.feedback_loop;
     let mut image_usage = plan.usage;
     if attachment_reads {
         image_usage |= vk::ImageUsageFlags::SAMPLED;
@@ -6151,7 +6151,7 @@ impl Device {
         Ok(crate::surface::PlanePlan {
             format: plan.format,
             usage: plan.linear_usage(),
-            looped: plan.reads_attachments(self.core()) && self.core().feedback.is_some(),
+            looped: plan.reads_attachments(self.core()) && self.core().feedback_loop,
             view_formats: plan.view_formats.clone(),
             texel,
         })

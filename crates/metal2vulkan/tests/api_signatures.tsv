@@ -408,7 +408,7 @@ const-value	metal2vulkan-runtime::HOST_DOMAIN	vk::TimeDomainKHR::CLOCK_MONOTONIC
 const-value	metal2vulkan-runtime::HOST_DOMAIN	vk::TimeDomainKHR::QUERY_PERFORMANCE_COUNTER
 const-value	metal2vulkan-runtime::MAX_BUFFER_LENGTH	1 <<31
 const-value	metal2vulkan-runtime::MAX_COLOR_ATTACHMENTS	8
-const-value	metal2vulkan-runtime::floor::ATTACHMENT_READ_EXTENSIONS	&[ash::ext::attachment_feedback_loop_layout::NAME, ash::ext::attachment_feedback_loop_dynamic_state::NAME]
+const-value	metal2vulkan-runtime::floor::ATTACHMENT_READ_EXTENSIONS	&[ash::ext::attachment_feedback_loop_layout::NAME]
 const-value	metal2vulkan-runtime::floor::BARYCENTRIC_EXTENSIONS	&[ash::khr::fragment_shader_barycentric::NAME]
 const-value	metal2vulkan-runtime::floor::BORDER_SWIZZLE_EXTENSIONS	&[ash::ext::custom_border_color::NAME, ash::ext::border_color_swizzle::NAME]
 const-value	metal2vulkan-runtime::floor::BUFFER_USAGE	vk::BufferUsageFlags::from_raw(vk::BufferUsageFlags::TRANSFER_SRC.as_raw() | vk::BufferUsageFlags::TRANSFER_DST.as_raw() | vk::BufferUsageFlags::UNIFORM_TEXEL_BUFFER.as_raw() | vk::BufferUsageFlags::STORAGE_TEXEL_BUFFER.as_raw() | vk::BufferUsageFlags::UNIFORM_BUFFER.as_raw() | vk::BufferUsageFlags::STORAGE_BUFFER.as_raw() | vk::BufferUsageFlags::INDEX_BUFFER.as_raw() | vk::BufferUsageFlags::VERTEX_BUFFER.as_raw() | vk::BufferUsageFlags::INDIRECT_BUFFER.as_raw() | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS.as_raw())
@@ -1820,7 +1820,6 @@ field	metal2vulkan-runtime::floor::Features.core	pub core: vk::PhysicalDeviceFea
 field	metal2vulkan-runtime::floor::Features.divisor	pub divisor: vk::PhysicalDeviceVertexAttributeDivisorFeaturesKHR<'static>
 field	metal2vulkan-runtime::floor::Features.fault	pub fault: vk::PhysicalDeviceFaultFeaturesEXT<'static>
 field	metal2vulkan-runtime::floor::Features.feedback_loop	pub feedback_loop: vk::PhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT<'static>
-field	metal2vulkan-runtime::floor::Features.feedback_loop_dynamic	pub feedback_loop_dynamic: vk::PhysicalDeviceAttachmentFeedbackLoopDynamicStateFeaturesEXT<'static>
 field	metal2vulkan-runtime::floor::Features.generated_commands	pub generated_commands: DgcFeatures
 field	metal2vulkan-runtime::floor::Features.interlock	pub interlock: vk::PhysicalDeviceFragmentShaderInterlockFeaturesEXT<'static>
 field	metal2vulkan-runtime::floor::Features.line_rasterization	pub line_rasterization: vk::PhysicalDeviceLineRasterizationFeaturesEXT<'static>

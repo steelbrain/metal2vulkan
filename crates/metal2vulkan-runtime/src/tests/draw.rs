@@ -2876,7 +2876,7 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
             (device.grant_indices(IndexClass::Texture, 4096, 4))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let reads = device.core().attachment_reads;
-            let looped = device.core().feedback.is_some();
+            let looped = device.core().feedback_loop;
             let plain = state(name, &device, &plain);
             let mut buffers = Buffers::new(&device);
             // Three triangles over the whole target, their colors none, blue and green.
@@ -3028,7 +3028,7 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
             }
             (device.grant_indices(IndexClass::Texture, 4096, 4))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let looped = device.core().feedback.is_some();
+            let looped = device.core().feedback_loop;
             let plain = state(name, &device, &plain);
             let reading = state(name, &device, &own);
             let mut buffers = Buffers::new(&device);
@@ -3116,7 +3116,7 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
                 println!("{name}: no attachment reads");
                 return;
             }
-            let looped = device.core().feedback.is_some();
+            let looped = device.core().feedback_loop;
             let counters = device.counters();
             let before = counters.metrics();
             for (class, first) in [(IndexClass::Texture, 4096), (IndexClass::Sampler, 1)] {

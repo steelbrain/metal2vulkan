@@ -1457,15 +1457,11 @@ impl RenderCompiled {
         if let Some(op) = fixed.logic_op {
             blend = blend.logic_op_enable(true).logic_op(op);
         }
-        // Where the device reads attachments through textures, every pipeline takes the feedback
-        // loop's enable as dynamic state too: a state is made before any draw binds its textures.
-        let feedback = core.feedback.is_some();
         // A state without rasterization takes its discard as dynamic state, which the encoder sets
         // at each bind: a static discard would leave the fragment shader and output state out of
         // the pipeline, its attachment formats and the dynamic depth, stencil and blend state above
         // with them, which every draw records and its pass renders into.
         let states: Vec<vk::DynamicState> = (DYNAMIC.iter().copied())
-            .chain(feedback.then_some(vk::DynamicState::ATTACHMENT_FEEDBACK_LOOP_ENABLE_EXT))
             .chain(
                 fixed
                     .discard
@@ -1477,7 +1473,16 @@ impl RenderCompiled {
             .color_attachment_formats(&fixed.colors)
             .depth_attachment_format(fixed.depth)
             .stencil_attachment_format(fixed.stencil);
+        // Where the device reads attachments through the feedback loop, every pipeline may draw
+        // with a colour attachment in the feedback layout and read it through a texture: a state is
+        // made before any draw binds its textures, and which texture a draw binds decides whether
+        // it reads its pass's attachment. A draw that reads none is valid with the flag.
+        let flags = match core.feedback_loop {
+            true => vk::PipelineCreateFlags::COLOR_ATTACHMENT_FEEDBACK_LOOP_EXT,
+            false => vk::PipelineCreateFlags::empty(),
+        };
         let mut info = vk::GraphicsPipelineCreateInfo::default()
+            .flags(flags)
             .push_next(&mut rendering)
             .stages(&stages)
             .vertex_input_state(&vertex_input)

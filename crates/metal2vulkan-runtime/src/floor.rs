@@ -130,16 +130,14 @@ const _: () = {
     assert!(offset_of!(Maintenance8Features, maintenance8) == 16);
 };
 
-/// The device extensions of the attachment feedback loop (`VK_EXT_attachment_feedback_loop_layout`
-/// and its dynamic state), through which a draw reads, through a texture, an attachment its own
-/// pass renders (Metal's texture read of a render target): device creation enables both, with
-/// their features, where the device reads attachments (`Capabilities::attachment_reads`), lists
-/// both and reports both features, and neither otherwise. A device that reads attachments without
-/// them reads through a copy of the image (`Capabilities::feedback_loop`).
-pub const ATTACHMENT_READ_EXTENSIONS: &[&CStr] = &[
-    ash::ext::attachment_feedback_loop_layout::NAME,
-    ash::ext::attachment_feedback_loop_dynamic_state::NAME,
-];
+/// The device extension of the attachment feedback loop (`VK_EXT_attachment_feedback_loop_layout`),
+/// through which a draw reads, through a texture, an attachment its own pass renders (Metal's
+/// texture read of a render target): its layout, its image usage and its pipeline flag, which every
+/// render pipeline takes. Device creation enables it, with its feature, where the device reads
+/// attachments (`Capabilities::attachment_reads`), lists it and reports the feature, and not
+/// otherwise. A device that reads attachments without it reads through a copy of the image
+/// (`Capabilities::feedback_loop`).
+pub const ATTACHMENT_READ_EXTENSIONS: &[&CStr] = &[ash::ext::attachment_feedback_loop_layout::NAME];
 
 /// The device extension of a sampler's border colour through a view's component mapping
 /// (`VK_EXT_border_color_swizzle`), after `VK_EXT_custom_border_color`, which it requires and of
@@ -371,13 +369,9 @@ pub struct Features {
     /// of such a device.
     pub portability: vk::PhysicalDevicePortabilitySubsetFeaturesKHR<'static>,
     /// `VkPhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT`, of
-    /// `VK_EXT_attachment_feedback_loop_layout`: read where the device lists it, and enabled with
-    /// the other attachment-read features alone.
+    /// `VK_EXT_attachment_feedback_loop_layout`: read where the device lists it, and enabled where
+    /// the device reads attachments through the feedback loop alone.
     pub feedback_loop: vk::PhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT<'static>,
-    /// `VkPhysicalDeviceAttachmentFeedbackLoopDynamicStateFeaturesEXT`, of
-    /// `VK_EXT_attachment_feedback_loop_dynamic_state`: likewise.
-    pub feedback_loop_dynamic:
-        vk::PhysicalDeviceAttachmentFeedbackLoopDynamicStateFeaturesEXT<'static>,
     /// `VkPhysicalDeviceVertexAttributeDivisorFeaturesKHR`, of `VK_KHR_vertex_attribute_divisor`
     /// and `VK_EXT_vertex_attribute_divisor` (the same structure): read and enabled only where the
     /// device lists one of them, and then only the step-rate feature.
@@ -452,9 +446,6 @@ macro_rules! feature {
     };
     (@structure feedback_loop) => {
         "VkPhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT"
-    };
-    (@structure feedback_loop_dynamic) => {
-        "VkPhysicalDeviceAttachmentFeedbackLoopDynamicStateFeaturesEXT"
     };
     (@structure divisor) => {
         "VkPhysicalDeviceVertexAttributeDivisorFeaturesKHR"
@@ -688,13 +679,11 @@ pub(crate) const OPTIONAL: &[Feature] = &[
     feature!(maintenance8.maintenance8 => Maintenance8),
 ];
 
-/// The features of the attachment feedback loop ([`ATTACHMENT_READ_EXTENSIONS`]): enabled together
-/// where the device reads attachments and reports both, and neither otherwise; a device that reads
-/// attachments without them reads through a copy of the image.
-pub(crate) const ATTACHMENT_READS: &[Feature] = &[
-    feature!(feedback_loop.attachment_feedback_loop_layout => AttachmentFeedbackLoopLayout),
-    feature!(feedback_loop_dynamic.attachment_feedback_loop_dynamic_state),
-];
+/// The feature of the attachment feedback loop ([`ATTACHMENT_READ_EXTENSIONS`]): enabled where the
+/// device reads attachments and reports it, and not otherwise; a device that reads attachments
+/// without it reads through a copy of the image.
+pub(crate) const ATTACHMENT_READS: &[Feature] =
+    &[feature!(feedback_loop.attachment_feedback_loop_layout => AttachmentFeedbackLoopLayout)];
 
 /// The features device creation enables where the device reports them, for Metal's per-instance
 /// step at a rate above 1, which the translator builds in one form, a binding's divisor, and
@@ -1029,9 +1018,9 @@ pub struct Capabilities {
     /// Metal reads a render target. It reads through the attachment feedback loop where
     /// [`feedback_loop`](Self::feedback_loop) holds, and through a copy of the image otherwise.
     pub attachment_reads: bool,
-    /// The attachment reads hold, and so does every attachment-read feature, with
+    /// The attachment reads hold, and so does the attachment-read feature, with
     /// [`ATTACHMENT_READ_EXTENSIONS`]: a draw reads an attachment through the attachment feedback
-    /// loop.
+    /// loop, the feedback layout its image moves to and the flag every render pipeline takes.
     pub feedback_loop: bool,
     /// The features device creation enables: every one the floor requires, each of the optional,
     /// step-rate, min-LOD, fill-mode, alpha-to-one, quad-control, pixel-interlock, linear-attachment
@@ -1184,8 +1173,6 @@ unsafe fn query(
         let robustness2_listed = listed(ash::ext::robustness2::NAME);
         let portability_listed = listed(ash::khr::portability_subset::NAME);
         let feedback_loop_listed = listed(ash::ext::attachment_feedback_loop_layout::NAME);
-        let feedback_loop_dynamic_listed =
-            listed(ash::ext::attachment_feedback_loop_dynamic_state::NAME);
         let divisor_listed = listed(ash::khr::vertex_attribute_divisor::NAME)
             || listed(ash::ext::vertex_attribute_divisor::NAME);
         let border_swizzle_listed = listed(ash::ext::border_color_swizzle::NAME);
@@ -1208,7 +1195,6 @@ unsafe fn query(
             robustness2,
             portability,
             feedback_loop,
-            feedback_loop_dynamic,
             divisor,
             border_swizzle,
             linear_attachment,
@@ -1245,9 +1231,6 @@ unsafe fn query(
         }
         if feedback_loop_listed {
             features = features.push_next(&mut *feedback_loop);
-        }
-        if feedback_loop_dynamic_listed {
-            features = features.push_next(&mut *feedback_loop_dynamic);
         }
         if divisor_listed {
             features = features.push_next(&mut *divisor);
@@ -1286,7 +1269,6 @@ unsafe fn query(
         robustness2.p_next = std::ptr::null_mut();
         portability.p_next = std::ptr::null_mut();
         feedback_loop.p_next = std::ptr::null_mut();
-        feedback_loop_dynamic.p_next = std::ptr::null_mut();
         divisor.p_next = std::ptr::null_mut();
         border_swizzle.p_next = std::ptr::null_mut();
         linear_attachment.p_next = std::ptr::null_mut();

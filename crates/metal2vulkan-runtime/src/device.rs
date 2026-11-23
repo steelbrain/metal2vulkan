@@ -260,10 +260,10 @@ pub(crate) struct Core {
     pub(crate) ticks: Ticks,
     /// `VK_EXT_calibrated_timestamps`, the floor's: the GPU's clock read with the host's.
     pub(crate) calibrated: ash::ext::calibrated_timestamps::Device,
-    /// `VK_EXT_attachment_feedback_loop_dynamic_state`'s command, where device creation enabled
-    /// the attachment feedback loop (`floor::Capabilities::feedback_loop`): every render pipeline
-    /// takes the feedback loop's enable as dynamic state, which each draw sets.
-    pub(crate) feedback: Option<ash::ext::attachment_feedback_loop_dynamic_state::Device>,
+    /// Device creation enabled the attachment feedback loop (`floor::Capabilities::feedback_loop`):
+    /// every render pipeline takes its colour flag, and a draw reads an attachment of its pass
+    /// with the image in the feedback layout.
+    pub(crate) feedback_loop: bool,
     /// `VK_EXT_device_fault`'s command, where device creation enabled it (where the device lists
     /// it): a lost device's fault report, read once, at its first loss (`crate::fault`).
     pub(crate) fault: Option<ash::ext::device_fault::Device>,
@@ -272,8 +272,8 @@ pub(crate) struct Core {
     /// indirect command buffer is refused without them.
     pub(crate) indirect: Option<crate::indirect::Indirect>,
     /// A draw may read an attachment of its own pass through a texture
-    /// (`floor::Capabilities::attachment_reads`): through the feedback loop where `feedback` is
-    /// set, else through a copy of the image into its shadow (`crate::shadow`).
+    /// (`floor::Capabilities::attachment_reads`): through the feedback loop where `feedback_loop`
+    /// holds, else through a copy of the image into its shadow (`crate::shadow`).
     pub(crate) attachment_reads: bool,
     /// Device creation enabled `linearColorAttachment` (`VK_NV_linear_color_attachment`, where
     /// the device lists it): an opaque handle's surface plane whose format's `LINEAR` tiling
@@ -559,7 +559,6 @@ impl Device {
             mut robustness2,
             mut portability,
             mut feedback_loop,
-            mut feedback_loop_dynamic,
             mut divisor,
             mut border_swizzle,
             mut linear_attachment,
@@ -613,9 +612,7 @@ impl Device {
             features = features.push_next(&mut portability);
         }
         if capabilities.feedback_loop {
-            features = features
-                .push_next(&mut feedback_loop)
-                .push_next(&mut feedback_loop_dynamic);
+            features = features.push_next(&mut feedback_loop);
         }
         if enabled(ash::khr::vertex_attribute_divisor::NAME)
             || enabled(ash::ext::vertex_attribute_divisor::NAME)
@@ -736,9 +733,6 @@ impl Device {
         );
         // SAFETY: as above.
         let exports = unsafe { Exports::new(vk_instance, raw, &device, &capabilities.extensions) };
-        let feedback = (capabilities.feedback_loop).then(|| {
-            ash::ext::attachment_feedback_loop_dynamic_state::Device::new(vk_instance, &device)
-        });
         let fault = (capabilities
             .extensions
             .contains(&ash::ext::device_fault::NAME))
@@ -815,7 +809,7 @@ impl Device {
             counters,
             ticks,
             calibrated,
-            feedback,
+            feedback_loop: capabilities.feedback_loop,
             fault,
             indirect,
             attachment_reads: capabilities.attachment_reads,

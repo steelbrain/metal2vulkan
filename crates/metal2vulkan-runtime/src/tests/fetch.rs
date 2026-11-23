@@ -213,7 +213,7 @@ mod on_device {
             (device.grant_indices(IndexClass::Texture, 4096, DRAWS.len() as u32))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let reads = device.core().attachment_reads;
-            let looped = device.core().feedback.is_some();
+            let looped = device.core().feedback_loop;
             let state = state(name, &device, &d);
             let queue = device.new_command_queue(4).expect("a queue");
             let clear = ClearColor {
@@ -446,7 +446,7 @@ mod on_device {
             (device.grant_indices(IndexClass::Texture, 4096, DRAWS.len() as u32))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let reads = device.core().attachment_reads;
-            let feedback = device.core().feedback.is_some();
+            let feedback = device.core().feedback_loop;
             // The feedback usage is the loop's extension's, so only a device with the loop is
             // asked it (`VUID-VkPhysicalDeviceImageFormatInfo2-usage-parameter`); the answer is
             // read only there.
@@ -586,7 +586,7 @@ mod on_device {
             (device.grant_indices(IndexClass::Texture, 4096, count))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let reads = device.core().attachment_reads;
-            let feedback = device.core().feedback.is_some();
+            let feedback = device.core().feedback_loop;
             // The feedback usage is the loop's extension's, so only a device with the loop is
             // asked it (`VUID-VkPhysicalDeviceImageFormatInfo2-usage-parameter`); the answer is
             // read only there.

@@ -394,7 +394,7 @@ fn every_device_of_the_cfgs_kind_enables_the_consumers_extensions_it_offers() {
                 .filter(|&name| lists(name)),
         );
         // The attachment reads' extensions, where device creation took them.
-        if device.core().feedback.is_some() {
+        if device.core().feedback_loop {
             expected.extend(floor::ATTACHMENT_READ_EXTENSIONS);
         }
         // The border swizzle's, where the device reports it from the image.

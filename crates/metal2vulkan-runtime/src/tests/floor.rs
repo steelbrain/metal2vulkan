@@ -1641,9 +1641,11 @@ fn a_run_time_texel_offset_is_the_sample_s_operand_where_maintenance8_is_reporte
 }
 
 /// A device reads attachments where its descriptor limits hold the sampled-texture array's second
-/// elements: through the attachment feedback loop where it lists both extensions and reports both
-/// features, which device creation then enables, and through a copy of the image where it does
-/// not, enabling neither. A device without the room reads no attachment, whatever it reports.
+/// elements: through the attachment feedback loop where it lists
+/// `VK_EXT_attachment_feedback_loop_layout` and reports its feature, which device creation then
+/// enables, with no other extension (its dynamic state is never enabled, listed or not), and
+/// through a copy of the image where it does not, enabling neither. A device without the room
+/// reads no attachment, whatever it reports.
 #[test]
 fn the_attachment_reads_take_the_feedback_loop_where_reported_and_a_copy_elsewhere() {
     let roomy = |device: &mut Queried| {
@@ -1654,17 +1656,13 @@ fn the_attachment_reads_take_the_feedback_loop_where_reported_and_a_copy_elsewhe
         descriptors.max_update_after_bind_descriptors_in_all_pools = 6 * 65_536 + 3 * 8000;
     };
     let looped = |device: &mut Queried| {
-        (device.extensions).extend(
-            ATTACHMENT_READ_EXTENSIONS
-                .iter()
-                .map(|&name| name.to_owned()),
-        );
+        (device.extensions).push(ash::ext::attachment_feedback_loop_layout::NAME.to_owned());
         device
             .features
             .feedback_loop
             .attachment_feedback_loop_layout = vk::TRUE;
-        (device.features.feedback_loop_dynamic).attachment_feedback_loop_dynamic_state = vk::TRUE;
     };
+    let dynamic = ash::ext::attachment_feedback_loop_dynamic_state::NAME;
     let answer = |device: &Queried| {
         let capabilities = decide(device).unwrap_or_else(|below| panic!("{below}"));
         let enabled = (ATTACHMENT_READ_EXTENSIONS.iter())
@@ -1706,7 +1704,18 @@ fn the_attachment_reads_take_the_feedback_loop_where_reported_and_a_copy_elsewhe
     let mut device = at_the_floor();
     roomy(&mut device);
     looped(&mut device);
-    assert_eq!(answer(&device), (true, true, 2, 2), "room and the loop");
+    assert_eq!(
+        answer(&device),
+        (true, true, 1, 1),
+        "room and the layout extension alone: the loop"
+    );
+    device.extensions.push(dynamic.to_owned());
+    let capabilities = decide(&device).unwrap_or_else(|below| panic!("{below}"));
+    assert!(capabilities.feedback_loop);
+    assert!(
+        !capabilities.extensions.contains(&dynamic),
+        "the loop's dynamic state is never enabled"
+    );
 }
 
 /// A set layout the created device does not support is named by its set.
@@ -2099,7 +2108,6 @@ fn every_device_the_loader_lists_is_above_the_floor() {
             mut robustness2,
             mut portability,
             mut feedback_loop,
-            mut feedback_loop_dynamic,
             mut divisor,
             mut border_swizzle,
             mut linear_attachment,
@@ -2136,9 +2144,7 @@ fn every_device_the_loader_lists_is_above_the_floor() {
             features = features.push_next(&mut portability);
         }
         if capabilities.feedback_loop {
-            features = features
-                .push_next(&mut feedback_loop)
-                .push_next(&mut feedback_loop_dynamic);
+            features = features.push_next(&mut feedback_loop);
         }
         if enabled(ash::khr::vertex_attribute_divisor::NAME)
             || enabled(ash::ext::vertex_attribute_divisor::NAME)
