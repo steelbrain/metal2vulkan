@@ -1178,7 +1178,7 @@ fn a_device_that_lists_the_portability_subset_is_asked_for_its_features() {
 
     let mut device = at_the_floor();
     device.extensions.push(subset.to_owned());
-    let below = decide(&device).err().expect("below the floor");
+    let below = decide(&device).expect_err("below the floor");
     assert_eq!(
         below.missing,
         [
