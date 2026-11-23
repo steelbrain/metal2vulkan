@@ -28,8 +28,10 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
-/// The run the test starts and kills.
-const HOLDER: &str = env!("CARGO_BIN_EXE_scratch-holder");
+/// The run the test starts and kills. Cargo defines its path for a build that links the binary,
+/// as a test build does; a check build (`cargo clippy --all-targets`) links none and defines no
+/// path, so the path is read where it is defined and asked for only when the test runs.
+const HOLDER: Option<&str> = option_env!("CARGO_BIN_EXE_scratch-holder");
 
 /// A holder process and the scratch directory it took, killed and reaped when this drops so a
 /// failing assertion leaves no process of ours running.
@@ -43,7 +45,8 @@ impl Run {
     /// first scratch directory is what sweeps, so a holder that has printed its path has already
     /// swept.
     fn started(home: &Path) -> Run {
-        let mut child = Command::new(HOLDER)
+        let holder = HOLDER.expect("a test build links scratch-holder and Cargo names its path");
+        let mut child = Command::new(holder)
             .env("TMPDIR", home)
             .stdout(Stdio::piped())
             .spawn()
