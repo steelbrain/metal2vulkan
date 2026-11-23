@@ -184,8 +184,9 @@ pub struct EmitCx<'a> {
     entry_block: Option<SBlockId>,
     /// The block the entry hooks end in, where the walk of the body starts: it dominates every
     /// block of the body, so its memo entries outlive the block that emitted them too. It is the
-    /// entry block but where a hook closed a construct there: a dispatch past its grid
-    /// (`dispatch::emit_entry`) returns from an arm, and the hooks after it, the sink's address
+    /// entry block but where a hook closed a construct there: a kernel's tail guard
+    /// (`EmitCx::emit_tail_guard`) or a dispatch past its grid (`dispatch::emit_entry`) returns
+    /// from an arm, and the hooks after it, the sink's address
     /// among them (`access::dynamic::emit_entry`), run in its merge.
     hooks_block: Option<SBlockId>,
     /// While a workgroup synchronization of a predicated walk is emitted, the calling invocation's
@@ -508,48 +509,56 @@ impl<'a> EmitCx<'a> {
     /// load, so a read that canonicalization deletes cannot make the others load it again; a placed
     /// field no instruction reads leaves with the other unused values (`spirv::dead`).
     ///
-    /// The fields read from their push members load first, then the tail folds into them
-    /// ([`EmitCx::fold_tail`]), then the spilled fields and those the function derives, which may
-    /// read through the folded values (the parameter block's address, a slot table's).
+    /// A kernel loads its fields in placement order, then returns where its tail holds what the
+    /// consumer never pushes ([`EmitCx::emit_tail_guard`]). A render stage loads the fields read
+    /// from their push members first, then folds the tail into them ([`EmitCx::fold_tail`]), then
+    /// the spilled fields and those the function derives, which may read through the folded values
+    /// (the parameter block's address, a slot table's).
     fn load_push_fields(&mut self, fb: &mut FunctionBuilder<'_>) -> BResult<()> {
-        let plan: &Plan = self.plan;
+        if self.plan.stage == Stage::Kernel {
+            self.load_fields(fb, |_, _| true)?;
+            return self.emit_tail_guard(fb);
+        }
         let member = |s: &Self, field: PushField| {
             !s.derives(field) && s.decl.push.iter().any(|m| m.field == field)
         };
-        for read in [true, false] {
-            for placed in &plan.push.fields {
-                if member(self, placed.field) != read {
-                    continue;
-                }
-                match placed.field {
-                    PushField::SlotBounds(slot) => {
-                        self.slot_bounds(fb, slot)?;
-                    }
-                    field => {
-                        self.push_field(fb, field)?;
-                    }
-                }
+        self.load_fields(fb, member)?;
+        self.fold_tail(fb)?;
+        self.load_fields(fb, |s, field| !member(s, field))
+    }
+
+    /// Load each field the plan places that `which` takes, in placement order.
+    fn load_fields(
+        &mut self,
+        fb: &mut FunctionBuilder<'_>,
+        which: impl Fn(&Self, PushField) -> bool,
+    ) -> BResult<()> {
+        let plan: &Plan = self.plan;
+        for placed in &plan.push.fields {
+            if !which(self, placed.field) {
+                continue;
             }
-            if read {
-                self.fold_tail(fb)?;
+            match placed.field {
+                PushField::SlotBounds(slot) => {
+                    self.slot_bounds(fb, slot)?;
+                }
+                field => {
+                    self.push_field(fb, field)?;
+                }
             }
         }
         Ok(())
     }
 
     /// Where the plan's placement ends with a tail (`lower::push::tail`): read it from the push
-    /// block, test whether it holds the value the consumer never pushes there
-    /// ([`crate::lower::push::tail_never_pushed`]), and make each other field read from its push
-    /// member, as the function's every use recalls it, the member's value where the test fails and
-    /// the null of its type where it holds ([`crate::lower::push::fold_never_pushed`]): the tail's
-    /// read lives while any other push read does, and no branch makes the body depend on it. A
-    /// tail field the function reads from its member is the load [`EmitCx::load_push_fields`] made
-    /// in this block, so the member is loaded once; the tail word, and a field the function
-    /// derives elsewhere, are loaded here. A tail field of the function's own folds into the
-    /// others alone: its own uses need no select to read it.
-    fn fold_tail(&mut self, fb: &mut FunctionBuilder<'_>) -> BResult<()> {
+    /// block, and test whether it holds the value the consumer never pushes there
+    /// ([`crate::lower::push::tail_never_pushed`]); `None` where there is no tail or no such
+    /// value. A tail field the function reads from its member is the load
+    /// [`EmitCx::load_push_fields`] made in this block, so the member is loaded once; the tail
+    /// word, and a field the function derives elsewhere, are loaded here.
+    fn tail_test(&mut self, fb: &mut FunctionBuilder<'_>) -> BResult<Option<(PushField, SValue)>> {
         let Some(field) = crate::lower::push::tail(&self.plan.push) else {
-            return Ok(());
+            return Ok(None);
         };
         let member = (self.decl.push.iter()).find(|m| m.field == field);
         let (Some(member), Some(push)) = (member, self.decl.push_global) else {
@@ -559,7 +568,30 @@ impl<'a> EmitCx<'a> {
             true => self.push_field(fb, field)?,
             false => Self::load_member(fb, push, member.index)?,
         };
-        let Some(never) = crate::lower::push::tail_never_pushed(fb, value, field)? else {
+        let never = crate::lower::push::tail_never_pushed(fb, value, field)?;
+        Ok(never.map(|never| (field, never)))
+    }
+
+    /// A kernel's tail ([`EmitCx::tail_test`]): return from the function where it holds the value
+    /// the consumer never pushes there ([`crate::lower::push::return_never_pushed`]). The branch
+    /// is never taken; everything the function does after it depends on the tail's read. A return
+    /// at entry is a kernel's own shape: its entry also returns invocations before its body where
+    /// its dispatch passes its grid (`dispatch::emit_entry`).
+    fn emit_tail_guard(&mut self, fb: &mut FunctionBuilder<'_>) -> BResult<()> {
+        match self.tail_test(fb)? {
+            Some((_, never)) => crate::lower::push::return_never_pushed(fb, never),
+            None => Ok(()),
+        }
+    }
+
+    /// A render stage's tail ([`EmitCx::tail_test`]): make each other field read from its push
+    /// member, as the function's every use recalls it, the member's value where the test fails and
+    /// the null of its type where it holds ([`crate::lower::push::fold_never_pushed`]): the tail's
+    /// read lives while any other push read does, and no branch makes the body depend on it
+    /// (`lower::push`: a fragment stage has no other return at its entry). A tail field of the
+    /// function's own folds into the others alone: its own uses need no select to read it.
+    fn fold_tail(&mut self, fb: &mut FunctionBuilder<'_>) -> BResult<()> {
+        let Some((field, never)) = self.tail_test(fb)? else {
             return Ok(());
         };
         let plan: &Plan = self.plan;
@@ -1617,7 +1649,8 @@ pub fn emit_module(e: &Entry, plan: &Plan, m: &mut Meter) -> Result<Emitted, Err
             let r = em
                 .cx
                 .begin_hooks(&fb)
-                // The push fields, the floor's tail folded into them (`EmitCx::fold_tail`).
+                // The push fields and the floor's tail: a kernel's returns at entry, a render
+                // stage's folds into its other fields (`EmitCx::load_push_fields`).
                 .and_then(|()| em.cx.load_push_fields(&mut fb))
                 .and_then(|()| dispatch::emit_entry(&mut em.cx, &mut fb))
                 // What the invocation draws (a merged draw's command and its slot tables) before

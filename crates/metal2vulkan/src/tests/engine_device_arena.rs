@@ -10,8 +10,8 @@
 //! plan keeps the arena in device memory, with the default lowering inputs and as a kernel whose
 //! threadgroups may be partial, the invocation's slot (`EmitCx::arena_slot`) is derived once in
 //! the function, and each push-block or `ArgumentTable` member, the arena's address among them,
-//! is loaded once: the floor's tail (`EmitCx::fold_tail`) reads the tail from the load the first
-//! block made, and a hook after a construct of the entry hooks recalls the first block's loads.
+//! is loaded once: the floor's tail guard (`EmitCx::emit_tail_guard`) reads the tail from the load
+//! the first block made, and a hook after the guard's construct recalls the first block's loads.
 //!
 //! What one access of the arena emits, on a generated module: each shape is two kernels, one that
 //! makes the access once and one that makes it twice, everything else equal, as in
