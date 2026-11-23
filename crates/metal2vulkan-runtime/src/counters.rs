@@ -3023,8 +3023,9 @@ pub struct Gauges {
     /// the device's map of kernels holds it.
     pub kernels: u64,
     /// `VkPipeline`s of compiled kernels' modules, each of one workgroup size, threadgroup memory
-    /// lengths, imageblock size and tiles: the 8 each module made first, at most 56 more it keeps
-    /// for later dispatches, and those past them that command buffers not yet retired hold.
+    /// lengths, imageblock size and tiles: the 8 each module made first, the 56 dispatched last
+    /// past them, which it keeps for later dispatches, and those past them that command buffers
+    /// not yet retired held at its last make.
     pub kernel_variants: u64,
     /// Entries of the device's map of compiled contents, compute and render, which holds at most
     /// 1,024 and forgets the least recently used past them.
