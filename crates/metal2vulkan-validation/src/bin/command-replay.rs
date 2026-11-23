@@ -4,7 +4,7 @@
 //! `command-replay play --stream FILE --out DIR --device-type cpu|gpu --shader-cache DIR
 //! [--blobs DIR] [--managed one-copy|two-copy]
 //! [--until-frame F] [--past-range yes|no] [--states-only yes|no] [--state-log FILE]
-//! [--state-threads N] [--state-keys KEY,...] [--gpu-wait-timeout SECONDS]
+//! [--state-threads N] [--state-keys KEY,...] [--state-digests yes|no] [--gpu-wait-timeout SECONDS]
 //! [--video-handle dma-buf|opaque-fd|opaque-win32] [--check-presents F,...]` plays the stream
 //! whose first segment is `FILE` through the runtime (with `--states-only yes`, its device,
 //! library, function and pipeline state records and its presents alone, every other call passed
@@ -64,7 +64,12 @@
 //! player's own make the states, at once, through the device's one pipeline cache, as a
 //! consumer's compile threads do (their lines go to the standard output where no `--state-log`
 //! names a file), and `--state-keys KEY,...` makes only the render states of those contents and
-//! passes over every other state, each named on a `M2V-STATE pass WHAT` line. The report's
+//! passes over every other state, each named on a `M2V-STATE pass WHAT` line. With
+//! `--state-digests yes` (no unless it says so), a render state's `modules` line ends in `digest
+//! HEX`, the hex of its content digest (`RenderPipelineState::content_digest`: both stages'
+//! modules, the layout and the fixed-function state, and no version), which two builds share where
+//! they translate the state alike; the lines go to the standard output where no `--state-log`
+//! names a file. The report's
 //! `states` line counts the makes begun and how they ended, and the states passed over; pooled or
 //! passed over, a state plays as a skipped object, which a states-only play binds nowhere, so its
 //! `render states made` count leaves them out.
@@ -117,7 +122,7 @@ const USAGE: &str = "usage: command-replay play --stream FILE --out DIR --device
                      --shader-cache DIR [--blobs DIR] \
                      [--managed one-copy|two-copy] [--until-frame F] [--past-range yes|no] \
                      [--states-only yes|no] [--state-log FILE] [--state-threads N] \
-                     [--state-keys KEY,...] [--gpu-wait-timeout SECONDS] [--video-handle dma-buf|opaque-fd|opaque-win32] \
+                     [--state-keys KEY,...] [--state-digests yes|no] [--gpu-wait-timeout SECONDS] [--video-handle dma-buf|opaque-fd|opaque-win32] \
                      [--check-presents F,...] [--read-device-copies yes|no] [--prepass-width N] \
                      [--dump-command-buffers LIST --dump-dir DIR]\n       \
                      command-replay compare-dumps --a DIR --b DIR\n       \
@@ -429,13 +434,14 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
         }
     };
     report.line(mode_line(states_only));
-    let (state_log, state_threads, state_keys) = match state_options(options, states_only) {
-        Ok(states) => states,
-        Err(why) => {
-            report.line(&format!("error {why}"));
-            return 2;
-        }
-    };
+    let (state_log, state_threads, state_keys, state_digests) =
+        match state_options(options, states_only) {
+            Ok(states) => states,
+            Err(why) => {
+                report.line(&format!("error {why}"));
+                return 2;
+            }
+        };
     let mut reader = match reader(options) {
         Ok(reader) => reader,
         Err(error) => {
@@ -607,9 +613,9 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
                 None => backend,
             };
             let backend = backend.with_video_handle(video);
-            if state_log.is_some() || state_threads > 0 || state_keys.is_some() {
+            if state_log.is_some() || state_threads > 0 || state_keys.is_some() || state_digests {
                 report.line(&format!(
-                    "state makes on {}, {}",
+                    "state makes on {}, {}{}",
                     match state_threads {
                         0 => "the play's thread".to_owned(),
                         n => format!("{n} threads"),
@@ -620,9 +626,14 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
                             "only the render states of {} listed keys made",
                             keys.len()
                         )),
+                    if state_digests {
+                        ", each render state's content digest written"
+                    } else {
+                        ""
+                    },
                 ));
             }
-            let backend = backend.with_states(state_log, state_threads, state_keys);
+            let backend = backend.with_states(state_log, state_threads, state_keys, state_digests);
             let backend = backend.with_prepass(prepass.unwrap_or(4));
             report.line(&format!("prepass width {}", backend.prepass_width()));
             match display {
@@ -660,12 +671,14 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
     }
 }
 
-/// A play's state log, its state threads and its state keys (`NewRuntime::with_states`).
-type StateOptions = (Option<std::fs::File>, usize, Option<HashSet<String>>);
+/// A play's state log, its state threads, its state keys and whether it writes the render states'
+/// content digests (`NewRuntime::with_states`).
+type StateOptions = (Option<std::fs::File>, usize, Option<HashSet<String>>, bool);
 
 /// The play's state options: the state log `--state-log` names, made; the threads of
-/// `--state-threads`, 0 where it names none; and the keys of `--state-keys`, each 64 hex digits.
-/// The threads and the keys need a states-only play, which binds no state.
+/// `--state-threads`, 0 where it names none; the keys of `--state-keys`, each 64 hex digits; and
+/// `--state-digests`, no where it is not given. The threads and the keys need a states-only play,
+/// which binds no state.
 fn state_options(
     options: &BTreeMap<String, String>,
     states_only: bool,
@@ -689,6 +702,11 @@ fn state_options(
     if (threads > 0 || keys.is_some()) && !states_only {
         return Err("state-threads and state-keys: they need --states-only yes".to_owned());
     }
+    let digests = match options.get("state-digests").map(String::as_str) {
+        None | Some("no") => false,
+        Some("yes") => true,
+        Some(other) => return Err(format!("state-digests: {other} is neither yes nor no")),
+    };
     let log = match options.get("state-log") {
         None => None,
         Some(path) => match std::fs::File::create(path) {
@@ -696,7 +714,7 @@ fn state_options(
             Err(error) => return Err(format!("state-log: {path}: {error}")),
         },
     };
-    Ok((log, threads, keys))
+    Ok((log, threads, keys, digests))
 }
 
 /// The runtime's backend on the first physical device of `device_type` that opens (a GPU:

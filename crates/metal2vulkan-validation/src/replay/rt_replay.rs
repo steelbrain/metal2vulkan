@@ -108,7 +108,10 @@
 //!   threads of the backend's own, each of three render states' makes writes its begin line, then
 //!   its modules line, then its end line, made, and each begin's key is the name of the record
 //!   its content wrote under `renders/`; with one of those keys listed, only that state is made,
-//!   on the play's thread, and the other two are passed over, each on a pass line.
+//!   on the play's thread, and the other two are passed over, each on a pass line. With the
+//!   digests on, each modules line ends in its state's content digest: three contents, three
+//!   digests, which a second play on a device of its own, on two threads, writes again; without
+//!   them, no modules line carries one.
 //!
 //! The runtime's device is opened behind the hang tripwire, as every device open in this crate
 //! is (`gpu.rs`), its kernels kept in a cache the test owns ([`ScratchCache`]).
@@ -3565,19 +3568,21 @@ fn three_render_states(dir: &ScratchDir) -> PathBuf {
 }
 
 /// `path` played states-only on a device of an empty cache directory, its makes written as
-/// `with_states(log, threads, keys)` writes them: the state log's lines, the backend's lines, and
-/// the names of the records the runtime wrote under `renders/` by the device's end.
+/// `with_states(log, threads, keys, digests)` writes them: the state log's lines, the backend's
+/// lines, and the names of the records the runtime wrote under `renders/` by the device's end.
 fn states_play(
     test: &str,
     path: &Path,
     threads: usize,
     keys: Option<HashSet<String>>,
+    digests: bool,
 ) -> (Vec<String>, Vec<String>, BTreeSet<String>) {
     let dir = ScratchDir::new(&format!("rt-replay-{test}-log")).unwrap();
     let log = dir.path().join("states.log");
     let cache = ScratchCache::new().unwrap();
     let backend = NewRuntime::new(rt_device(cache.path()), gpu::TEST_DEVICE).unwrap();
-    let mut backend = backend.with_states(Some(File::create(&log).unwrap()), threads, keys);
+    let log_file = Some(File::create(&log).unwrap());
+    let mut backend = backend.with_states(log_file, threads, keys, digests);
     let mut reader = StreamReader::open(&[path.to_path_buf()], None).unwrap();
     let (report, ended) = Player::new(&mut backend).states_only().play(&mut reader);
     let lines = backend.lines();
@@ -3615,7 +3620,7 @@ fn key_of(line: &str) -> String {
 fn a_states_only_play_on_its_threads_writes_each_make_between_its_lines() {
     let dir = ScratchDir::new("rt-replay-states-pool").unwrap();
     let path = three_render_states(&dir);
-    let (lines, backend, records) = states_play("states-pool", &path, 2, None);
+    let (lines, backend, records) = states_play("states-pool", &path, 2, None, false);
     let begins = logged(&lines, "begin");
     assert_eq!(begins.len(), 3, "{lines:?}");
     for begin in &begins {
@@ -3640,7 +3645,7 @@ fn a_states_only_play_on_its_threads_writes_each_make_between_its_lines() {
 fn a_states_only_play_of_listed_keys_makes_those_states_alone() {
     let dir = ScratchDir::new("rt-replay-states-keys").unwrap();
     let path = three_render_states(&dir);
-    let (all, ..) = states_play("states-keys-all", &path, 0, None);
+    let (all, ..) = states_play("states-keys-all", &path, 0, None, false);
     let begins = logged(&all, "begin");
     assert_eq!(begins.len(), 3, "{all:?}");
     assert!(
@@ -3655,6 +3660,7 @@ fn a_states_only_play_of_listed_keys_makes_those_states_alone() {
         &path,
         0,
         Some(HashSet::from([key.clone()])),
+        false,
     );
     let made = logged(&lines, "begin");
     assert_eq!(made.len(), 1, "{lines:?}");
@@ -3665,4 +3671,32 @@ fn a_states_only_play_of_listed_keys_makes_those_states_alone() {
     assert_eq!(records, BTreeSet::from([key]));
     let states = "states begun 1 made 1 refused 0 failed 0 passed over 2 on the play's thread";
     assert!(backend.iter().any(|l| l == states), "{backend:?}");
+}
+
+/// The content digest each modules line of `lines` ends in.
+fn digests_of(lines: &[String]) -> BTreeSet<String> {
+    (logged(lines, "modules").iter())
+        .map(|l| l.split(" digest ").nth(1).expect("a digest").to_owned())
+        .collect()
+}
+
+#[test]
+fn a_states_only_play_writes_each_render_state_s_content_digest() {
+    let dir = ScratchDir::new("rt-replay-states-digests").unwrap();
+    let path = three_render_states(&dir);
+    let (lines, ..) = states_play("states-digests", &path, 0, None, true);
+    assert_eq!(logged(&lines, "modules").len(), 3, "{lines:?}");
+    let digests = digests_of(&lines);
+    let hex = |d: &String| d.len() == 64 && d.bytes().all(|b| b.is_ascii_hexdigit());
+    assert!(digests.iter().all(hex), "{lines:?}");
+    assert_eq!(digests.len(), 3, "three contents, three digests: {lines:?}");
+    // A play of its own, its makes on two threads, writes the same digests.
+    let (pooled, ..) = states_play("states-digests-pooled", &path, 2, None, true);
+    assert_eq!(digests_of(&pooled), digests, "{pooled:?}");
+    let (plain, ..) = states_play("states-digests-off", &path, 0, None, false);
+    let modules = logged(&plain, "modules");
+    assert!(
+        modules.len() == 3 && modules.iter().all(|l| !l.contains(" digest ")),
+        "{plain:?}"
+    );
 }

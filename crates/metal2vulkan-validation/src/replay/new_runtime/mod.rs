@@ -1046,14 +1046,17 @@ impl NewRuntime {
     /// once through the device's one pipeline cache; with 0 each is made on the play's thread.
     /// With `keys`, only the render states whose content's key (the hex of the translator's key of
     /// the descriptor, its record's name in the cache directory) is listed are made, and every
-    /// other state is passed over, each named on a pass line.
+    /// other state is passed over, each named on a pass line. With `digests`, each render state's
+    /// modules line ends in its content digest (`rt::RenderPipelineState::content_digest`), the
+    /// lines then written to the standard output where no log is given.
     pub fn with_states(
         mut self,
         log: Option<std::fs::File>,
         threads: usize,
         keys: Option<HashSet<String>>,
+        digests: bool,
     ) -> Self {
-        self.states = states::States::new(log, threads, keys);
+        self.states = states::States::new(log, threads, keys, digests);
         self
     }
 
@@ -1758,7 +1761,7 @@ impl NewRuntime {
         let state = self.numbered(|device, ids| {
             device.new_compute_pipeline_state(descriptor, |samplers| ids(samplers))
         })?;
-        step.modules();
+        step.modules(None);
         state.finish_pipeline()?;
         Ok(state)
     }
@@ -1840,7 +1843,7 @@ impl NewRuntime {
             let (device, descriptor) = (self.device.clone(), descriptor.clone());
             self.states.give(what, move |numbering, step| {
                 let state = device.new_compute_pipeline_state(&descriptor, |s| numbering.ids(s))?;
-                step.modules();
+                step.modules(None);
                 state.finish_pipeline()
             });
             return unaddressed(Object::Skipped);

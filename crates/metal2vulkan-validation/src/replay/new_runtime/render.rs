@@ -298,7 +298,7 @@ impl NewRuntime {
             let device = self.device.clone();
             self.states.give(what, move |numbering, step| {
                 let state = device.new_render_pipeline_state(&descriptor, |s| numbering.ids(s))?;
-                step.modules();
+                step.modules(Some(state.content_digest()));
                 state.finish_pipeline()
             });
             return unaddressed(Object::Skipped);
@@ -310,7 +310,7 @@ impl NewRuntime {
             let state = self.numbered(|device, ids| {
                 device.new_render_pipeline_state(&descriptor, |samplers| ids(samplers))
             })?;
-            step.modules();
+            step.modules(Some(state.content_digest()));
             state.finish_pipeline()?;
             Ok(state)
         });

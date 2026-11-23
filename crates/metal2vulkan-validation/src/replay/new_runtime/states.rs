@@ -11,9 +11,12 @@
 //! Without the pool each state is made on the play's thread, one after another. A list of render
 //! contents' keys (the hex of the translator's key of each descriptor, the name of its record in
 //! the cache directory) makes those states alone and passes over every other state, each named on
-//! a `M2V-STATE pass` line.
+//! a `M2V-STATE pass` line. With the digests on, a render state's `M2V-STATE modules` line ends in
+//! its content digest (`RenderPipelineState::content_digest`), which two builds share where they
+//! translate its content to the same pipeline.
 
 use super::rt;
+use metal2vulkan::cache::Hash256;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Write;
@@ -36,9 +39,11 @@ type Job = (
 );
 
 /// Where the lines go: the standard output and the state log, each line flushed as it is written;
-/// nowhere without a log or a pool.
+/// nowhere without a log, a pool or the digests. With `digests`, a render state's modules line
+/// carries its content digest.
 struct Log {
     on: bool,
+    digests: bool,
     file: Mutex<Option<File>>,
 }
 
@@ -76,10 +81,17 @@ pub(super) struct Step<'a> {
 }
 
 impl Step<'_> {
-    /// The make's shader modules are made, and its `VkPipeline` is made next.
-    pub(super) fn modules(&self) {
+    /// The make's shader modules are made, and its `VkPipeline` is made next: with the digests
+    /// on, the line of a render state, whose `digest` is given, ends in `digest HEX`.
+    pub(super) fn modules(&self, digest: Option<Hash256>) {
         let (seq, thread) = (self.seq, &self.thread);
-        self.log.line(&format!("M2V-STATE modules {seq} {thread}"));
+        let line = format!("M2V-STATE modules {seq} {thread}");
+        match digest.filter(|_| self.log.digests) {
+            Some(digest) => {
+                (self.log).line(&format!("{line} digest {}", crate::replay::hex(&digest)))
+            }
+            None => self.log.line(&line),
+        }
     }
 }
 
@@ -224,18 +236,25 @@ impl Default for States {
     /// No lines, no pool and no key list: each state made on the play's thread, as a play
     /// without these makes them.
     fn default() -> States {
-        States::new(None, 0, None)
+        States::new(None, 0, None, false)
     }
 }
 
 impl States {
-    /// The makes' lines written to the standard output and to `log`, where a log is given or a
-    /// pool is; the makes run by `width` threads of the player's own, or on the play's thread with
-    /// 0; with `keys`, only the render states of those contents made.
-    pub(super) fn new(log: Option<File>, width: usize, keys: Option<HashSet<String>>) -> States {
+    /// The makes' lines written to the standard output and to `log`, where a log is given, a pool
+    /// is or `digests` is set; the makes run by `width` threads of the player's own, or on the
+    /// play's thread with 0; with `keys`, only the render states of those contents made; with
+    /// `digests`, each render state's modules line ending in its content digest.
+    pub(super) fn new(
+        log: Option<File>,
+        width: usize,
+        keys: Option<HashSet<String>>,
+        digests: bool,
+    ) -> States {
         let shared = Arc::new(Shared {
             log: Log {
-                on: log.is_some() || width > 0,
+                on: log.is_some() || width > 0 || digests,
+                digests,
                 file: Mutex::new(log),
             },
             tally: Tally::default(),
