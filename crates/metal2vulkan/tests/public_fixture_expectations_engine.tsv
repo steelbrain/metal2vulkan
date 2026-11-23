@@ -2640,6 +2640,10 @@ engine/rt6_samples.ll	rt6_fill_rgba32uint	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/rt6_samples.ll	rt6_fill_rgba32sint	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/rt6_samples.ll	rt6_fill_rgba32float	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/rt6_samples.ll	rt6_fill_depth32float	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/rt6_unwritten.air.ll	rt6_unwritten	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/rt6_unwritten.air.ll	rt6_unwritten_read	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/rt6_unwritten.ll	rt6_unwritten	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/rt6_unwritten.ll	rt6_unwritten_read	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/rt6_viewports.air.ll	rt6_select	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/rt6_viewports.air.ll	rt6_white	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/rt6_viewports.air.ll	rt6_viewport_read	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
