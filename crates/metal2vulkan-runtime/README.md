@@ -1820,6 +1820,10 @@ made, with no lock, and never rewritten for layouts.
   and a draw's write of a texture that nothing earlier in its command buffer wrote, nor an alias
   of it, is checked where the pass's part of the command buffer starts, so its move may go ahead
   of a read of an alias there.
+- A heap buffer's use that may write it (a bound slot its kernel or draw does not read only, or a
+  declared write) makes every heap texture over its bytes stale, though the use wrote other bytes
+  or none: that texture's next write moves its whole image from undefined, so on a device whose
+  move resets an image, what the texture held where that write does not reach is lost.
 - A texture's memory is device-local; where the device has none left, the call fails
   (`Error::Vulkan`).
 - A texture over a buffer other than 2D of one level, sample and slice, or of a depth, stencil
