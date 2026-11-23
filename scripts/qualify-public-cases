@@ -30,6 +30,10 @@ cases=(
     d9ce86618e0924966fbb1e7de63761ef471bb6e85b592a70193a26375ec0423f
     4659fedddd1695fba79c3faa797ec3be647e3fd1a87ecec23bde55ccbfbcf656
     1e54315eb0ffcac633d4992c577f3e6ac384ed1bdf2321887c1f37242c00c887
+    # A kernel that asks two bound visible-function tables whether they are null and their sizes,
+    # and one that calls through a table of four entries, one of them null.
+    3a8f75e182b71ba42a94dd39d178cf6789010fbe1355b56944adf0a1c75ba807
+    af884d65cb584518fcb8b7319dfe9deff15b20604cfc68f6d72dd97ca3113536
 )
 
 for case_id in "${cases[@]}"; do
