@@ -4184,11 +4184,11 @@ impl Texture {
     /// Err: [`Refusal::InScheduledHandler`] in a scheduled handler;
     /// [`Refusal::TextureBytesPrivate`]; [`Refusal::TextureRegion`] for a level, slice or
     /// region outside the texture or off its format's block grid;
-    /// [`Refusal::TextureBytesLayout`]; [`Gap::TextureBytes`]; [`Limit::MemoryAllocations`] where the region's block or a staging
-    /// buffer's memory would take the device past its count; [`Error::Vulkan`] where either
-    /// cannot be made, and with `VK_ERROR_DEVICE_LOST` where the device is lost while the call
-    /// waits; [`Error::Quiesced`]; over a Managed buffer, what [`Buffer::did_modify_range`]
-    /// returns.
+    /// [`Refusal::TextureBytesLayout`]; [`Gap::TextureBytes`]; [`Limit::MemoryAllocations`] where
+    /// the region's block or a staging buffer's memory would take the device past its count;
+    /// [`Error::Vulkan`] where either cannot be made, and with `VK_ERROR_DEVICE_LOST` where the
+    /// device is lost while the call waits; [`Error::Quiesced`]; over a Managed buffer, what
+    /// [`Buffer::did_modify_range`] returns.
     ///
     /// [`Metrics::bytes_copied`]: crate::Metrics::bytes_copied
     pub fn replace_region(

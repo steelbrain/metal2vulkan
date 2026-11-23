@@ -1049,8 +1049,8 @@ fn a_layout_metal_stops_is_refused_and_one_a_copy_command_cannot_address_is_a_ga
     for into_image in [true, false] {
         let copy = buffer_copied(float_copy(into_image));
         assert_eq!(
-            copy.unit.aspect,
-            vk::ImageAspectFlags::DEPTH,
+            copy.unit.aspect.as_raw(),
+            vk::ImageAspectFlags::DEPTH.as_raw(),
             "{into_image}"
         );
     }
