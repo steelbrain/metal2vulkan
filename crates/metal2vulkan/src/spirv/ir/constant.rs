@@ -375,9 +375,11 @@ impl Consts {
     }
 
     /// Declare the module's `WorkgroupSize` composite of `ty` (a `u32` 3-vector) from three
-    /// positive `u32` constants ([`Consts::positive`]), at least one of them a specialization
-    /// constant or an `OpSpecConstantOp` of them. Declaring it again with the same parts returns
-    /// the first declaration; different parts are a conflict.
+    /// positive `u32` constants ([`Consts::positive`]), each a plain constant or a plain
+    /// specialization constant and at least one the latter. An `OpSpecConstantOp` part is
+    /// [`ConstRule::WorkgroupSizeOp`]: a driver may size the workgroup from the parts as declared,
+    /// and read such a part as 1 whatever the body computes from it. Declaring it again with the
+    /// same parts returns the first declaration; different parts are a conflict.
     pub fn workgroup_size(
         &mut self,
         ty: TypeId,
@@ -411,8 +413,12 @@ impl Consts {
         let mut specs = 0;
         for p in parts {
             let def = self.get(p)?;
-            if matches!(def.kind, ConstKind::Spec { .. } | ConstKind::SpecOp { .. }) {
-                specs += 1;
+            match def.kind {
+                ConstKind::Spec { .. } => specs += 1,
+                ConstKind::SpecOp { .. } => {
+                    return Err(BuildError::Constant(ConstRule::WorkgroupSizeOp))
+                }
+                _ => {}
             }
             // A local size of zero is invalid on every axis, so a part must be positive.
             if def.ty != u32_elem || !self.positive(p)? {
@@ -432,26 +438,11 @@ impl Consts {
     }
 
     /// Whether constant `c` is positive at its defaults: a plain scalar or a specialization
-    /// constant's default above 0, or a product or select of such. An `OpSpecConstantOp` of any
-    /// other operation is not known to be.
+    /// constant's default above 0.
     fn positive(&self, c: ConstId) -> BResult<bool> {
         Ok(match &self.get(c)?.kind {
             ConstKind::Spec { default, .. } => default.0 != 0,
             ConstKind::Plain(Constant::Scalar { bits, .. }) => bits.0 != 0,
-            ConstKind::SpecOp {
-                op: SpecOp::IMul,
-                operands,
-            } => match **operands {
-                [a, b] => self.positive(a)? && self.positive(b)?,
-                _ => false,
-            },
-            ConstKind::SpecOp {
-                op: SpecOp::Select,
-                operands,
-            } => match **operands {
-                [_, a, b] => self.positive(a)? && self.positive(b)?,
-                _ => false,
-            },
             _ => false,
         })
     }

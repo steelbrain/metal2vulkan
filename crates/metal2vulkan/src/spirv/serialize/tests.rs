@@ -787,6 +787,53 @@ fn a_workgroup_size_composite_needs_positive_u32_parts_and_a_spec_part() {
     assert_spirv_valid(b.finalize().expect("finalize"));
 }
 
+/// A `WorkgroupSize` part that is an `OpSpecConstantOp` is refused, whatever its operation, the
+/// deep threadgroup's former parts among them (a select over products of the size constants): a
+/// driver may size the workgroup from the parts as declared and read such a part as 1, while the
+/// body computes with its value. Plain specialization constants on every axis, the deep form's
+/// parts, pass `spirv-val`.
+#[test]
+fn a_workgroup_size_part_is_never_a_spec_constant_op() {
+    use crate::pipeline::sym::Axis;
+    use crate::spirv::error::ConstRule;
+    use crate::spirv::ir::SpecOp;
+    let mut b = ModuleBuilder::new();
+    let u32_ = int(&mut b, 32, false);
+    let bool_ = b.ty(Type::Bool).expect("bool");
+    let [sx, sy, sz] = [Axis::X, Axis::Y, Axis::Z].map(|a| {
+        b.spec(SpecKey::LocalSize(a), u32_, ConstBits(1))
+            .expect("spec")
+    });
+    let one_row = b
+        .spec(SpecKey::DeepThreadgroup, bool_, ConstBits(0))
+        .expect("spec");
+    let row = b.spec_op(SpecOp::IMul, u32_, &[sx, sy]).expect("row");
+    let sn = b.spec_op(SpecOp::IMul, u32_, &[row, sz]).expect("sn");
+    let one = scalar(&mut b, u32_, 1);
+    let x = (b.spec_op(SpecOp::Select, u32_, &[one_row, sn, sx])).expect("x");
+    let y = (b.spec_op(SpecOp::Select, u32_, &[one_row, one, sy])).expect("y");
+    let z = (b.spec_op(SpecOp::Select, u32_, &[one_row, one, sz])).expect("z");
+    let op = Err(BuildError::Constant(ConstRule::WorkgroupSizeOp));
+    assert_eq!(b.workgroup_size(x, y, z), op);
+    assert_eq!(b.workgroup_size(sn, one, one), op);
+    assert_eq!(b.workgroup_size(sx, sy, row), op);
+    let [wx, wy, wz] = [Axis::X, Axis::Y, Axis::Z].map(|a| {
+        b.spec(SpecKey::WorkgroupSize(a), u32_, ConstBits(1))
+            .expect("spec")
+    });
+    b.workgroup_size(wx, wy, wz).expect("the deep form's parts");
+    let out = ssbo(&mut b, 0, u32_, 4);
+    let main = compute(&mut b, |f| {
+        let i = gid_x(f);
+        let dst = elem_ptr(f, out, i);
+        let v = cval(f, u32_, 7);
+        f.store(dst, v, MemAccess::default()).expect("store");
+    });
+    b.entry(ExecModel::GLCompute, main, Vec::new())
+        .expect("entry");
+    assert_spirv_valid(b.finalize().expect("finalize"));
+}
+
 /// The resources a module declares `NonWritable`, by binding symbol, in relocation order.
 fn non_writable_resources(r: &RelocatableModule) -> Vec<ResourceSlot> {
     let decorate = (3 << 16) | crate::spv::Op::Decorate as u32;

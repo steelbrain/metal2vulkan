@@ -307,6 +307,7 @@ surface! {
         fn grid_tile;
         const GRID_TILE_THREADS;
         const DEEP_THREADGROUP;
+        fn threadgroup_constants;
         const COMPILED_STAGE_WEIGHT;
         fn own_kernel;
         struct ExecutionCounts E;

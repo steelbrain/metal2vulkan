@@ -867,6 +867,7 @@ codec_enum! {
         ConstantLanes(f0), BoundTexelFormat(f0), OffsetBaseAxes(f0), SamplerAnisotropy(f0),
         NearestPixelSampler(f0), BoundSamplerWord(f0), StageInReach,
         HeapRawTextures(f0), BorderTexels(f0), HeapNanFamilies(f0), DeepThreadgroup,
+        WorkgroupSize(f0),
     }
     PushField {
         RootTableAddress, ExecutionStatusAddress, DispatchRegion, BaseVertexInstance,

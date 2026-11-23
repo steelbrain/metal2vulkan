@@ -717,7 +717,8 @@ pub enum SpecKey {
     /// `RuntimeFact::BorderTexels`).
     BorderTexels(SlotRef),
     /// Boolean: the kernel's threadgroup runs as one row (default false). Its workgroup is then
-    /// `(sx·sy·sz, 1, 1)`, and its position in the threadgroup is its `LocalInvocationIndex`
+    /// `(sx·sy·sz, 1, 1)` (its [`WorkgroupSize`](SpecKey::WorkgroupSize) constants), and its
+    /// position in the threadgroup is its `LocalInvocationIndex`
     /// unflattened over `(sx, sy, sz)`, `x` fastest, which is Metal's order, so its linear index
     /// and every other builtin keep their values. Declared on `Device::from_queries`' profile by
     /// a kernel whose workgroup is its threadgroup (`LocalSizeForm::Spec`), so a threadgroup
@@ -725,6 +726,15 @@ pub enum SpecKey {
     /// device's `maxComputeWorkGroupSize`; where it is false the workgroup is `(sx, sy, sz)` and
     /// the pipeline is the one the kernel makes without it.
     DeepThreadgroup,
+    /// A kernel's Vulkan workgroup size on one axis, where it declares
+    /// [`DeepThreadgroup`](SpecKey::DeepThreadgroup) (default the axis's `LocalSize` default):
+    /// the threadgroup's own size, or `(sx·sy·sz, 1, 1)` where `DeepThreadgroup` is true, as
+    /// [`threadgroup_constants`](crate::pipeline::threadgroup_constants) answers for the
+    /// threadgroup with its other keys. Each
+    /// part of the module's `WorkgroupSize` is such a plain constant, never an
+    /// `OpSpecConstantOp`: the size a driver reads from the composite's parts as declared is the
+    /// one the body computes with.
+    WorkgroupSize(Axis),
 }
 
 impl SpecKey {

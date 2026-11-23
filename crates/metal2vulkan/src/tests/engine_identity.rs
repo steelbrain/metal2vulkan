@@ -206,14 +206,9 @@ fn local_size(group: u32) -> BTreeMap<SpecKey, u64> {
     local_size3([group, 1, 1])
 }
 
-/// The spec map of a dispatch of threadgroups of size `l`.
+/// The spec map of a dispatch of threadgroups of size `l`: every key the size decides.
 fn local_size3(l: [u32; 3]) -> BTreeMap<SpecKey, u64> {
-    BTreeMap::from([
-        (SpecKey::LocalSize(Axis::X), u64::from(l[0])),
-        (SpecKey::LocalSize(Axis::Y), u64::from(l[1])),
-        (SpecKey::LocalSize(Axis::Z), u64::from(l[2])),
-        (SpecKey::FlatLocalSize, u64::from(l[0] * l[1] * l[2])),
-    ])
+    BTreeMap::from(crate::pipeline::threadgroup_constants(l))
 }
 
 fn slot(index: u32) -> SlotRef {
@@ -438,11 +433,14 @@ fn workloads() -> Option<Vec<u8>> {
 }
 
 /// Whether `key` is one of a dispatch's own specialization constants: its local size, its
-/// `MultiRegion` and its `DeepThreadgroup`.
+/// `MultiRegion`, its `DeepThreadgroup` and its `WorkgroupSize`.
 fn dispatch_key(key: SpecKey) -> bool {
     matches!(
         key,
-        SpecKey::LocalSize(_) | SpecKey::MultiRegion | SpecKey::DeepThreadgroup
+        SpecKey::LocalSize(_)
+            | SpecKey::MultiRegion
+            | SpecKey::DeepThreadgroup
+            | SpecKey::WorkgroupSize(_)
     )
 }
 
@@ -2988,16 +2986,12 @@ declare void @air.wg.barrier(i32, i32)\n\n\
 }
 
 /// The workgroup `module` declares under `spec`: its `WorkgroupSize` composite, each part a
-/// constant, a specialization constant or an operation of them, at those values.
+/// constant or a specialization constant (never an operation of them), at those values.
 fn workgroup_of(module: &TypedModule, spec: &BTreeMap<SpecKey, u64>) -> [u32; 3] {
     fn value(module: &TypedModule, spec: &BTreeMap<SpecKey, u64>, c: ConstId) -> u64 {
         match &module.consts().get(c).expect("a constant").kind {
             ConstKind::Plain(crate::spirv::ir::Constant::Scalar { bits, .. }) => bits.0,
             ConstKind::Spec { key, default } => spec.get(key).copied().unwrap_or(default.0),
-            ConstKind::SpecOp { op, operands } => {
-                let values: Vec<u64> = (operands.iter()).map(|&o| value(module, spec, o)).collect();
-                op.eval(32, &values).expect("an operation of its arity")
-            }
             other => panic!("a workgroup size part {other:?}"),
         }
     }
@@ -3016,7 +3010,9 @@ fn workgroup_of(module: &TypedModule, spec: &BTreeMap<SpecKey, u64>) -> [u32; 3]
 /// threadgroup's threads and its threads' positions, linear indices and threadgroup memory are
 /// Metal's: [`deep_kernel`] over two threadgroups of 1 by 1 by 320, 2 by 3 by 100 and 1 by 4 by 256
 /// stores what Metal's do, and so does one of 4 by 4 by 4, at its own workgroup with the key unset.
-/// The device reports Metal's 1,024 threads along every axis, on a profile of 64 along `z` too.
+/// Its `WorkgroupSize` parts are the plain specialization constants `SpecKey::WorkgroupSize`,
+/// which `threadgroup_constants` writes. The device reports Metal's 1,024 threads along every axis, on a
+/// profile of 64 along `z` too.
 #[test]
 fn a_deep_threadgroup_runs_as_one_row_on_from_queries() {
     use crate::pipeline::DEEP_THREADGROUP;
@@ -3034,6 +3030,24 @@ fn a_deep_threadgroup_runs_as_one_row_on_from_queries() {
             .map(|c| c.default)
             .collect();
         assert_eq!(declared, [0], "{stem}");
+        let size = module
+            .consts()
+            .workgroup_size_const()
+            .expect("a WorkgroupSize");
+        let ConstKind::WorkgroupSize { parts } = module.consts().get(size).expect("it").kind else {
+            panic!("{stem}: not a WorkgroupSize");
+        };
+        let keys = parts.map(
+            |part| match module.consts().get(part).expect("a part").kind {
+                ConstKind::Spec { key, .. } => key,
+                ref other => panic!("{stem}: a WorkgroupSize part {other:?}"),
+            },
+        );
+        assert_eq!(
+            keys,
+            [Axis::X, Axis::Y, Axis::Z].map(SpecKey::WorkgroupSize),
+            "{stem}"
+        );
         link_and_validate(&a, p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
         for size in [[1, 1, 320], [2, 3, 100], [1, 4, 256], [4, 4, 4]] {
             let n = size.iter().product::<u32>();

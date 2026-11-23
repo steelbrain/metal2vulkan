@@ -167,6 +167,10 @@ pub enum ConstRule {
     /// An `OpSpecConstantOp` whose operands are not scalar constants of the types its operation
     /// requires, or none of which is specialization-dependent.
     SpecOpOperands,
+    /// A `WorkgroupSize` part that is an `OpSpecConstantOp`: each part is a plain constant or a
+    /// plain specialization constant, so the size a driver reads from the parts as declared is the
+    /// one the module's body computes with.
+    WorkgroupSizeOp,
 }
 
 /// A violated module-scope variable rule.

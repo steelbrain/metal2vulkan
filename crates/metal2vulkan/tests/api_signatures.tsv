@@ -2862,6 +2862,7 @@ fn	metal2vulkan::pipeline::heap_unused_while_pending	pub fn heap_unused_while_pe
 fn	metal2vulkan::pipeline::nonuniform_region_bytes	pub fn nonuniform_region_bytes(base: [u32; 3], threads: [u32; 3], l: [u32; 3]) -> Option<[u8; 32]>
 fn	metal2vulkan::pipeline::own_kernel	pub fn own_kernel(kernel: OwnKernel, profile: &DeviceProfile) -> Result<Vec<u32>, Error>
 fn	metal2vulkan::pipeline::region_bytes	pub fn region_bytes(base: [u32; 3], threads: [u32; 3], l: [u32; 3]) -> Option<[u8; 32]>
+fn	metal2vulkan::pipeline::threadgroup_constants	pub fn threadgroup_constants(size: [u32; 3]) -> [(SpecKey, u64); 8]
 macro-decl	metal2vulkan-air::ir::ArgIdx	ir_id! ArgIdx
 macro-decl	metal2vulkan-air::ir::BlockId	id_type! BlockId
 macro-decl	metal2vulkan-air::ir::BlockId	ir_id! BlockId
@@ -10074,6 +10075,7 @@ variant	metal2vulkan::pipeline::SpecKey::TgLength	TgLength(u32)
 variant	metal2vulkan::pipeline::SpecKey::TgOffset	TgOffset(u32)
 variant	metal2vulkan::pipeline::SpecKey::TileGridWidth	TileGridWidth
 variant	metal2vulkan::pipeline::SpecKey::TileThreadgroupLength	TileThreadgroupLength
+variant	metal2vulkan::pipeline::SpecKey::WorkgroupSize	WorkgroupSize(Axis)
 variant	metal2vulkan::pipeline::Stage::Fragment	Fragment
 variant	metal2vulkan::pipeline::Stage::Kernel	Kernel
 variant	metal2vulkan::pipeline::Stage::Mesh	Mesh

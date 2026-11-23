@@ -184,7 +184,10 @@ and so do the command line, the compile worker and every validation tool. It hol
   threadgroup's threads, `(sx·sy·sz, 1, 1)`, each thread's position its `LocalInvocationIndex`
   unflattened in Metal's order, so a threadgroup deeper than a device's
   `maxComputeWorkGroupSize[2]` runs; a runtime sets it for a region deeper than
-  `pipeline::DEEP_THREADGROUP` (64) alone, so every other pipeline specializes it away. `MetalDeviceProperties::max_threads_per_threadgroup` is
+  `pipeline::DEEP_THREADGROUP` (64) alone, so every other pipeline specializes it away. Such a
+  kernel's `WorkgroupSize` parts are the plain constants `SpecKey::WorkgroupSize`, one an axis:
+  the threadgroup, or one row of it where it is deep (section 3 names the call that gives them);
+  no module's `WorkgroupSize` part is an `OpSpecConstantOp`. `MetalDeviceProperties::max_threads_per_threadgroup` is
   the capped `maxComputeWorkGroupInvocations` on every axis. A texture slot's `gpuResourceID` is pushed as
   its `PushField::SlotGuestBase`, and its texture is the element at the ID's index of set 1's two
   fixed arrays, the same layout for every pipeline ([RESOURCE-ID.md](RESOURCE-ID.md)); it binds no
@@ -442,7 +445,12 @@ A `ComputePipeline` is immutable plain data:
 Do not create the compute `VkPipeline` from `stage` alone: its specialization defaults are
 placeholders (a kernel's local size is 1). Create each pipeline with the values its dispatch
 gives the specialization constants' keys, and with the stage's `stage_flags` and
-`required_subgroup_size`. A required subgroup size needs `subgroupSizeControl` and the stage in
+`required_subgroup_size`. Every key a kernel's threadgroup size decides comes from one call,
+`pipeline::threadgroup_constants(size)`: `SpecKey::LocalSize` on each axis, `FlatLocalSize`,
+`DeepThreadgroup` and the `WorkgroupSize` parts on each axis. Write each of them the stage
+declares from it, never one alone: a kernel that declares `DeepThreadgroup` takes its Vulkan
+workgroup from the `WorkgroupSize` parts only, so one given its `LocalSize` without them runs
+workgroups of the parts' defaults. A required subgroup size needs `subgroupSizeControl` and the stage in
 `requiredSubgroupSizeStages`; full subgroups need `computeFullSubgroups`. A pipeline compiled for
 one device pins only what that device can take; `DeviceProfile::check` tells whether another
 device can.

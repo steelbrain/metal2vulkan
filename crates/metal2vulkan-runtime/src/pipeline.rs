@@ -81,11 +81,11 @@ use metal2vulkan::error::{Error as TranslationError, Feature};
 use metal2vulkan::library::{CompiledFunction, FunctionCompileKey};
 use metal2vulkan::metal::{BindingAccess, BindingType};
 use metal2vulkan::pipeline::{
-    arena_bytes, AccessSet, Axis, BindingSource, BufferKind, CombinedSampler, ComputePipeline,
-    ComputePipelineDescriptor, DescriptorSetLayout, FunctionDescriptor, KernelVariant,
-    LinkedFunctions, LoweringInputs, NumberedSampler, PrecisionNote, PushField, PushLoc,
-    RuntimeFact, SamplerRef, SlotClass, SlotInterface, SlotRef, SpecKey, Stage, StageEntries,
-    StageSource, TextureAccess, DEEP_THREADGROUP, GRID_TILE_THREADS,
+    arena_bytes, threadgroup_constants, AccessSet, BindingSource, BufferKind, CombinedSampler,
+    ComputePipeline, ComputePipelineDescriptor, DescriptorSetLayout, FunctionDescriptor,
+    KernelVariant, LinkedFunctions, LoweringInputs, NumberedSampler, PrecisionNote, PushField,
+    PushLoc, RuntimeFact, SamplerRef, SlotClass, SlotInterface, SlotRef, SpecKey, Stage,
+    StageEntries, StageSource, TextureAccess, GRID_TILE_THREADS,
 };
 use metal2vulkan::Budget;
 use std::ffi::CString;
@@ -396,7 +396,7 @@ pub(crate) enum Form {
     /// (`CompiledFunction::is_image_only`): `whole` runs a direct dispatch at `MultiRegion` 0,
     /// whatever the threadgroup size, in workgroups of [`SQUARE`] over a grid one deep and of its
     /// `encoder::image_tile` over a deeper one, a tile deeper than `DEEP_THREADGROUP` as one row
-    /// ([`Constant::Deep`]).
+    /// (`DeepThreadgroup`, [`Constant::Threadgroup`]).
     Square,
     /// The kernel observes its partition: a dispatch runs at its own threadgroup size, every one,
     /// direct or indirect, on the partial-threadgroups variant (`partial`), wherever the variant
@@ -771,10 +771,10 @@ impl Memory {
 /// What sets a specialization constant.
 #[derive(Clone, Copy)]
 pub(crate) enum Constant {
-    /// The threadgroup size on one axis, 0 to 2.
-    Size(usize),
-    /// The threadgroup's threads: the product of its size.
-    Threads,
+    /// A key the threadgroup's size decides (`LocalSize`, `FlatLocalSize`, `DeepThreadgroup`,
+    /// `WorkgroupSize`): the value the translator's `threadgroup_constants` gives it for the
+    /// threadgroup, the one source of all of them, so they are written together and agree.
+    Threadgroup(SpecKey),
     /// The length of the threadgroup memory argument at this position of
     /// [`Interface::threadgroups`].
     ThreadgroupLength(usize),
@@ -785,9 +785,6 @@ pub(crate) enum Constant {
     /// tile; 0 for every other launch, whose region states the pipeline's own threadgroup size,
     /// so the kernel takes `L` from its workgroup size and reads no decode.
     MultiRegion,
-    /// `DeepThreadgroup`: 1 where the threadgroup is deeper than `DEEP_THREADGROUP`, which then
-    /// runs as one row of its threads, 0 for every other, whose workgroup is the threadgroup.
-    Deep,
 }
 
 /// A parameter and where it goes.
@@ -1804,10 +1801,9 @@ pub(crate) fn interface(
             return Err(KernelInputKind::Specialization);
         }
         let set = match constant.key {
-            SpecKey::LocalSize(Axis::X) => Constant::Size(0),
-            SpecKey::LocalSize(Axis::Y) => Constant::Size(1),
-            SpecKey::LocalSize(Axis::Z) => Constant::Size(2),
-            SpecKey::FlatLocalSize => Constant::Threads,
+            key if threadgroup_constants([1; 3]).iter().any(|&(k, _)| k == key) => {
+                Constant::Threadgroup(key)
+            }
             SpecKey::TgLength(index) => Constant::ThreadgroupLength(
                 threadgroups
                     .iter()
@@ -1815,7 +1811,6 @@ pub(crate) fn interface(
                     .ok_or(KernelInputKind::Specialization)?,
             ),
             SpecKey::MultiRegion => Constant::MultiRegion,
-            SpecKey::DeepThreadgroup => Constant::Deep,
             // A thread-position `[[stage_in]]` fetch's reach check, kept at the module's default
             // (true) for every dispatch: one pipeline, whose fetch reads an element past the first
             // 2^32 bytes from its bind offset as zero.
@@ -1830,7 +1825,7 @@ pub(crate) fn interface(
     // buffers alone does not take.
     let flat = constants
         .iter()
-        .any(|(_, set)| matches!(set, Constant::Threads));
+        .any(|(_, set)| matches!(set, Constant::Threadgroup(SpecKey::FlatLocalSize)));
     if !multiples.is_empty() && !flat {
         return Err(KernelInputKind::Workgroup);
     }
@@ -1839,7 +1834,7 @@ pub(crate) fn interface(
     // that cannot (compute derivatives) does not declare.
     let deep = constants
         .iter()
-        .any(|(_, set)| matches!(set, Constant::Deep));
+        .any(|(_, set)| matches!(set, Constant::Threadgroup(SpecKey::DeepThreadgroup)));
     if !flat && !deep {
         return Err(KernelInputKind::Workgroup);
     }
@@ -2591,15 +2586,17 @@ impl Kernel {
                 size: 4,
             })
             .collect();
+        let threadgroup = threadgroup_constants(variant.size);
         let values: Vec<u8> = constants
             .iter()
             .map(|&(_, set)| match set {
-                Constant::Size(axis) => variant.size[axis],
-                Constant::Threads => variant.size.iter().product(),
+                // Each value is a size of the threadgroup's, a count of its threads or 0 or 1.
+                Constant::Threadgroup(key) => (threadgroup.iter())
+                    .find(|&&(k, _)| k == key)
+                    .map_or(0, |&(_, value)| u32::try_from(value).unwrap_or(u32::MAX)),
                 Constant::ThreadgroupLength(at) => variant.lengths.as_slice()[at],
                 Constant::Imageblock(axis) => variant.lengths.imageblock[axis],
                 Constant::MultiRegion => u32::from(variant.tiles),
-                Constant::Deep => u32::from(variant.size[2] > DEEP_THREADGROUP),
             })
             .flat_map(u32::to_ne_bytes)
             .collect();

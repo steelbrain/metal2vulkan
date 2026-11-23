@@ -18,6 +18,7 @@ pub(crate) mod on_device {
         Buffer, CommandBuffer, ComputeCommandEncoder, ComputePipelineState, Device, DispatchType,
         Error, Gap, HeapRange, Limit, MemoryClass, Refusal, RefusalBasis,
     };
+    use metal2vulkan::pipeline::{Axis, SpecKey};
 
     /// Words in each test buffer: 256 bytes.
     pub(crate) const WORDS: usize = 64;
@@ -56,9 +57,9 @@ pub(crate) mod on_device {
             private_arena: None,
             imageblock: None,
             constants: vec![
-                (0, Constant::Size(0)),
-                (1, Constant::Size(1)),
-                (2, Constant::Size(2)),
+                (0, Constant::Threadgroup(SpecKey::LocalSize(Axis::X))),
+                (1, Constant::Threadgroup(SpecKey::LocalSize(Axis::Y))),
+                (2, Constant::Threadgroup(SpecKey::LocalSize(Axis::Z))),
             ],
             threadgroups: Vec::new(),
             max_total_threads: 1024,

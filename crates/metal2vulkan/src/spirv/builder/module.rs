@@ -420,11 +420,13 @@ impl ModuleBuilder {
         Ok(id)
     }
 
-    /// Declare the module's local size as the constants `x`, `y`, `z` (positive `u32` scalars, at
-    /// least one a specialization constant from [`ModuleBuilder::spec`] and the others plain, as
-    /// in the flattened `(sn, 1, 1)`): an `OpSpecConstantComposite` decorated `BuiltIn
-    /// WorkgroupSize`. Valid under Vulkan 1.2 without `maintenance4`, unlike `LocalSizeId`. A
-    /// `GLCompute` entry declared after it needs no local-size mode.
+    /// Declare the module's local size as the constants `x`, `y`, `z` (positive `u32` scalars,
+    /// each a plain constant or a specialization constant from [`ModuleBuilder::spec`] and at
+    /// least one the latter, as in the flattened `(sn, 1, 1)`): an `OpSpecConstantComposite`
+    /// decorated `BuiltIn WorkgroupSize`. An `OpSpecConstantOp` part is
+    /// [`ConstRule::WorkgroupSizeOp`](crate::spirv::error::ConstRule::WorkgroupSizeOp). Valid
+    /// under Vulkan 1.2 without `maintenance4`, unlike `LocalSizeId`. A `GLCompute` entry declared
+    /// after it needs no local-size mode.
     pub fn workgroup_size(&mut self, x: ConstId, y: ConstId, z: ConstId) -> BResult<ConstId> {
         let u32_ = self.ty(Type::Int {
             width: 32,

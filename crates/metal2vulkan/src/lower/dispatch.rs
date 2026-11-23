@@ -13,14 +13,19 @@
 //! object and mesh threadgroups take separate sizes.
 //!
 //! **Deep threadgroups.** A kernel of the `Spec` form declares `SpecKey::DeepThreadgroup` ([`DispatchPlan::deep`]), under
-//! which its `WorkgroupSize` is `(sn, 1, 1)`, `sn = sx·sy·sz` (each part an `OpSpecConstantOp`
-//! select of the constants) and its position in the threadgroup `LocalInvocationIndex`
+//! which its `WorkgroupSize` is `(sn, 1, 1)`, `sn = sx·sy·sz`, and its position in the threadgroup
+//! `LocalInvocationIndex`
 //! unflattened over `(sx, sy, sz)`: Metal allows 1024 threads along `z`, where a device's
 //! `maxComputeWorkGroupSize[2]` may hold 64, and a threadgroup of at most 1024 threads in one row
 //! fits every device the profile serves. The linear index keeps its value, `x` fastest either
 //! way, and so does every builtin derived from it, the workgroup's and the grid's. The runtime
 //! sets it for a threadgroup deeper than [`DEEP_THREADGROUP`] alone, so a pipeline of any other
-//! size specializes it away.
+//! size specializes it away. Such a kernel's `WorkgroupSize` parts are the plain specialization
+//! constants `SpecKey::WorkgroupSize`, which the runtime writes with every other key the
+//! threadgroup decides from [`threadgroup_constants`]: no `WorkgroupSize` part of any form is an
+//! `OpSpecConstantOp`
+//! (`ModuleBuilder::workgroup_size`), so the size a driver reads from the composite's parts as
+//! declared is the one the body computes with.
 //!
 //! **Builtins** ([`KernelBuiltin`]). Every Metal kernel builtin derives from a handful of Vulkan
 //! ones and the linear local index `lin`:
@@ -189,13 +194,13 @@ use crate::lower::arith;
 use crate::lower::emit::EmitCx;
 use crate::lower::select::{Plan, SelectCx};
 use crate::pipeline::facts::RuntimeFact;
-use crate::pipeline::sym::{DispatchKeys, PushField, SpecKey};
+use crate::pipeline::sym::{Axis, DispatchKeys, PushField, SpecKey};
 use crate::spirv::builder::constructs::{ArmEnd, ArmFn};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
 use crate::spirv::ids::{ConstId, DemoteTy, GlobalId, ScalarTy, TypeId, Value as SValue};
 use crate::spirv::ir::{
-    BinOp, ConstBits, Constant, ConvOp, ExecMode, GlslOp, IoDir, MemAccess, SpecOp, Type, UnOp,
+    BinOp, ConstBits, Constant, ConvOp, ExecMode, GlslOp, IoDir, MemAccess, Type, UnOp,
 };
 
 /// The builder's error for a value the declarations do not hold.
@@ -1125,6 +1130,35 @@ pub const GRID_TILE_THREADS: u32 = 256;
 /// of the devices that profile serves (Vulkan's own minimum).
 pub const DEEP_THREADGROUP: u32 = 64;
 
+/// Every specialization constant a kernel's threadgroup of `size` decides, as `(key, value)`:
+/// its `LocalSize` on each axis, its `FlatLocalSize` (`x·y·z`), its `DeepThreadgroup` (1 where it
+/// is deeper than [`DEEP_THREADGROUP`], which then runs as one row of its threads) and the
+/// `WorkgroupSize` part on each axis of the Vulkan workgroup it runs as, `[x·y·z, 1, 1]` where it
+/// is deep, else `size`. A runtime writes each of these keys a kernel's stage declares from this
+/// call, and none by hand: a kernel that declares `DeepThreadgroup` takes its workgroup from the
+/// `WorkgroupSize` parts alone, plain specialization constants, so one given its `LocalSize`
+/// without them would run at their defaults. An object function's threadgroup has keys of its own
+/// (`SpecKey::ObjectLocalSize`), which this does not answer.
+pub fn threadgroup_constants(size: [u32; 3]) -> [(SpecKey, u64); 8] {
+    let [x, y, z] = size;
+    let threads = x.saturating_mul(y).saturating_mul(z);
+    let deep = z > DEEP_THREADGROUP;
+    let [wx, wy, wz] = match deep {
+        true => [threads, 1, 1],
+        false => size,
+    };
+    [
+        (SpecKey::LocalSize(Axis::X), u64::from(x)),
+        (SpecKey::LocalSize(Axis::Y), u64::from(y)),
+        (SpecKey::LocalSize(Axis::Z), u64::from(z)),
+        (SpecKey::FlatLocalSize, u64::from(threads)),
+        (SpecKey::DeepThreadgroup, u64::from(deep)),
+        (SpecKey::WorkgroupSize(Axis::X), u64::from(wx)),
+        (SpecKey::WorkgroupSize(Axis::Y), u64::from(wy)),
+        (SpecKey::WorkgroupSize(Axis::Z), u64::from(wz)),
+    ]
+}
+
 /// The tile a kernel's grid tiles (`RuntimeFact::GridTiles`) cover a grid of `threads` with: sides
 /// `2^a, 2^b, 2^c` with `a + b + c = 8`, so that one workgroup of [`GRID_TILE_THREADS`] is one
 /// tile, dispatched as `⌈threads / tile⌉` workgroups per axis. Of every such tile it is the first
@@ -1241,14 +1275,12 @@ impl KernelDecl {
             LocalSizeForm::Spec if dp.deep => {
                 let b = mb.ty(Type::Bool)?;
                 let one_row = mb.spec(SpecKey::DeepThreadgroup, b, ConstBits(0))?;
-                let row = mb.spec_op(SpecOp::IMul, u32_, &[size[0], size[1]])?;
-                let sn = mb.spec_op(SpecOp::IMul, u32_, &[row, size[2]])?;
-                let one = mb.constant(Constant::Scalar {
-                    ty: u32_,
-                    bits: ConstBits(1),
-                })?;
-                let [x, y, z] = [(sn, size[0]), (one, size[1]), (one, size[2])]
-                    .map(|(deep, own)| mb.spec_op(SpecOp::Select, u32_, &[one_row, deep, own]));
+                // The workgroup's sides, which the runtime writes from `threadgroup_constants`
+                // beside `sx, sy, sz` and `one_row`: plain constants, at the threadgroup's
+                // defaults.
+                let [x, y, z] = [(Axis::X, dx), (Axis::Y, dy), (Axis::Z, dz)].map(|(axis, d)| {
+                    mb.spec(SpecKey::WorkgroupSize(axis), u32_, ConstBits(u64::from(d)))
+                });
                 deep = Some(one_row);
                 mb.workgroup_size(x?, y?, z?)?
             }
