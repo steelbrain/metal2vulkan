@@ -277,6 +277,9 @@ struct Facts {
     /// 0, and the whole execution range's where the vertex function reads an execution range
     /// (`Ring::whole`), else 0.
     nil: (u64, u64, u64),
+    /// The draw's push carries a storage texture's level count or first level element
+    /// ([`FieldValue::TextureLevels`], [`FieldValue::TextureLevelBase`]).
+    levels: bool,
 }
 
 impl Facts {
@@ -369,6 +372,12 @@ impl Facts {
                 texture.hold_levels()?;
             }
         }
+        self.levels = (draws.fields.iter()).any(|&(_, _, value)| {
+            matches!(
+                value,
+                FieldValue::TextureLevels(_) | FieldValue::TextureLevelBase(_)
+            )
+        });
         self.attachments = !draws.fetched.is_empty()
             || (draws.textures.iter()).any(|&(table, slot, _)| {
                 tables[table].texture(slot).is_some_and(|texture| {
@@ -2731,6 +2740,9 @@ impl RenderCommandEncoder {
             building.keep_block(buffer.records());
             building.keep_executed(executed);
             building.pushes_lost();
+        }
+        if self.facts.levels {
+            building.count(Metric::LevelFieldCommands);
         }
         Ok(())
     }

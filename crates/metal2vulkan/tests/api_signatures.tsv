@@ -1475,6 +1475,7 @@ field	metal2vulkan-runtime::Metrics.image_binds	pub image_binds: Timed
 field	metal2vulkan-runtime::Metrics.image_creates	pub image_creates: Timed
 field	metal2vulkan-runtime::Metrics.image_view_creates	pub image_view_creates: Timed
 field	metal2vulkan-runtime::Metrics.kernel_makes_dropped	pub kernel_makes_dropped: u64
+field	metal2vulkan-runtime::Metrics.level_field_commands	pub level_field_commands: u64
 field	metal2vulkan-runtime::Metrics.long_take_zero_writes	pub long_take_zero_writes: Timed
 field	metal2vulkan-runtime::Metrics.made_ahead_variant_nanos	pub made_ahead_variant_nanos: u64
 field	metal2vulkan-runtime::Metrics.made_ahead_variants	pub made_ahead_variants: u64

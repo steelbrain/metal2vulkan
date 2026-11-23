@@ -297,6 +297,10 @@ struct DispatchFacts {
     /// took for the view's format alone ([`TextureObject::extended_view`]), found with the
     /// alignments.
     extended: bool,
+    /// The kernel's push carries a storage texture's level count or first level element
+    /// ([`FieldValue::TextureLevels`], [`FieldValue::TextureLevelBase`]), found with the
+    /// alignments.
+    levels: bool,
 }
 
 /// Which of its state's modules a dispatch runs.
@@ -1111,13 +1115,20 @@ impl ComputeCommandEncoder {
             }
             // The run of level elements of each texture the kernel writes or reads at a level
             // other than the constant 0, which its push names.
+            let mut levels = false;
             for field in &interface.fields {
-                if let FieldValue::TextureLevelBase(slot) = field.value {
-                    if let Some(Some(texture)) = self.textures.get(slot as usize) {
-                        texture.hold_levels()?;
+                match field.value {
+                    FieldValue::TextureLevelBase(slot) => {
+                        if let Some(Some(texture)) = self.textures.get(slot as usize) {
+                            texture.hold_levels()?;
+                        }
+                        levels = true;
                     }
+                    FieldValue::TextureLevels(_) => levels = true,
+                    _ => {}
                 }
             }
+            self.facts.levels = levels;
             self.facts.extended = (interface.textures.iter()).any(|&(slot, access)| {
                 access.writes()
                     && matches!(self.textures.get(slot as usize), Some(Some(t)) if t.extended_view())
@@ -1345,6 +1356,9 @@ impl ComputeCommandEncoder {
         }
         if recorded.is_ok() && self.facts.extended {
             recording(&mut self.building).count(Metric::ExtendedViewDispatches);
+        }
+        if recorded.is_ok() && self.facts.levels {
+            recording(&mut self.building).count(Metric::LevelFieldCommands);
         }
         recorded
     }

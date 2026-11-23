@@ -233,6 +233,8 @@ pub(crate) enum Metric {
     PartialVariantRaggedGrids,
     /// [`Metrics::extended_view_dispatches`].
     ExtendedViewDispatches,
+    /// [`Metrics::level_field_commands`].
+    LevelFieldCommands,
     /// [`Metrics::private_arena_pieces`].
     PrivateArenaPieces,
     /// [`Metrics::private_arena_blocks`].
@@ -329,6 +331,7 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::PartialVariantWholeGrids,
     Metric::PartialVariantRaggedGrids,
     Metric::ExtendedViewDispatches,
+    Metric::LevelFieldCommands,
     Metric::PrivateArenaPieces,
     Metric::PrivateArenaBlocks,
     Metric::Translations,
@@ -713,6 +716,7 @@ struct Atomics {
     partial_variant_whole_grids: AtomicU64,
     partial_variant_ragged_grids: AtomicU64,
     extended_view_dispatches: AtomicU64,
+    level_field_commands: AtomicU64,
     private_arena_pieces: AtomicU64,
     private_arena_blocks: AtomicU64,
     shared_long_reuses: AtomicU64,
@@ -920,6 +924,7 @@ impl Counters {
             Metric::PartialVariantWholeGrids => &a.partial_variant_whole_grids,
             Metric::PartialVariantRaggedGrids => &a.partial_variant_ragged_grids,
             Metric::ExtendedViewDispatches => &a.extended_view_dispatches,
+            Metric::LevelFieldCommands => &a.level_field_commands,
             Metric::PrivateArenaPieces => &a.private_arena_pieces,
             Metric::PrivateArenaBlocks => &a.private_arena_blocks,
             Metric::Translations => &a.translations,
@@ -1800,6 +1805,7 @@ impl Counters {
             partial_variant_whole_grids: a.partial_variant_whole_grids.load(Relaxed),
             partial_variant_ragged_grids: a.partial_variant_ragged_grids.load(Relaxed),
             extended_view_dispatches: a.extended_view_dispatches.load(Relaxed),
+            level_field_commands: a.level_field_commands.load(Relaxed),
             private_arena_pieces: a.private_arena_pieces.load(Relaxed),
             private_arena_blocks: a.private_arena_blocks.load(Relaxed),
             translations: a.translations.load(Relaxed),
@@ -2433,6 +2439,14 @@ pub struct Metrics {
     /// `VK_IMAGE_CREATE_EXTENDED_USAGE_BIT` for a format it lists that the device stores (an 8-bit
     /// sRGB texture's unorm view). No Metal counterpart: Metal writes any view of such a texture.
     pub extended_view_dispatches: u64,
+    /// Dispatches and draws whose push carried a storage texture's level fields: the level
+    /// count of a `write` or `read_write` texture a function asks `get_num_mip_levels` of or
+    /// writes or reads at a level other than the constant 0, and for such a write or read the
+    /// first of the texture's level elements, the single-level storage views the runtime keeps
+    /// for each of its levels in the storage array of the identity domains
+    /// (`docs/RESOURCE-ID.md`). No Metal counterpart: Metal reads a texture's levels from the
+    /// texture.
+    pub level_field_commands: u64,
     /// Functions the translator lowered, each a module of a pipeline content the device did not
     /// hold compiled: of a compute content, one for its partial-threadgroups variant, one more for
     /// the plain module of an observing kernel, which its state keeps beside the variant, and one

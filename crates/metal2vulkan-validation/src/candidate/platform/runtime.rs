@@ -507,6 +507,7 @@ fn run(
         case_id: case_id.into(),
         module_sha256: sha256_bytes(kernel.bitcode),
     };
+    let levels = device.counters().metrics().level_field_commands;
     with_submission_label(label, || {
         dispatched(
             device,
@@ -517,6 +518,12 @@ fn run(
             (dispatch, threads_per_group),
         )
     })?;
+    // The evidence that the dispatch pushed a storage texture's level fields
+    // (`Metrics::level_field_commands`), which nothing in the row reads.
+    let levels = device.counters().metrics().level_field_commands - levels;
+    if levels > 0 {
+        eprintln!("level fields: {case_id}: {levels} dispatches pushed a texture's level fields");
+    }
     // A texture output is read back as the oracle reads one; a run through the runtime binds no
     // attachment.
     let output = match case.output {

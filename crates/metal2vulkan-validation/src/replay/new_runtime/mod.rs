@@ -3111,6 +3111,7 @@ impl Backend for NewRuntime {
                 "partial_variant_whole_grids",
                 metrics.partial_variant_whole_grids,
             ),
+            ("level_field_commands", metrics.level_field_commands),
             ("blocks_made", metrics.blocks_made),
             ("block_bytes_made", metrics.block_bytes_made),
             ("shared_long_reuses", metrics.shared_long_reuses),

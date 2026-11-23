@@ -1328,6 +1328,8 @@ made, with no lock, and never rewritten for layouts.
   (`Gauges::level_elements`). A texture bound so when every run is held, or one of more than 16
   levels, past any texture Metal makes, is `Limit::LevelElements`, and the dispatch or draw
   does not run. No grant and no resource ID reaches the level elements.
+  `Metrics::level_field_commands` counts the dispatches and draws that push a texture's level
+  count, these and those of a function that asks `get_num_mip_levels` of a storage texture.
 - A shader masks the index of a texture ID it reads from an argument buffer to its low 16 bits,
   so a bad ID there reads the element at `index & 0xFFFF`, never one outside the arrays. A slot's
   index is the runtime's own push, unmasked, and no argument buffer's ID reaches the feedback

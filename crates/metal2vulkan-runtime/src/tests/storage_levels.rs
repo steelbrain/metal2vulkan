@@ -19,13 +19,18 @@
 //!   dispatch is `Limit::LevelElements { max: 4096 }`, holding no run; once the first texture is
 //!   released and its command buffer has retired, the 4,097th's dispatch runs. Every run is back
 //!   once the device is gone ([`each_device`]'s gauges).
+//! - `Metrics::level_field_commands` counts each dispatch and draw that pushes a texture's level
+//!   fields: one dispatch of the writing kernel, then one of a kernel that stores
+//!   `get_num_mip_levels` of a `texture2d<float, write>` (which answers 4), each one more; and the
+//!   two draws at levels 1 and 2 above, and the one at 5, three more.
 //!
 //! `llvm-as` assembles the functions; without it each test skips visibly.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::error::{Error, Limit};
-    use crate::tests::command::on_device::{each_device, finished, within};
+    use crate::tests::command::on_device::{each_device, finished, within, Arena};
+    use crate::tests::compute::on_device::words;
     use crate::tests::draw::on_device::{examples, pass, run, state as render_state, target};
     use crate::tests::draw::on_device::{vertices, Buffers};
     use crate::{
@@ -102,6 +107,32 @@ declare void @air.write_texture_2d.v4f32(ptr addrspace(1), <2 x i32>, <4 x float
 !8 = !{!"Metal", i32 4, i32 0, i32 0}
 "#;
 
+    /// `level_count`: a kernel over `texture2d<float, write> t [[texture(0)]]` and `device uint
+    /// &out [[buffer(1)]]` that stores `t.get_num_mip_levels()` in `out`.
+    const LEVEL_COUNT: &str = r#"target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
+target triple = "air64_v28-apple-macosx26.0.0"
+
+define void @level_count(ptr addrspace(1) %t, ptr addrspace(1) noundef "air-buffer-no-alias" %out) {
+entry:
+  %n = tail call i32 @air.get_num_mip_levels_texture_2d(ptr addrspace(1) %t)
+  store i32 %n, ptr addrspace(1) %out, align 4
+  ret void
+}
+
+declare i32 @air.get_num_mip_levels_texture_2d(ptr addrspace(1))
+
+!air.kernel = !{!0}
+!air.version = !{!7}
+!air.language_version = !{!8}
+!0 = !{ptr @level_count, !1, !2}
+!1 = !{}
+!2 = !{!3, !4}
+!3 = !{i32 0, !"air.texture", !"air.location_index", i32 0, i32 1, !"air.write", !"air.arg_type_name", !"texture2d<float, write>", !"air.arg_name", !"t"}
+!4 = !{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"out"}
+!7 = !{i32 2, i32 8, i32 0}
+!8 = !{!"Metal", i32 4, i32 0, i32 0}
+"#;
+
     /// The texture's side, and its levels.
     const SIDE: u32 = 8;
     const LEVELS: u32 = 4;
@@ -118,14 +149,24 @@ declare void @air.write_texture_2d.v4f32(ptr addrspace(1), <2 x i32>, <4 x float
         }
     }
 
-    /// The kernel's state.
-    fn state(name: &str, device: &Device, library: &Library) -> ComputePipelineState {
-        let function = library.function("level_write").expect("the kernel");
+    /// The state of `library`'s kernel `kernel`.
+    fn kernel_state(
+        name: &str,
+        device: &Device,
+        library: &Library,
+        kernel: &str,
+    ) -> ComputePipelineState {
+        let function = library.function(kernel).expect("the kernel");
         let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
             FunctionDescriptor::new(function),
         ));
         (device.new_compute_pipeline_state(&descriptor, |samplers| Ok(vec![0; samplers.len()])))
             .unwrap_or_else(|error| panic!("{name}: {error}"))
+    }
+
+    /// The writing kernel's state.
+    fn state(name: &str, device: &Device, library: &Library) -> ComputePipelineState {
+        kernel_state(name, device, library, "level_write")
     }
 
     /// The side of level `level`.
@@ -252,6 +293,49 @@ declare void @air.write_texture_2d.v4f32(ptr addrspace(1), <2 x i32>, <4 x float
     }
 
     #[test]
+    fn every_device_counts_the_dispatches_that_push_level_fields() {
+        let (Some(writes), Some(counts)) = (library(LEVEL_WRITE), library(LEVEL_COUNT)) else {
+            return;
+        };
+        each_device("storage_levels_counted", |name, _, device| {
+            let counters = device.counters();
+            let pushed = || counters.metrics().level_field_commands;
+            let writes = state(name, &device, &writes);
+            let counts = kernel_state(name, &device, &counts, "level_count");
+            let _grant = (device.grant_indices(IndexClass::Texture, 1, 1))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let texture = filled(name, &device, 1);
+            // The arena keeps the buffer's block.
+            let mut arena = Arena::new(&device);
+            let out = arena.buffer();
+            let queue = device.new_command_queue(1).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let call = |result: Result<(), Error>| {
+                result.unwrap_or_else(|error| panic!("{name}: {error}"))
+            };
+            let before = pushed();
+            let mut encoder = (command_buffer.compute_command_encoder(DispatchType::Serial))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            call(encoder.set_compute_pipeline_state(&writes));
+            call(dispatch(&mut encoder, Some(&texture), 1, side(1)));
+            encoder.end_encoding();
+            assert_eq!(pushed() - before, 1, "{name}: the level write");
+            let mut encoder = (command_buffer.compute_command_encoder(DispatchType::Serial))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            call(encoder.set_compute_pipeline_state(&counts));
+            call(encoder.set_texture(Some(&texture), 0));
+            call(encoder.set_buffer(Some(&out), 0, 1));
+            call(encoder.dispatch_threads([1, 1, 1], [1, 1, 1]));
+            encoder.end_encoding();
+            assert_eq!(pushed() - before, 2, "{name}: the level count");
+            command_buffer.commit().expect("a commit");
+            finished(name, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+            assert_eq!(words(&out)[0], LEVELS, "{name}: get_num_mip_levels");
+        });
+    }
+
+    #[test]
     fn every_device_drops_a_write_past_the_level_count_and_at_nil() {
         let Some(library) = library(LEVEL_WRITE) else {
             return;
@@ -359,6 +443,8 @@ declare void @air.write_texture_2d.v4f32(ptr addrspace(1), <2 x i32>, <4 x float
         descriptor.color_attachments[0] =
             Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
         each_device("storage_levels_draw", |name, _, device| {
+            let counters = device.counters();
+            let pushed = || counters.metrics().level_field_commands;
             let state = render_state(name, &device, &descriptor);
             let _grant = (device.grant_indices(IndexClass::Texture, 1, 1))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -381,11 +467,13 @@ declare void @air.write_texture_2d.v4f32(ptr addrspace(1), <2 x i32>, <4 x float
             call(encoder.set_vertex_buffer(Some(&positions), 0, 0));
             call(encoder.set_vertex_buffer(Some(&colors), 0, 1));
             call(encoder.set_fragment_texture(Some(&texture), 0));
+            let before = pushed();
             for level in [1u32, 2, 5] {
                 call(encoder.set_fragment_bytes(&level.to_le_bytes(), 0));
                 call(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));
             }
             encoder.end_encoding();
+            assert_eq!(pushed() - before, 3, "{name}: the draws");
             run(name, &command_buffer);
             holds(name, &texture, |level, x, y| match (level, x, y) {
                 (1 | 2, 0, 0) => [1.0, 2.0, level as f32, 1.0],
