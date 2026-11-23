@@ -45,14 +45,15 @@
 //!   region kept and each result plain Metal's (job m3-max-43555); one copy into a Shared buffer
 //!   alone is one submission and three barriers, the segment's end reaching the host, and copies
 //!   no byte of the runtime's own.
-//! - A copy between buffers takes ranges inside both buffers (`Refusal::BufferCopyRange`), both
-//!   offsets and the size multiples of 4 (`Refusal::BufferCopyUnaligned`), and a source and a
-//!   destination that share no byte (`Refusal::BufferCopyOverlap`), one buffer's ranges or two
-//!   buffers' in one block; a size of 0 copies nothing. Under a device cfg its bytes land where
-//!   it names, between two buffers of one block and within one buffer, everything around them
-//!   kept, at one submission and three barriers alone, copying no byte of the runtime's own; a
-//!   copy into a Managed buffer lands in the bytes shaders reach, which a synchronize brings to
-//!   the host.
+//! - A copy between buffers takes ranges inside both buffers (`Refusal::BufferCopyRange`), at any
+//!   offsets and of any size, and a source and a destination that share no byte
+//!   (`Refusal::BufferCopyOverlap`), one buffer's ranges or two buffers' in one block; a size of 0
+//!   copies nothing. Under a device cfg its bytes land where it names, between two buffers of one
+//!   block and within one buffer, everything around them kept, at one submission and three
+//!   barriers alone, copying no byte of the runtime's own; at offsets and sizes of no whole words
+//!   too, each byte of the range and no other, as plain Metal's copy (probe
+//!   `blit_buffer_copy_unaligned.m`, jobs m3-max-69613 and m3-max-69614); a copy into a Managed
+//!   buffer lands in the bytes shaders reach, which a synchronize brings to the host.
 //! - A fill takes a range of whole words inside the buffer: an empty range or one past the end is
 //!   `Refusal::FillRange`, one of no whole words `Gap::FillAlignment`. Under a device cfg its
 //!   bytes are plain Metal's (probe `blit_fill_rules.m`, job m3-max-43571), at one submission and
@@ -1065,7 +1066,7 @@ fn a_layout_metal_stops_is_refused_and_one_a_copy_command_cannot_address_is_a_ga
 }
 
 #[test]
-fn a_copy_between_buffers_takes_words_inside_both_that_share_no_byte() {
+fn a_copy_between_buffers_takes_ranges_inside_both_that_share_no_byte() {
     use ash::vk::Handle;
     let one = vk::Buffer::from_raw(1);
     let span = |buffer, base, len| Span { buffer, base, len };
@@ -1131,20 +1132,20 @@ fn a_copy_between_buffers_takes_words_inside_both_that_share_no_byte() {
         },
         "the destination"
     );
-    for (from, to, size) in [(2, 0, 4), (0, 2, 4), (0, 0, 6)] {
+    // Any offsets and any size: the region is the copy's own bytes.
+    for (from, to, size) in [(2, 0, 4), (0, 2, 4), (0, 0, 6), (3, 5, 1)] {
+        let region = buffer_to_buffer(
+            span(one, 256, 64),
+            from,
+            span(vk::Buffer::from_raw(2), 0, 64),
+            to,
+            size,
+        )
+        .expect("a copy")
+        .expect("a region");
         assert_eq!(
-            refused(buffer_to_buffer(
-                span(one, 0, 64),
-                from,
-                span(vk::Buffer::from_raw(2), 0, 64),
-                to,
-                size
-            )),
-            Refusal::BufferCopyUnaligned {
-                source_offset: from,
-                destination_offset: to,
-                size
-            },
+            (region.src_offset, region.dst_offset, region.size),
+            (256 + from, to, size),
             "{from} {to} {size}"
         );
     }
@@ -2794,6 +2795,54 @@ pub(crate) mod on_device {
                 read(&destination)[0..32],
                 "{name}: into a Managed buffer (device copy: {copied})"
             );
+        });
+    }
+
+    /// A copy between buffers at offsets and of sizes of no whole words lands each byte of its
+    /// range and no other, as plain Metal's copy does on macOS (probe
+    /// `blit_buffer_copy_unaligned.m` in the conformance crate: each of these copies exact on an
+    /// Apple M3 Max, macOS 27.0.1, job m3-max-69613, and on an AMD Radeon Pro 5300M and an Intel
+    /// UHD Graphics 630, macOS 26.7.1, job m3-max-69614).
+    #[test]
+    fn every_device_copies_between_buffers_at_any_offset_and_size() {
+        const LEN: u64 = 65_536;
+        each_device("blit_buffer_any_offset", |name, _, device| {
+            let block = (device.take_block(MemoryClass::Shared, 2 * LEN)).expect("a Shared block");
+            let source = (device.new_buffer(block.id, 0, LEN, Some(0))).expect("a buffer");
+            let destination = (device.new_buffer(block.id, LEN, LEN, Some(0))).expect("a buffer");
+            let (from, into) = (pattern(LEN as usize, 31), pattern(LEN as usize, 47));
+            let queue = device.new_command_queue(4).expect("a queue");
+            for (at, to, size) in [
+                (0, 0, 62_302),
+                (0, 0, 1),
+                (0, 0, 3),
+                (1, 0, 8),
+                (0, 2, 8),
+                (3, 5, 4097),
+            ] {
+                write(&source, &from);
+                write(&destination, &into);
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
+                encoder
+                    .copy_from_buffer_to_buffer(&source, at, &destination, to, size)
+                    .unwrap_or_else(|error| panic!("{name}: {at} {to} {size}: {error}"));
+                encoder.end_encoding();
+                run(name, &command_buffer);
+                let (at, to, size) = (at as usize, to as usize, size as usize);
+                let mut want = into.clone();
+                want[to..to + size].copy_from_slice(&from[at..at + size]);
+                let got = read(&destination);
+                let differs = got.iter().zip(&want).position(|(got, want)| got != want);
+                assert_eq!(
+                    differs, None,
+                    "{name}: {at} {to} {size}: a byte that differs"
+                );
+                assert!(
+                    read(&source) == from,
+                    "{name}: {at} {to} {size}: the source"
+                );
+            }
         });
     }
 

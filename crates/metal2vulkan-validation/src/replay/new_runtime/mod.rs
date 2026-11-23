@@ -1246,8 +1246,7 @@ impl NewRuntime {
     /// The bytes of `buffer`, a Private buffer, which has no `contents`, or the device copy of a
     /// Managed one, which `contents` does not answer (`reading_device_copies`): a blit copies them into
     /// a Shared buffer of the play's own, on a queue of its own (`reads`), and the read waits for
-    /// it. The player reads only after the work that writes the buffer completed. A length that is
-    /// not a multiple of 4 is the copy's own refusal (`rt::Refusal::BufferCopyUnaligned`).
+    /// it. The player reads only after the work that writes the buffer completed.
     fn private_bytes(&mut self, buffer: &rt::Buffer) -> Result<Vec<u8>, rt::Error> {
         let length = buffer.length();
         if length == 0 {

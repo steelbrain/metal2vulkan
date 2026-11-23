@@ -188,7 +188,7 @@ impl NewRuntime {
     /// `call.receiver`: the pieces gathered by the CPU into a Shared scratch of the play's own,
     /// laid out as the target's bytes they span, and one copy into the target owed before the
     /// command buffer's commit; then a surface's texels under those bytes, in the encoder
-    /// (`surfaces`). A buffer copy takes whole 4-byte words at 4-byte offsets: the bytes of those
+    /// (`surfaces`). The copy moves whole 4-byte words at 4-byte offsets: the bytes of those
     /// words no piece carries (a piece's edges, the gaps between pieces) come from the target's
     /// mapping where it has one, as they stand. Into a target with none, a piece with such edges
     /// is skipped and counted (`skipped_guest_ram_writes`), and the copy is one for each run of

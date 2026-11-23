@@ -31,7 +31,7 @@ Columns:
 | Rate maps the compile layer does not compile | 5 | 5 | 0 | 0 | 4 | 1 | 0 |
 | The translation deadline | 1 | 1 | 0 | 0 | 0 | 1 | 0 |
 | Devices below the runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
-| The runtime's `Refusal` | 84 | 84 | 0 | 0 | 0 | 0 | 0 |
+| The runtime's `Refusal` | 83 | 83 | 0 | 0 | 0 | 0 | 0 |
 | The runtime's `Limit` | 17 | 17 | 0 | 0 | 0 | 0 | 0 |
 | The runtime's `Gap` | 33 | 33 | 0 | 0 | 0 | 0 | 0 |
 
@@ -44,7 +44,7 @@ Columns:
 | Rate maps the compile layer does not compile | 0 | 0 | 0 | 0 | 5 | 0 | 0 | 0 |
 | The translation deadline | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 |
 | Devices below the runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
-| The runtime's `Refusal` | 22 | 26 | 0 | 0 | 36 | 0 | 0 | 0 |
+| The runtime's `Refusal` | 22 | 25 | 0 | 0 | 36 | 0 | 0 | 0 |
 | The runtime's `Limit` | 0 | 0 | 0 | 13 | 4 | 0 | 0 | 0 |
 | The runtime's `Gap` | 0 | 0 | 0 | 3 | 30 | 0 | 0 | 0 |
 
@@ -291,7 +291,6 @@ Columns:
 | `DrawableNotAcquired` | `CommandBuffer::present_drawable` of a drawable not acquired since its last present, or one a command buffer not yet committed already presents | every device (a public call's own check of its arguments) | `ours`: a swapchain's image is presented once for each acquire | 1: `crates/metal2vulkan-runtime/src/texture.rs (present_turn)` | `-` |
 | `DrawableSemaphoreRepeated` | `CommandBuffer::present_drawable` with a semaphore the command buffer already signals for another drawable | every device (a public call's own check of its arguments) | `ours`: Vulkan signals a binary semaphore only while it is unsignalled, and each present waits on a semaphore of its own | 1: `crates/metal2vulkan-runtime/src/command.rs (present_drawable)` | `-` |
 | `BufferCopyRange` | A copy between buffers (`BlitCommandEncoder::copy_from_buffer_to_buffer`) whose range, `size` bytes from `offset`, leaves the source or the... | every device (a public call's own check of its arguments) | `metal-documented`: Metal's validation stops a copy past either buffer's length | 1: `crates/metal2vulkan-runtime/src/blit.rs (buffer_to_buffer)` | `-` |
-| `BufferCopyUnaligned` | A copy between buffers whose source offset, destination offset or size is not a multiple of 4 | every device (a public call's own check of its arguments) | `metal-documented`: `copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:`: on macOS both offsets and the size are multiples of 4 | 1: `crates/metal2vulkan-runtime/src/blit.rs (buffer_to_buffer)` | `-` |
 | `BufferCopyOverlap` | A copy between buffers whose source and destination share bytes | every device (a public call's own check of its arguments) | `ours`: Metal states no result for such a copy, and `vkCmdCopyBuffer` reads no byte it also writes, `VUID-vkCmdCopyBuffer-pRegions-00117`; the runtime does not emulate one | 1: `crates/metal2vulkan-runtime/src/blit.rs (buffer_to_buffer)` | `-` |
 | `AttachmentUsage` | A render pass attachment (`CommandBuffer::render_command_encoder`) whose texture was made without `RenderTarget` usage | every device (a public call's own check of its arguments) | `metal-documented`: a texture a render pass renders into needs `MTLTextureUsageRenderTarget`; Metal's validation stops the descriptor | 1: `crates/metal2vulkan-runtime/src/texture.rs (attachment)` | `-` |
 | `ResolveTexture` | A store action that resolves (`MultisampleResolve` or `StoreAndMultisampleResolve`), on a render pass attachment or set by its encoder, for an... | every device (a public call's own check of its arguments) | `metal-documented`: `MTLRenderPass.h`: `resolveTexture` is "Only used (and required) if the store action is set to MTLStoreActionMultisampleResolve" | 2: `crates/metal2vulkan-runtime/src/pass.rs (resolving)`, `crates/metal2vulkan-runtime/src/render_encoder.rs (later_store)` | `-` |
@@ -582,7 +581,6 @@ Each refusal's sites, with the function that builds it.
 - `rt:Refusal::DrawableNotAcquired`: `crates/metal2vulkan-runtime/src/texture.rs (present_turn)`
 - `rt:Refusal::DrawableSemaphoreRepeated`: `crates/metal2vulkan-runtime/src/command.rs (present_drawable)`
 - `rt:Refusal::BufferCopyRange`: `crates/metal2vulkan-runtime/src/blit.rs (buffer_to_buffer)`
-- `rt:Refusal::BufferCopyUnaligned`: `crates/metal2vulkan-runtime/src/blit.rs (buffer_to_buffer)`
 - `rt:Refusal::BufferCopyOverlap`: `crates/metal2vulkan-runtime/src/blit.rs (buffer_to_buffer)`
 - `rt:Refusal::AttachmentUsage`: `crates/metal2vulkan-runtime/src/texture.rs (attachment)`
 - `rt:Refusal::ResolveTexture`: `crates/metal2vulkan-runtime/src/pass.rs (resolving)`; `crates/metal2vulkan-runtime/src/render_encoder.rs (later_store)`

@@ -2566,9 +2566,13 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
 - `copy_from_buffer_to_buffer` is `copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:`:
   one `vkCmdCopyBuffer` region between the bytes shaders reach (a Managed buffer's device copy,
   where the device keeps one), between the same two barriers as a fill, a copy into a Shared
-  buffer marking the segment as a copy into one does. A size of 0 copies nothing. Refused, as
-  Metal's validation stops them: a range past either buffer's end (`Refusal::BufferCopyRange`),
-  and on macOS an offset or a size that is not a multiple of 4 (`Refusal::BufferCopyUnaligned`).
+  buffer marking the segment as a copy into one does. A size of 0 copies nothing. Any offsets and
+  any size copy, each byte of the range and no other: Apple's page for the call asks for
+  multiples of 4 on macOS, and plain Metal copies such a range exactly (an Apple M3 Max on macOS
+  27.0.1, its validation layer on as well, which took the copies without a word, job
+  m3-max-69613; an AMD Radeon Pro 5300M and an Intel UHD Graphics 630 on macOS 26.7.1, job
+  m3-max-69614; probe `blit_buffer_copy_unaligned.m` in the conformance crate). Refused, as
+  Metal's validation stops it: a range past either buffer's end (`Refusal::BufferCopyRange`).
   Refused too: a source and a destination that share bytes, one buffer's overlapping ranges or
   two buffers that overlap in one block (`Refusal::BufferCopyOverlap`), which `vkCmdCopyBuffer`
   forbids and the runtime does not emulate.

@@ -8513,7 +8513,6 @@ variant	metal2vulkan-runtime::Refusal::AttachmentUsage	AttachmentUsage { pixel_f
 variant	metal2vulkan-runtime::Refusal::BufferCopyLayout	BufferCopyLayout { offset: u64, bytes_per_row: u64, bytes_per_image: u64, len: u64 }
 variant	metal2vulkan-runtime::Refusal::BufferCopyOverlap	BufferCopyOverlap { source_offset: u64, destination_offset: u64, size: u64 }
 variant	metal2vulkan-runtime::Refusal::BufferCopyRange	BufferCopyRange { offset: u64, size: u64, len: u64 }
-variant	metal2vulkan-runtime::Refusal::BufferCopyUnaligned	BufferCopyUnaligned { source_offset: u64, destination_offset: u64, size: u64 }
 variant	metal2vulkan-runtime::Refusal::BufferIndex	BufferIndex { index: u32 }
 variant	metal2vulkan-runtime::Refusal::BufferOffsetAlignment	BufferOffsetAlignment { index: u32, offset: u64, alignment: u64 }
 variant	metal2vulkan-runtime::Refusal::BufferPastBlock	BufferPastBlock { offset: u64, length: u64, block_len: u64 }

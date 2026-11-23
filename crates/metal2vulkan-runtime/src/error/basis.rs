@@ -75,7 +75,6 @@ impl Refusal {
             Refusal::DrawableNotAcquired => RefusalBasis::Ours,
             Refusal::DrawableSemaphoreRepeated => RefusalBasis::Ours,
             Refusal::BufferCopyRange { .. } => RefusalBasis::MetalDocumented,
-            Refusal::BufferCopyUnaligned { .. } => RefusalBasis::MetalDocumented,
             Refusal::BufferCopyOverlap { .. } => RefusalBasis::Ours,
             Refusal::AttachmentUsage { .. } => RefusalBasis::MetalDocumented,
             Refusal::ResolveTexture => RefusalBasis::MetalDocumented,

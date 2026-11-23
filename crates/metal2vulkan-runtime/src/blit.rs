@@ -404,12 +404,13 @@ impl BlitCommandEncoder {
     /// `source_offset` in `source` to `destination_offset` in `destination`, one
     /// `vkCmdCopyBuffer` region between the bytes shaders reach (a Managed buffer's device copy,
     /// where the device keeps one), between a fill's two barriers. A size of 0 copies nothing. The
-    /// command buffer keeps both buffers until it retires.
+    /// command buffer keeps both buffers until it retires. Any offsets and any size copy, each byte
+    /// of the range and no other, as plain Metal's copy does on macOS though its documentation
+    /// asks for multiples of 4 there.
     ///
     /// Err: [`Refusal::OtherDevice`] for another device's buffer; [`Refusal::BufferCopyRange`] for
-    /// a range past either buffer's end; [`Refusal::BufferCopyUnaligned`] for an offset or a size
-    /// that is not a multiple of 4, as Metal's validation stops it on macOS;
-    /// [`Refusal::BufferCopyOverlap`] for a source and a destination that share bytes;
+    /// a range past either buffer's end; [`Refusal::BufferCopyOverlap`] for a source and a
+    /// destination that share bytes;
     /// [`Error::Vulkan`] where the command buffer cannot record.
     pub fn copy_from_buffer_to_buffer(
         &mut self,
@@ -1451,8 +1452,7 @@ impl Span {
 /// Checks a copy of `size` bytes from `source_offset` in `source` to `destination_offset` in
 /// `destination`: the region of `vkCmdCopyBuffer` to record, `None` for a size of 0.
 ///
-/// Err: [`Refusal::BufferCopyRange`]; [`Refusal::BufferCopyUnaligned`];
-/// [`Refusal::BufferCopyOverlap`].
+/// Err: [`Refusal::BufferCopyRange`]; [`Refusal::BufferCopyOverlap`].
 pub(crate) fn buffer_to_buffer(
     source: Span,
     source_offset: u64,
@@ -1468,13 +1468,6 @@ pub(crate) fn buffer_to_buffer(
                 len: span.len,
             }));
         }
-    }
-    if source_offset % 4 != 0 || destination_offset % 4 != 0 || size % 4 != 0 {
-        return Err(Error::Refused(Refusal::BufferCopyUnaligned {
-            source_offset,
-            destination_offset,
-            size,
-        }));
     }
     if size == 0 {
         return Ok(None);
