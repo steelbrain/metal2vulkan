@@ -222,6 +222,12 @@ pub(crate) struct RenderCompiled {
     stages: Vec<Module>,
     /// The fixed-function state every `VkPipeline` of the content takes.
     fixed: Fixed,
+    /// The create flags every `VkPipeline` of the content takes: the feedback loop's colour flag
+    /// where device creation enabled the attachment feedback loop (`Core::feedback_loop`), and
+    /// none otherwise. A state is made before any draw binds its textures, and which texture a
+    /// draw binds decides whether it reads an attachment of its pass, so every pipeline takes it;
+    /// a draw that reads none is valid with it.
+    pub(crate) flags: vk::PipelineCreateFlags,
     /// The content's main `VkPipeline`: the triangle class's, or a post-tessellation vertex
     /// function's patch class's, its only class, at the default [`Raster`].
     primary: Main,
@@ -1250,6 +1256,10 @@ impl RenderCompiled {
             core: Arc::clone(core),
             stages,
             fixed: Fixed::of(&pipeline),
+            flags: match core.feedback_loop {
+                true => vk::PipelineCreateFlags::COLOR_ATTACHMENT_FEEDBACK_LOOP_EXT,
+                false => vk::PipelineCreateFlags::empty(),
+            },
             primary: Main::default(),
             named: named.map(|list| (list, Main::default())),
             later: Mutex::new(Vec::new()),
@@ -1473,16 +1483,8 @@ impl RenderCompiled {
             .color_attachment_formats(&fixed.colors)
             .depth_attachment_format(fixed.depth)
             .stencil_attachment_format(fixed.stencil);
-        // Where the device reads attachments through the feedback loop, every pipeline may draw
-        // with a colour attachment in the feedback layout and read it through a texture: a state is
-        // made before any draw binds its textures, and which texture a draw binds decides whether
-        // it reads its pass's attachment. A draw that reads none is valid with the flag.
-        let flags = match core.feedback_loop {
-            true => vk::PipelineCreateFlags::COLOR_ATTACHMENT_FEEDBACK_LOOP_EXT,
-            false => vk::PipelineCreateFlags::empty(),
-        };
         let mut info = vk::GraphicsPipelineCreateInfo::default()
-            .flags(flags)
+            .flags(self.flags)
             .push_next(&mut rendering)
             .stages(&stages)
             .vertex_input_state(&vertex_input)

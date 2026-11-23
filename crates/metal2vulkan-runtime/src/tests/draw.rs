@@ -3009,6 +3009,90 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
         });
     }
 
+    /// Where device creation enabled the attachment feedback loop, every render pipeline takes the
+    /// loop's colour flag, `VK_PIPELINE_CREATE_COLOR_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT`: that of a
+    /// fragment function that reads no texture as much as that of one that reads its pass's
+    /// attachment through one, since a state is made before any draw binds its textures. A
+    /// device without the loop makes them with no flag. Then, through the loop, a pass draws with
+    /// both after the first reads the attachment, and the second writes it: every pixel is the
+    /// second's.
+    #[test]
+    fn every_device_makes_every_render_pipeline_with_the_loop_s_flag_where_it_has_the_loop() {
+        use ash::vk;
+        let Some(library) = examples() else {
+            return;
+        };
+        let plain = descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
+        let own = descriptor(&library, "own_pixel_fragment", PixelFormat::RGBA8Unorm);
+        each_device("loop_flags", |name, _, device| {
+            let looped = device.core().feedback_loop;
+            let want = match looped {
+                true => vk::PipelineCreateFlags::COLOR_ATTACHMENT_FEEDBACK_LOOP_EXT,
+                false => vk::PipelineCreateFlags::empty(),
+            };
+            let plain = state(name, &device, &plain);
+            let reading = state(name, &device, &own);
+            for (what, state) in [("reading no texture", &plain), ("reading one", &reading)] {
+                assert_eq!(
+                    state.inner.compiled.flags, want,
+                    "{name}: a state's pipelines {what}, the loop {looped}"
+                );
+            }
+            if !looped {
+                println!("{name}: no feedback loop; every render pipeline made with no flag");
+                return;
+            }
+            (device.grant_indices(IndexClass::Texture, 4096, 4))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let mut buffers = Buffers::new(&device);
+            // Two triangles over the whole target, their colors none and blue.
+            let whole = [-1.0, -1.0, 3.0, -1.0, -1.0, 3.0];
+            let positions = buffers.of(&device, &floats(&[whole; 2].concat()));
+            let colors: Vec<f32> = [[0.0; 4], BLUE]
+                .iter()
+                .flat_map(|c| [*c; 3].concat())
+                .collect();
+            let colors = buffers.of(&device, &floats(&colors));
+            let queue = device.new_command_queue(4).expect("a queue");
+            let color = readable(&device, PixelFormat::RGBA8Unorm, 1, 4096);
+            let upload = queue.command_buffer().expect("a command buffer");
+            (upload.record_for_test(&[], |_, _| {})).expect("a command buffer's commands");
+            run(name, &upload);
+            let counters = device.counters();
+            settled(&device);
+            let before = counters.metrics();
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+            draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+            draw(encoder.set_fragment_texture(Some(&color), 0));
+            draw(encoder.set_render_pipeline_state(&reading));
+            draw(encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0));
+            draw(encoder.set_render_pipeline_state(&plain));
+            draw(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            let after = counters.metrics();
+            assert_eq!(
+                (
+                    after.attachment_loop_reads - before.attachment_loop_reads,
+                    after.attachment_read_copies - before.attachment_read_copies
+                ),
+                (1, 0),
+                "{name}: the reading draw through the loop, no copy"
+            );
+            let want = texels(|_, _| [0.0, 0.0, 1.0, 1.0]);
+            assert_eq!(
+                read(&color, 4),
+                want,
+                "{name}: every pixel the second draw's blue"
+            );
+            println!("{name}: every render pipeline made with the loop's colour flag");
+        });
+    }
+
     /// The pass's first draw reads the attachment its pass cleared, at its own pixel. Through a
     /// copy, on a device without the feedback loop, a clear of the image's shadow to the pass's
     /// clear colour stands for the copy, which no copy counts, and every pixel reads the clear
