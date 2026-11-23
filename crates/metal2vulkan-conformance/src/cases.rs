@@ -163,6 +163,7 @@ pub mod rotated_planes;
 pub mod rotated_targets;
 pub mod sample_fills;
 pub mod sample_positions;
+pub mod sampler_bind_clamps;
 pub mod sampler_crossings;
 pub mod sampler_filtering;
 pub mod scheduled_handlers;
@@ -606,6 +607,7 @@ pub fn all() -> Vec<Box<dyn Case>> {
     for case in sampler_filtering::all() {
         cases.push(Box::new(case));
     }
+    cases.extend(sampler_bind_clamps::all());
     cases.extend(sampler_crossings::boxed());
     cases.extend(render_chains::boxed());
     cases.extend(compute_render_chains::boxed());
