@@ -80,7 +80,6 @@ const STATUS_BYTES: usize =
 fn run_word0(plan: &Plan, m: &TypedModule, d: &Dispatch) -> u32 {
     let mut spec = BTreeMap::new();
     spec.extend(crate::pipeline::threadgroup_constants(d.local));
-    let n: u32 = d.local.iter().product();
     let mut push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
     for f in &plan.push.fields {
         let PushLoc::Push { offset } = f.loc else {

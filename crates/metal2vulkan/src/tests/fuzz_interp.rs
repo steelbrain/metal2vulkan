@@ -36,7 +36,7 @@ use crate::pipeline::compile::compile_bitcode_kept;
 use crate::pipeline::testing::{link_and_validate, meter, profile};
 use crate::pipeline::{
     EntryRef, LoweringInputs, PushField, PushLoc, ResourceKind, ResourceSlot, SlotClass, SlotRef,
-    SpecKey, Stage,
+    Stage,
 };
 use crate::spirv::interp::{
     run, BarrierRule, Buffer, Config, Order, Outcome, Resources, SubgroupSize,

@@ -208,12 +208,7 @@ struct Region {
 }
 
 /// Run `m` for region `r`; returns each invocation's `(Vulkan workgroup, local index, record)`.
-fn run_region(
-    m: &TypedModule,
-    form: LocalSizeForm,
-    r: &Region,
-    sg: SubgroupSize,
-) -> Vec<([u32; 3], u32, Vec<u32>)> {
+fn run_region(m: &TypedModule, r: &Region, sg: SubgroupSize) -> Vec<([u32; 3], u32, Vec<u32>)> {
     let n = r.local.iter().product::<u32>();
     let groups = r.groups.iter().product::<u32>();
     let words = record_words();
@@ -320,7 +315,6 @@ fn position(rec: &[u32]) -> [u32; 3] {
 /// the records cover each Metal thread exactly once with Metal's builtins.
 fn check_dispatch(
     m: &TypedModule,
-    form: LocalSizeForm,
     regions: &[Region],
     threads: [u32; 3],
     l: [u32; 3],
@@ -328,7 +322,7 @@ fn check_dispatch(
 ) {
     let mut seen: BTreeMap<[u32; 3], Vec<u32>> = BTreeMap::new();
     for r in regions {
-        for (wg, li, rec) in run_region(m, form, r, sg) {
+        for (wg, li, rec) in run_region(m, r, sg) {
             let p = position(&rec);
             assert!(
                 seen.insert(p, rec.clone()).is_none(),
@@ -391,7 +385,7 @@ fn single_region_builtins_match_metal() {
                         multi: None,
                     };
                     let threads = std::array::from_fn(|i| l[i] * groups[i]);
-                    check_dispatch(&m, form, &[r], threads, l, sg);
+                    check_dispatch(&m, &[r], threads, l, sg);
                 }
             }
         }
@@ -421,7 +415,7 @@ fn a_deep_threadgroup_keeps_every_builtin() {
                     multi: None,
                 };
                 let threads = std::array::from_fn(|i| l[i] * groups[i]);
-                check_dispatch(&m, LocalSizeForm::Spec, &[r], threads, l, sg);
+                check_dispatch(&m, &[r], threads, l, sg);
             }
         }
     }
@@ -430,14 +424,7 @@ fn a_deep_threadgroup_keeps_every_builtin() {
     let m = module(&dp);
     let (threads, l) = ([3, 5, 316], [2, 2, 128]);
     let regions = thread_regions(threads, l);
-    check_dispatch(
-        &m,
-        LocalSizeForm::Spec,
-        &regions,
-        threads,
-        l,
-        SubgroupSize::W32,
-    );
+    check_dispatch(&m, &regions, threads, l, SubgroupSize::W32);
 }
 
 /// A flattened kernel whose pipeline pins its subgroup size reads no `SubgroupSize` builtin: its
@@ -482,7 +469,7 @@ fn a_pinned_subgroup_size_reads_no_subgroup_size_builtin() {
                     groups,
                     multi: None,
                 };
-                check_dispatch(&m, LocalSizeForm::Flat, &[r], threads, l, sg);
+                check_dispatch(&m, &[r], threads, l, sg);
             }
         }
     }
@@ -499,14 +486,7 @@ fn dispatch_threads_regions_match_metal() {
         ([5, 7, 3], [2, 3, 2]),
     ] {
         let regions = thread_regions(threads, l);
-        check_dispatch(
-            &m,
-            LocalSizeForm::Spec,
-            &regions,
-            threads,
-            l,
-            SubgroupSize::W32,
-        );
+        check_dispatch(&m, &regions, threads, l, SubgroupSize::W32);
     }
 }
 
@@ -533,7 +513,7 @@ fn group_count_splits_match_the_single_dispatch() {
                 });
             }
         }
-        check_dispatch(&m, form, &regions, threads, l, SubgroupSize::W64);
+        check_dispatch(&m, &regions, threads, l, SubgroupSize::W64);
     }
 }
 
@@ -543,7 +523,6 @@ fn group_count_splits_match_the_single_dispatch() {
 /// invocation's live word and builtins.
 fn run_partial(
     m: &TypedModule,
-    form: LocalSizeForm,
     threads: [u32; 3],
     l: [u32; 3],
     flagged: bool,
@@ -621,7 +600,7 @@ fn partial_object_threadgroups_match_metal() {
             for &(threads, l) in cases {
                 let mut seen: BTreeMap<[u32; 3], Vec<u32>> = BTreeMap::new();
                 let mut dead = 0;
-                for (live, rec) in run_partial(&m, form, threads, l, true, sg) {
+                for (live, rec) in run_partial(&m, threads, l, true, sg) {
                     if live == 0 {
                         dead += 1;
                         continue;
@@ -647,7 +626,7 @@ fn partial_object_threadgroups_match_metal() {
             }
             // Unflagged, of whole threadgroups: the uniform answers, every invocation live.
             let (threads, l) = ([64, 4, 2], [32, 2, 1]);
-            for (live, rec) in run_partial(&m, form, threads, l, false, sg) {
+            for (live, rec) in run_partial(&m, threads, l, false, sg) {
                 assert_eq!(live, 1);
                 assert_eq!(rec, metal(position(&rec), threads, l), "{form:?}");
             }

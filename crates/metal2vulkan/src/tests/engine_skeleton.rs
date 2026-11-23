@@ -103,16 +103,23 @@ fn check_artifact(a: &FunctionArtifact, what: &str) {
         )],
         "{what}"
     );
-    // The local size is the `WorkgroupSize` spec composite of `sx, sy, sz`, 4-byte `u32`
-    // constants defaulting to 1, and the threadgroup runs as one row under `DeepThreadgroup`,
-    // defaulting to false.
+    // The workgroup is the `WorkgroupSize` composite of its own plain constants, 4-byte `u32`
+    // constants defaulting to 1, beside the threadgroup's sides `sx, sy, sz` (defaulting to 1)
+    // and `DeepThreadgroup` (defaulting to false), of which this kernel's body reads no bit.
+    let unread = |key, default| StageSpec {
+        unread_bits: u64::from(u32::MAX),
+        ..StageSpec::new(key, 4, default)
+    };
     assert_eq!(
         i.spec,
         vec![
-            StageSpec::new(SpecKey::LocalSize(Axis::X), 4, 1),
-            StageSpec::new(SpecKey::LocalSize(Axis::Y), 4, 1),
-            StageSpec::new(SpecKey::LocalSize(Axis::Z), 4, 1),
-            StageSpec::new(SpecKey::DeepThreadgroup, 4, 0)
+            unread(SpecKey::LocalSize(Axis::X), 1),
+            unread(SpecKey::LocalSize(Axis::Y), 1),
+            unread(SpecKey::LocalSize(Axis::Z), 1),
+            unread(SpecKey::DeepThreadgroup, 0),
+            StageSpec::new(SpecKey::WorkgroupSize(Axis::X), 4, 1),
+            StageSpec::new(SpecKey::WorkgroupSize(Axis::Y), 4, 1),
+            StageSpec::new(SpecKey::WorkgroupSize(Axis::Z), 4, 1),
         ],
         "{what}"
     );

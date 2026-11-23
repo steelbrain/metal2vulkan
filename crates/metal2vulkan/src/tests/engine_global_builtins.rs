@@ -286,7 +286,6 @@ fn run_kernel(bc: &[u8], local: [u32; 3], words: usize) -> Vec<u32> {
     let (plan, m) = typed_module(bc, "k", &p).expect("plan");
     let mut spec = BTreeMap::new();
     spec.extend(crate::pipeline::threadgroup_constants(local));
-    let n: u32 = local.iter().product();
     let push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
     for f in &plan.push.fields {
         assert!(matches!(f.loc, PushLoc::Push { .. }), "{f:?}");
