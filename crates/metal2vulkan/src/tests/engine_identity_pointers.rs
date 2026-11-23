@@ -21,6 +21,10 @@
 //!   address and passes L3; one stored through a pointer loaded from memory
 //!   (`sp_through_loaded`) or into a thread cell whose bytes are read at an offset only the run
 //!   knows, an open cell (`sp_open_cell`), is `Unsupported{Lowering(Access)}`, not implemented.
+//! - A thread's array of slot pointers read and written at run-time indices
+//!   (`engine/kernel_buffer_pointer_arrays`) is a closed cell, its address carried by value in an
+//!   `array_ref` or the array zero-filled beside those accesses: each element is its slot
+//!   pointer's static form, and each kernel computes Metal's words on the CPU interpreter.
 //!
 //! `llvm-as` assembles the fixtures; without it the tests skip visibly.
 
@@ -106,30 +110,45 @@ fn compiled(
 }
 
 /// The push bytes of `plan`, slot `i` bound at `slots[i]`: its buffer's address, its bind offset
-/// and its buffer's length.
+/// and its buffer's length. Nothing spills to the stage's parameter block.
 fn push(plan: &Plan, what: &str, slots: &[(u64, u64, usize)]) -> Vec<u8> {
+    let (push, block) = placed(plan, what, slots);
+    assert!(block.is_empty(), "{what}: a field spilled: {:?}", plan.push);
+    push
+}
+
+/// Where the interpreter holds the stage's parameter block.
+const PARAMETER_BLOCK: u64 = 0x7_0000_0000;
+
+/// The push bytes of `plan` and the bytes of its parameter block (empty when it has none), at
+/// [`PARAMETER_BLOCK`], slot `i` bound at `slots[i]` as [`push`] binds it.
+fn placed(plan: &Plan, what: &str, slots: &[(u64, u64, usize)]) -> (Vec<u8>, Vec<u8>) {
     let mut push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
+    let mut block = vec![0u8; plan.push.argument_table_size as usize];
     let region = region_bytes([0; 3], [GROUP * GROUPS, 1, 1], [GROUP, 1, 1]).expect("packs");
     for f in &plan.push.fields {
-        let PushLoc::Push { offset } = f.loc else {
-            panic!("{what}: {f:?} spilled");
+        let (to, o) = match f.loc {
+            PushLoc::Push { offset } => (&mut push, offset as usize),
+            PushLoc::ArgumentTable { offset } => (&mut block, offset as usize),
         };
-        let o = offset as usize;
         match f.field {
+            PushField::ArgumentTableAddress => {
+                to[o..o + 8].copy_from_slice(&PARAMETER_BLOCK.to_le_bytes())
+            }
             PushField::SlotGuestBase(s) => {
                 let (base, bind, _) = slots[s.index as usize];
-                push[o..o + 8].copy_from_slice(&slot_word(base + bind).to_le_bytes());
+                to[o..o + 8].copy_from_slice(&slot_word(base + bind).to_le_bytes());
             }
             PushField::SlotBounds(s) => {
                 let (_, bind, bytes) = slots[s.index as usize];
-                push[o..o + 8].copy_from_slice(&bounds_word(bytes, bind));
+                to[o..o + 8].copy_from_slice(&bounds_word(bytes, bind));
             }
-            PushField::ZeroAddress => push[o..o + 8].copy_from_slice(&ZERO_UNMAPPED.to_le_bytes()),
-            PushField::DispatchRegion => push[o..o + 32].copy_from_slice(&region),
+            PushField::ZeroAddress => to[o..o + 8].copy_from_slice(&ZERO_UNMAPPED.to_le_bytes()),
+            PushField::DispatchRegion => to[o..o + 32].copy_from_slice(&region),
             _ => panic!("{what}: unexpected push field {f:?}"),
         }
     }
-    push
+    (push, block)
 }
 
 /// The buffers at `at`, each with its bytes.
@@ -377,6 +396,125 @@ fn a_slot_pointer_stored_through_a_loaded_pointer_or_into_an_open_cell_is_refuse
                 ),
                 other => panic!("{stem}: {entry}: {:?}", other.map(|_| ())),
             }
+        }
+    }
+}
+
+/// Where the interpreter holds the five slots of a `kernel_buffer_pointer_arrays` kernel.
+const ARRAY_SLOTS: [u64; 5] = [
+    0x1_0000_0000,
+    0x2_0000_0000,
+    0x3_0000_0000,
+    0x4_0000_0000,
+    0x5_0000_0000,
+];
+
+/// Run `entry` of `bc` on `stem`'s profile `p` over slot `i` holding `bytes[i]`, each bound at
+/// its start, after checking its pointers move through `cells` cell stores and loads; every
+/// slot's bytes after the run.
+fn run_array_kernel(
+    bc: &[u8],
+    entry: &str,
+    (stem, p): (&str, &DeviceProfile),
+    bytes: &[&[u8]; 5],
+    cells: (u32, u32),
+) -> Vec<Vec<u8>> {
+    let (plan, module) = compiled(bc, (entry, true), stem, p);
+    let census = plan.census();
+    let count = |name: &str| census.get(name).map_or(0, |(n, _)| *n);
+    assert_eq!(
+        (count("access.cell.store"), count("access.cell.load")),
+        cells,
+        "{stem}: {entry}: {census:?}"
+    );
+    let slots: Vec<(u64, u64, usize)> = (ARRAY_SLOTS.iter().zip(bytes))
+        .map(|(&at, b)| (at, 0, b.len()))
+        .collect();
+    let (push, block) = placed(&plan, stem, &slots);
+    let mut at: Vec<(u64, &[u8])> = (ARRAY_SLOTS.iter().zip(bytes))
+        .map(|(&at, b)| (at, *b))
+        .collect();
+    if !block.is_empty() {
+        at.push((PARAMETER_BLOCK, &block));
+    }
+    let res = Resources {
+        push,
+        buffers: buffers(&at),
+        spec: spec(),
+    };
+    let got = run(&module, &config(), res).unwrap_or_else(|e| panic!("{stem}: {entry}: {e}"));
+    got.buffers
+}
+
+/// A thread's array of slot pointers (our MSL, `engine/kernel_buffer_pointer_arrays`) is a closed
+/// pointer cell: each element holds its slot pointer's static form, and an access through an
+/// element read at an index only the run knows switches among the slots stored there. That holds
+/// for the array alone (`pointer_array_pick`), for one whose address an `array_ref` carries by
+/// value into an inlined function (`pointer_array_by_value`: the aggregate stays a value), and for
+/// one zero-filled beside accesses at run-time indices, each a whole pointer
+/// (`pointer_array_zero_filled`). Each compiles in the identity form, passes L3, and computes
+/// Metal's words on the CPU interpreter, the other slots unchanged.
+#[test]
+fn an_array_of_slot_pointers_is_a_closed_cell_read_and_written_at_run_time_indices() {
+    let Some(bc) = assemble("kernel_buffer_pointer_arrays") else {
+        return;
+    };
+    let n = THREADS as u32;
+    let (a, b, c) = (
+        (0..n).map(|k| 0x100 + k).collect::<Vec<u32>>(),
+        (0..n).map(|k| 0x2000 + 3 * k).collect::<Vec<u32>>(),
+        (0..n).map(|k| 0x30_0000 + 5 * k).collect::<Vec<u32>>(),
+    );
+    let (wa, wb, wc) = (words(a.clone()), words(b.clone()), words(c.clone()));
+    let out = vec![0u8; 4 * THREADS];
+    let one = words([1]);
+    let two = words([2]);
+    for (stem, p) in identity_profiles() {
+        // out[i] = {a, b, c}[(1 + i) % 3][i].
+        let got = run_array_kernel(
+            &bc,
+            "pointer_array_pick",
+            (stem.as_str(), &p),
+            &[&wa, &wb, &wc, &out, &one],
+            (3, 1),
+        );
+        let want = words(
+            (0..n).map(|i| [a[i as usize], b[i as usize], c[i as usize]][((1 + i) % 3) as usize]),
+        );
+        assert_eq!(got[3], want, "{stem}: pick");
+        assert_eq!((&got[0], &got[1], &got[2]), (&wa, &wb, &wc), "{stem}: pick");
+        // out[i] = {a, b}[(1 + i) % 2][i] + i, written through element 2 of {a, b, out}.
+        let got = run_array_kernel(
+            &bc,
+            "pointer_array_by_value",
+            (stem.as_str(), &p),
+            &[&wa, &wb, &two, &out, &one],
+            (3, 2),
+        );
+        let want =
+            words((0..n).map(|i| [a[i as usize], b[i as usize]][((1 + i) % 2) as usize] + i));
+        assert_eq!(got[3], want, "{stem}: by value");
+        assert_eq!((&got[0], &got[1]), (&wa, &wb), "{stem}: by value");
+        // out[i] folds a[i], b[i] and c[i] (the first `count` of them) as sum * 31 + word.
+        for count in [2u32, 3] {
+            let got = run_array_kernel(
+                &bc,
+                "pointer_array_zero_filled",
+                (stem.as_str(), &p),
+                &[&wa, &wb, &wc, &out, &words([count])],
+                (4, 2),
+            );
+            let want = words((0..n as usize).map(|i| {
+                [a[i], b[i], c[i]][..count as usize]
+                    .iter()
+                    .fold(0u32, |s, w| s.wrapping_mul(31).wrapping_add(*w))
+            }));
+            assert_eq!(got[3], want, "{stem}: zero filled, count {count}");
+            assert_eq!(
+                (&got[0], &got[1], &got[2]),
+                (&wa, &wb, &wc),
+                "{stem}: zero filled"
+            );
         }
     }
 }
