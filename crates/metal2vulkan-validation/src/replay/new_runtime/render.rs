@@ -301,8 +301,7 @@ impl NewRuntime {
             self.states.give(what, move |numbering, step| {
                 let state = device.new_render_pipeline_state(&descriptor, |s| numbering.ids(s))?;
                 step.modules();
-                state.finish_pipeline()?;
-                Ok(states::Kept::Render(state))
+                state.finish_pipeline()
             });
             return unaddressed(Object::Skipped);
         }

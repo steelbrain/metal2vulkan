@@ -27,17 +27,12 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// A state a pooled make kept, which lives until the pool ends, as a program's states live.
-pub(super) enum Kept {
-    Render(rt::RenderPipelineState),
-    Compute(rt::ComputePipelineState),
-}
-
 /// A make the pool runs: its state's line, and the make, given the pool's sampler numbering and
-/// the make's step marks.
+/// the make's step marks. The state it made is dropped at once: the device's map of contents
+/// keeps its content and `VkPipeline`s, as it keeps those of a state a program holds.
 type Job = (
     String,
-    Box<dyn FnOnce(&Numbering, &Step) -> Result<Kept, rt::Error> + Send>,
+    Box<dyn FnOnce(&Numbering, &Step) -> Result<(), rt::Error> + Send>,
 );
 
 /// Where the lines go: the standard output and the state log, each line flushed as it is written;
@@ -170,12 +165,11 @@ impl Shared {
     }
 }
 
-/// The pool's threads and their queue; its drop makes every make queued, then ends the threads
-/// and the states they kept.
+/// The pool's threads and their queue; its drop waits for every make queued, then ends the
+/// threads.
 struct Pool {
     queue: Option<Sender<Job>>,
     threads: Vec<JoinHandle<()>>,
-    kept: Arc<Mutex<Vec<Kept>>>,
 }
 
 impl Pool {
@@ -183,11 +177,10 @@ impl Pool {
         let (queue, jobs) = channel::<Job>();
         let jobs = Arc::new(Mutex::new(jobs));
         let numbering = Arc::new(Numbering::new());
-        let kept = Arc::new(Mutex::new(Vec::new()));
         let threads = (0..width)
             .filter_map(|at| {
                 let (jobs, shared) = (Arc::clone(&jobs), Arc::clone(shared));
-                let (numbering, kept) = (Arc::clone(&numbering), Arc::clone(&kept));
+                let numbering = Arc::clone(&numbering);
                 let thread = format!("m2v-state-{at}");
                 let run = {
                     let thread = thread.clone();
@@ -196,10 +189,7 @@ impl Pool {
                         let Ok((what, make)) = next else {
                             return;
                         };
-                        let made = shared.run(&what, thread.clone(), |step| make(&numbering, step));
-                        if let Ok(state) = made {
-                            lock(&kept).push(state);
-                        }
+                        let _ = shared.run(&what, thread.clone(), |step| make(&numbering, step));
                     }
                 };
                 std::thread::Builder::new().name(thread).spawn(run).ok()
@@ -208,7 +198,6 @@ impl Pool {
         Pool {
             queue: Some(queue),
             threads,
-            kept,
         }
     }
 }
@@ -219,7 +208,6 @@ impl Drop for Pool {
         for thread in self.threads.drain(..) {
             let _ = thread.join();
         }
-        lock(&self.kept).clear();
     }
 }
 
@@ -286,7 +274,7 @@ impl States {
     pub(super) fn give(
         &self,
         what: String,
-        make: impl FnOnce(&Numbering, &Step) -> Result<Kept, rt::Error> + Send + 'static,
+        make: impl FnOnce(&Numbering, &Step) -> Result<(), rt::Error> + Send + 'static,
     ) {
         if let Some(queue) = lock(&self.pool)
             .as_ref()
@@ -301,7 +289,7 @@ impl States {
         Inline(Arc::clone(&self.shared))
     }
 
-    /// Ends the pool once it made every state queued, and drops the states it kept.
+    /// Ends the pool once it made every state queued.
     pub(super) fn finish(&self) {
         drop(lock(&self.pool).take());
     }

@@ -1838,8 +1838,7 @@ impl NewRuntime {
             self.states.give(what, move |numbering, step| {
                 let state = device.new_compute_pipeline_state(&descriptor, |s| numbering.ids(s))?;
                 step.modules();
-                state.finish_pipeline()?;
-                Ok(states::Kept::Compute(state))
+                state.finish_pipeline()
             });
             return unaddressed(Object::Skipped);
         }
