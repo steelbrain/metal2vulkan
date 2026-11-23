@@ -3199,8 +3199,12 @@ impl RenderCommandEncoder {
         }
         let building = (self.building.as_mut())
             .expect("an encoder holds its command buffer's recording until it ends");
-        let moves = building.aliases(&uses, true)?;
+        let mut moves = building.aliases(&uses, true)?;
         drop(uses);
+        // An attachment of the pass is in the layout the pass renders it in, which a move from
+        // undefined would leave: it stays as the pass's begin left it.
+        let pass = &self.pass;
+        moves.retain(|m| !pass.targets().any(|t| t.attachment.image == m.image));
         if moves.is_empty() {
             return Ok(());
         }
