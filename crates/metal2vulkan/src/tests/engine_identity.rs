@@ -2528,10 +2528,17 @@ const READS: u32 = 20;
 /// A kernel reading one `uint` from each of `reads` buffers and storing their ordered fold
 /// (`s · 3 + v`, so two swapped addresses change it) to the next buffer.
 fn many_of(reads: u32) -> String {
+    many_in(false, reads)
+}
+
+/// [`many_of`]'s kernel, or where `fragment`, a fragment function reading the same `reads`
+/// buffers, with no output buffer, and returning the fold's bits as its color's `x`.
+fn many_in(fragment: bool, reads: u32) -> String {
     let mut params = Vec::new();
     let mut body = String::new();
     let mut meta = Vec::new();
-    for k in 0..=reads {
+    let slots = reads + u32::from(!fragment);
+    for k in 0..slots {
         params.push(format!(
             "ptr addrspace(1) noundef \"air-buffer-no-alias\" %{k}"
         ));
@@ -2552,13 +2559,27 @@ fn many_of(reads: u32) -> String {
         ));
     }
     let last = reads - 1;
-    let args: Vec<String> = (0..=reads).map(|k| format!("!{}", 100 + k)).collect();
+    let args: Vec<String> = (0..slots).map(|k| format!("!{}", 100 + k)).collect();
+    let (ty, end, stage, returned) = match fragment {
+        true => (
+            "<4 x float>",
+            format!("  %f = bitcast i32 %s{last} to float\n  %c = insertelement <4 x float> zeroinitializer, float %f, i64 0\n  ret <4 x float> %c\n"),
+            "fragment",
+            "!12}\n!12 = !{!\"air.render_target\", i32 0, i32 0, !\"air.arg_type_name\", !\"float4\"",
+        ),
+        false => (
+            "void",
+            format!("  store i32 %s{last}, ptr addrspace(1) %{reads}, align 4\n  ret void\n"),
+            "kernel",
+            "",
+        ),
+    };
     format!(
         "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\n\
 target triple = \"air64_v28-apple-macosx26.0.0\"\n\n\
-define void @many({}) {{\nentry:\n{body}  store i32 %s{last}, ptr addrspace(1) %{reads}, align 4\n  ret void\n}}\n\n\
-!air.kernel = !{{!9}}\n!air.version = !{{!17}}\n!air.language_version = !{{!18}}\n\
-!9 = !{{ptr @many, !10, !11}}\n!10 = !{{}}\n!11 = !{{{}}}\n{}\n\
+define {ty} @many({}) {{\nentry:\n{body}{end}}}\n\n\
+!air.{stage} = !{{!9}}\n!air.version = !{{!17}}\n!air.language_version = !{{!18}}\n\
+!9 = !{{ptr @many, !10, !11}}\n!10 = !{{{returned}}}\n!11 = !{{{}}}\n{}\n\
 !17 = !{{i32 2, i32 8, i32 0}}\n!18 = !{{!\"Metal\", i32 4, i32 0, i32 0}}\n",
         params.join(", "),
         args.join(", "),
@@ -2692,77 +2713,106 @@ fn the_window_pushes_a_kernel_s_slot_addresses_below_its_tail_word() {
     }
 }
 
-/// On `PROFILES` and in `runtime-floor`'s window, [`many_of`]`(3)` pushes its 4 slot addresses
-/// below its tail word, and its straight-line module returns once: the tail's test, a compare of
-/// the word's load, is the condition of one select per other pushed field and of no branch
-/// (`EmitCx::fold_tail`), so the body depends on the tail through those values alone. AMD's open
-/// driver (2025.Q2.1) dies making a fragment stage whose body runs under a never-taken return
-/// there and holds a loop of convergent instructions under `MaximallyReconvergesKHR`.
-#[test]
-fn the_floor_s_tail_folds_into_the_other_pushed_fields_with_no_branch() {
+/// What [`many_in`]`(fragment, reads)` compiles to on `stem`'s `Device::from_queries` profile
+/// under the identity domains: its pushed fields, which a tail word ends, and the uses of the
+/// tail's test, a compare of the word's load that a select or a branch takes as its condition:
+/// the selects and the branches whose condition it is, and the module's returns. Checks the
+/// module passes L3 and holds one such test.
+fn tail_test_uses(stem: &str, fragment: bool, reads: u32) -> Option<(usize, usize, usize, usize)> {
     use crate::spirv::ir::{BinOp, Inst, Terminator, Type};
-    let reads = 3;
-    let Some(bc) = assemble_text("many", &many_of(reads)) else {
-        return;
-    };
-    for stem in PROFILES.iter().copied().chain(["runtime-floor"]) {
-        let desc = crate::pipeline::testing::description(stem).unwrap_or_else(|e| panic!("{e}"));
-        let device = Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
-        let p = device.profile();
-        let (a, plan, m) = compile_kept(&bc, "many", p).unwrap_or_else(|e| panic!("{stem}: {e}"));
-        link_and_validate(&a, p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
-        assert!(plan.push.tail_word.is_some(), "{stem}: no tail word");
-        let pushed = (plan.push.fields.iter())
-            .filter(|f| matches!(f.loc, PushLoc::Push { .. }))
-            .count();
-        assert_eq!(pushed, (reads + 1) as usize, "{stem}");
-        let insts: Vec<_> = m.blocks().iter().flat_map(|b| &b.insts).collect();
-        let push_load = |v: crate::spirv::ids::Value| {
-            insts.iter().any(|n| match (&n.inst, n.result) {
-                (Inst::Load { ptr, .. }, Some(r)) if r == v => {
-                    matches!(
-                        m.value(*ptr).and_then(|d| m.types().get(d.ty)),
-                        Ok(Type::Pointer {
-                            class: crate::spirv::ir::StorageClass::PushConstant,
-                            ..
-                        })
-                    )
-                }
-                _ => false,
-            })
-        };
-        // The tail's tests: a compare of a push load that some select takes as its condition.
-        let tests: Vec<_> = (insts.iter())
-            .filter_map(|n| match (&n.inst, n.result) {
-                (
-                    Inst::Binary {
-                        op: BinOp::INotEqual,
-                        a,
+    let bc = assemble_text("many", &many_in(fragment, reads))?;
+    let desc = crate::pipeline::testing::description(stem).unwrap_or_else(|e| panic!("{e}"));
+    let device = Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
+    let p = device.profile();
+    let (a, plan, m) = compile_kept(&bc, "many", p).unwrap_or_else(|e| panic!("{stem}: {e}"));
+    link_and_validate(&a, p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
+    assert!(plan.push.tail_word.is_some(), "{stem}: no tail word");
+    let pushed = (plan.push.fields.iter())
+        .filter(|f| matches!(f.loc, PushLoc::Push { .. }))
+        .count();
+    let insts: Vec<_> = m.blocks().iter().flat_map(|b| &b.insts).collect();
+    let push_load = |v: crate::spirv::ids::Value| {
+        insts.iter().any(|n| match (&n.inst, n.result) {
+            (Inst::Load { ptr, .. }, Some(r)) if r == v => {
+                matches!(
+                    m.value(*ptr).and_then(|d| m.types().get(d.ty)),
+                    Ok(Type::Pointer {
+                        class: crate::spirv::ir::StorageClass::PushConstant,
                         ..
-                    },
-                    Some(r),
-                ) if push_load(*a) => Some(r),
-                _ => None,
-            })
-            .filter(|c| {
-                (insts.iter()).any(|n| matches!(n.inst, Inst::Select { cond, .. } if cond == *c))
-            })
-            .collect();
-        assert_eq!(tests.len(), 1, "{stem}: the tail's tests");
-        let test = tests[0];
-        let selects = (insts.iter())
-            .filter(|n| matches!(n.inst, Inst::Select { cond, .. } if cond == test))
-            .count();
+                    })
+                )
+            }
+            _ => false,
+        })
+    };
+    let selects = |c: crate::spirv::ids::Value| {
+        (insts.iter())
+            .filter(|n| matches!(n.inst, Inst::Select { cond, .. } if cond == c))
+            .count()
+    };
+    let branches = |c: crate::spirv::ids::Value| {
+        (m.blocks().iter())
+            .filter(|b| matches!(b.term, Terminator::CondBranch { cond, .. } if cond == c))
+            .count()
+    };
+    let tests: Vec<_> = (insts.iter())
+        .filter_map(|n| match (&n.inst, n.result) {
+            (
+                Inst::Binary {
+                    op: BinOp::INotEqual,
+                    a,
+                    ..
+                },
+                Some(r),
+            ) if push_load(*a) => Some(r),
+            _ => None,
+        })
+        .filter(|&c| selects(c) + branches(c) > 0)
+        .collect();
+    assert_eq!(tests.len(), 1, "{stem}: the tail's tests");
+    let returns = (m.blocks().iter())
+        .filter(|b| matches!(b.term, Terminator::Return))
+        .count();
+    Some((pushed, selects(tests[0]), branches(tests[0]), returns))
+}
+
+/// On `PROFILES` and in `runtime-floor`'s window, [`many_in`]`(true, 3)`, a fragment function,
+/// pushes its 3 slot addresses below its tail word, and its straight-line module returns once:
+/// the tail's test, a compare of the word's load, is the condition of one select per other pushed
+/// field and of no branch (`EmitCx::fold_tail`), so the body depends on the tail through those
+/// values alone. AMD's open driver (2025.Q2.1) dies making a fragment stage whose body runs under
+/// a never-taken return there and holds a loop of convergent instructions under
+/// `MaximallyReconvergesKHR`.
+#[test]
+fn a_render_stage_s_tail_folds_into_its_other_pushed_fields_with_no_branch() {
+    for stem in PROFILES.iter().copied().chain(["runtime-floor"]) {
+        let Some((pushed, selects, branches, returns)) = tail_test_uses(stem, true, 3) else {
+            return;
+        };
+        assert_eq!(pushed, 3, "{stem}");
         assert_eq!(selects, pushed, "{stem}: one select per other pushed field");
-        let branches = (m.blocks().iter())
-            .filter(|b| matches!(b.term, Terminator::CondBranch { cond, .. } if cond == test))
-            .count();
         assert_eq!(branches, 0, "{stem}: a branch on the tail");
-        let returns = (m.blocks().iter())
-            .filter(|b| matches!(b.term, Terminator::Return))
-            .count();
         assert_eq!(returns, 1, "{stem}: the module's returns");
         println!("{stem}: the tail folds into {selects} pushed fields; one return");
+    }
+}
+
+/// On `PROFILES` and in `runtime-floor`'s window, [`many_of`]`(3)`, a kernel, pushes its 4 slot
+/// addresses below its tail word and returns at entry where the word is not zero: the tail's
+/// test, a compare of the word's load in the first block, is the condition of one branch, whose
+/// arm returns, and of no select (`EmitCx::emit_tail_guard`), so the module returns twice and
+/// every pushed field reads its member's load alone.
+#[test]
+fn a_kernel_returns_at_entry_where_its_tail_holds_what_is_never_pushed() {
+    for stem in PROFILES.iter().copied().chain(["runtime-floor"]) {
+        let Some((pushed, selects, branches, returns)) = tail_test_uses(stem, false, 3) else {
+            return;
+        };
+        assert_eq!(pushed, 4, "{stem}");
+        assert_eq!(selects, 0, "{stem}: a select on the tail");
+        assert_eq!(branches, 1, "{stem}: the branch on the tail");
+        assert_eq!(returns, 2, "{stem}: the module's returns");
+        println!("{stem}: the tail's test returns at entry; {pushed} pushed fields, no select");
     }
 }
 
