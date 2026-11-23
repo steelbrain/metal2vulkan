@@ -8,7 +8,8 @@
 //! What a dispatch reads and writes: the buffer bound at each buffer slot its pipeline state uses,
 //! by the state's access there (`ComputePipelineState::buffer_accesses`: a `ReadOnly` slot reads,
 //! a `WriteOnly` one writes, a `ReadWrite` one both; a slot the state does not use, neither); a
-//! buffer `useResource:usage:` names, by its usage's read and write bits; and, read and written, a
+//! buffer `useResource:usage:` names (each of a `useResources:count:usage:` list), by its usage's
+//! read and write bits; and, read and written, a
 //! buffer any other call of its encoder named since its last dispatch, and every bound buffer of a
 //! dispatch whose state the play skipped. Those last two are counted as read, which they may not
 //! be, and the line says how many. In a command buffer, a dispatch that writes a buffer comes
@@ -248,10 +249,20 @@ impl Unwritten {
                     }
                 }
             }
-            "useResource:usage:" => {
-                if let (Some(id), Some(usage)) = (waiting_of(call.args.first()), uint(1)) {
-                    let reads = usage & (USAGE_READ | USAGE_SAMPLE) != 0 || usage == 0;
-                    encoder.used.insert(id, (reads, usage & USAGE_WRITE != 0));
+            // The resource as the stream records it, `{Buffer: object}`; of the plural, each of
+            // the list (the C array and its count are one list).
+            "useResource:usage:" | "useResources:count:usage:" => {
+                let resources = match &*call.selector {
+                    "useResource:usage:" => call.args.first().map(std::slice::from_ref),
+                    _ => call.args.first().and_then(Value::as_list),
+                };
+                let usage = uint(1);
+                for resource in resources.into_iter().flatten() {
+                    let id = resource.as_resource().filter(|id| waiting.contains(id));
+                    if let (Some(id), Some(usage)) = (id, usage) {
+                        let reads = usage & (USAGE_READ | USAGE_SAMPLE) != 0 || usage == 0;
+                        encoder.used.insert(id, (reads, usage & USAGE_WRITE != 0));
+                    }
                 }
             }
             selector if selector.starts_with("dispatch") => {

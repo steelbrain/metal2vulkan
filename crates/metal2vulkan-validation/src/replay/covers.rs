@@ -10,12 +10,14 @@
 //! dispatch's to the texture slots its pipeline state's interface marks written
 //! ([`Backend::texture_writes`](super::player::Backend::texture_writes); none where the backend
 //! answers no access), a render pass's to every texture its descriptor names, a blit's to its
-//! destination, `generateMipmapsForTexture:`, a `useResource:usage:` with write usage, and the
+//! destination, `generateMipmapsForTexture:`, a `useResource:usage:` with write usage (each
+//! resource of a `useResources:count:usage:` as its own), and the
 //! CPU's `replaceRegion:…`. A write of a texture over a buffer is the buffer's. An object is
 //! written again by the player's writes into it (`m2v.write`, its contents at creation, a copy
 //! from the guest's RAM), a blit into it, a write of a texture over it,
 //! and, as the stream carries no buffer access, any binding of it to an encoder, a
-//! `useResource:usage:` with write usage, or a `useHeap:` of its heap. A binding may be a read, so
+//! `useResource:usage:` with write usage, or a `useHeap:` of its heap (each of a `useResources:…`
+//! or `useHeaps:…` list as its own). A binding may be a read, so
 //! the times one took a cover off are counted apart: a difference in such an object's later
 //! compares may be the texture's bytes, not the play's.
 
@@ -149,6 +151,28 @@ impl Covers {
     }
 
     /// `object` bound to an encoder, written whole, counted where that took a cover off.
+    /// `resource` used with `usage` (`useResource:usage:`): with write usage, written.
+    fn used(&mut self, resource: u64, usage: u64) {
+        const WRITE: u64 = 2;
+        if usage & WRITE != 0 {
+            match self.textures.contains(&resource) {
+                true if self.tracked(resource) => self.texture_written(resource),
+                true => {}
+                false => self.written(resource, None),
+            }
+        }
+    }
+
+    /// Heap `heap` used (`useHeap:`): each buffer placed in it bound.
+    fn heap_used(&mut self, heap: u64) {
+        let live = self.heaps.get(&heap).cloned();
+        for placed in live.into_iter().flatten() {
+            if !self.textures.contains(&placed) {
+                self.bound(placed);
+            }
+        }
+    }
+
     fn bound(&mut self, object: u64) {
         if self.covered.contains_key(&object) {
             self.binding_uncovers += 1;
@@ -364,23 +388,30 @@ impl Covers {
                 }
             }
             "useResource:usage:" | "useResource:usage:stages:" => {
-                const WRITE: u64 = 2;
-                if let (Some(resource), Some(usage)) = (object(0), uint(1)) {
-                    if usage & WRITE != 0 {
-                        match self.textures.contains(&resource) {
-                            true if self.tracked(resource) => self.texture_written(resource),
-                            true => {}
-                            false => self.written(resource, None),
-                        }
+                let resource = call.args.first().and_then(Value::as_resource);
+                if let (Some(resource), Some(usage)) = (resource, uint(1)) {
+                    self.used(resource, usage);
+                }
+            }
+            // The C array and its count are one list: each resource of it used as
+            // `useResource:usage:` uses its one.
+            "useResources:count:usage:" | "useResources:count:usage:stages:" => {
+                let resources = call.args.first().and_then(Value::as_list);
+                if let (Some(resources), Some(usage)) = (resources, uint(1)) {
+                    for resource in resources.iter().filter_map(Value::as_resource) {
+                        self.used(resource, usage);
                     }
                 }
             }
             "useHeap:" | "useHeap:stages:" => {
-                let live = object(0).and_then(|heap| self.heaps.get(&heap)).cloned();
-                for placed in live.into_iter().flatten() {
-                    if !self.textures.contains(&placed) {
-                        self.bound(placed);
-                    }
+                if let Some(heap) = object(0) {
+                    self.heap_used(heap);
+                }
+            }
+            "useHeaps:count:" | "useHeaps:count:stages:" => {
+                let heaps = call.args.first().and_then(Value::as_list);
+                for heap in heaps.into_iter().flatten().filter_map(Value::as_object) {
+                    self.heap_used(heap);
                 }
             }
             _ if selector.contains("toTexture:") => {

@@ -1188,7 +1188,12 @@ impl NewRuntime {
 
     /// Resource argument `at`: `{Buffer: object}` or `{Texture: object}`.
     fn resource(&self, call: &Call, at: usize) -> Result<Held, PlayError> {
-        let (kind, object) = variant(call, arg(call, at)?)?;
+        self.held(call, arg(call, at)?)
+    }
+
+    /// A resource `value` of `call`: `{Buffer: object}` or `{Texture: object}`.
+    fn held(&self, call: &Call, value: &Value) -> Result<Held, PlayError> {
+        let (kind, object) = variant(call, value)?;
         let id = object
             .as_object()
             .ok_or_else(|| refuse(call, format!("{kind} {object}")))?;
@@ -1212,7 +1217,11 @@ impl NewRuntime {
 
     /// The block of the heap argument `at` names; none for a skipped object.
     fn heap_of(&self, call: &Call, at: usize) -> Result<Option<rt::BlockId>, PlayError> {
-        let id = Self::id(call, at)?;
+        self.block_of(call, Self::id(call, at)?)
+    }
+
+    /// The block of heap `id`; none for a skipped object.
+    fn block_of(&self, call: &Call, id: u64) -> Result<Option<rt::BlockId>, PlayError> {
         match self.get(call, id)? {
             Object::Block(range, _, _) => Ok(Some(range.block)),
             Object::Skipped => Ok(None),

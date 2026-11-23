@@ -622,7 +622,8 @@ records as text, and
   with whatever its memory held, which is where a recording that missed the program's writes
   shows. A dispatch reads the buffer bound at a slot its pipeline state reads (the runtime's
   `ComputePipelineState::buffer_accesses`: `ReadOnly` or `ReadWrite`) and one `useResource:usage:`
-  names for reading; it writes the buffer at a slot the state writes and one used for writing,
+  names for reading (each of a `useResources:count:usage:` list as its own); it writes the buffer
+  at a slot the state writes and one used for writing,
   and a slot the state does not use touches nothing. A buffer another call of its encoder named
   since its last dispatch, and each bound under a state the play skipped, is taken as read and
   written, and the line says how many of the count were. In a command buffer a dispatch's write
@@ -730,7 +731,7 @@ records as text, and
     options, a render target array length above 1, tile or imageblock sizes, or a skipped
     texture or visibility result buffer), or one the runtime answers with a typed gap; and
     every call of a skipped object (`skipped_calls`, with `useResource:usage:` and `useHeap:` of
-    one);
+    one, and each skipped object of a `useResources:count:usage:` or `useHeaps:count:` list);
   - dispatches whose pipeline state or bound buffer or texture is a skipped object
     (`skipped_dispatches`), and draws whose pipeline state, or a buffer or texture bound to
     either stage, or whose index buffer is one (`skipped_draws`);
@@ -934,7 +935,10 @@ records as text, and
   Compute encoders play `setStageInRegion:` (the runtime takes it and it changes nothing a
   dispatch of a kernel without a stage-in argument does, the only kernel it builds) and
   `setImageblockWidth:height:`, whose size the player's pre-pass passes with each dispatch it
-  prepares, 1 by 1 until the encoder sets one.
+  prepares, 1 by 1 until the encoder sets one. They play their residency declarations through the
+  runtime's compute encoder: `useResource:usage:` and, for each resource of its list,
+  `useResources:count:usage:` through `use_resource` with the usage; `useHeap:` and, for each heap
+  of its list, `useHeaps:count:` through `use_heap`.
 
 `report.txt` holds one line per item: the mode line (`mode full: every call` or `mode
 states-only: ...`) first, then the line `recorded before the recorder's completion fix: the
@@ -999,11 +1003,12 @@ compared. The ranges are the stream's
 offsets in the heap with a buffer's length and a texture's size as the runtime answers it, and
 the writes are found by structure: a draw's or a dispatch's to the texture slots the pipeline
 state's interface marks written, a render pass's to the textures its descriptor names, a blit's
-to its destination, `generateMipmapsForTexture:`, a `useResource:usage:` with write usage and the
-CPU's `replaceRegion:…`; a write of a texture over a buffer is the buffer's. An object is written
+to its destination, `generateMipmapsForTexture:`, a `useResource:usage:` with write usage (and
+each resource of a `useResources:count:usage:` with write usage) and the CPU's `replaceRegion:…`; a write of a texture over a buffer is the buffer's. An object is written
 again by the player's writes into it, a blit into it, and, as the stream carries no buffer
 access, any binding of it to an encoder, a `useResource:usage:` with write usage or a `useHeap:`
-of its heap; a binding may be a read, so `B` counts the covers a binding or a `useHeap:` took off,
+of its heap (each of a `useResources:…` or `useHeaps:…` list as its own); a binding may be a read,
+so `B` counts the covers a binding or a `useHeap:` took off,
 and a difference in that object's later compares may be the covering texture's bytes. `receivers:
 C checks of surfaces' receiver buffers not compared; the textures over the
 surfaces hold the texels` where the stream checks a buffer a texture over a surface's plane was made

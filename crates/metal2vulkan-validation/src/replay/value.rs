@@ -71,6 +71,15 @@ impl Value {
         }
     }
 
+    /// A resource argument's object (`docs/REPLAY-STREAM.md`, section 2): the id of
+    /// `{Buffer: object}` or `{Texture: object}`; `None` for every other value.
+    pub fn as_resource(&self) -> Option<u64> {
+        match self.as_map() {
+            Some([(kind, object)]) if matches!(&**kind, "Buffer" | "Texture") => object.as_object(),
+            _ => None,
+        }
+    }
+
     /// The object's id; `None` for nil and for every other kind.
     pub fn as_object(&self) -> Option<u64> {
         match self {

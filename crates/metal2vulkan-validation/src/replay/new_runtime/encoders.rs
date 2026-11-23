@@ -79,7 +79,34 @@ fn buffer_layout(call: &Call, at: usize) -> Result<rt::BufferLayout, PlayError> 
     })
 }
 
+/// A residency declaration's usage (`MTLResourceUsage`, argument 1): read, write or both.
+fn resource_usage(call: &Call) -> Result<rt::ResourceUsage, PlayError> {
+    Ok(match uint(call, 1)? {
+        1 => rt::ResourceUsage::READ,
+        2 => rt::ResourceUsage::WRITE,
+        3 => rt::ResourceUsage::READ | rt::ResourceUsage::WRITE,
+        raw => return Err(refuse(call, format!("resource usage {raw}"))),
+    })
+}
+
 impl NewRuntime {
+    /// Compute encoder `id` uses `held` with `usage`: through the runtime's `use_resource`; a
+    /// skipped object counted.
+    fn use_held(&mut self, id: u64, held: Held, usage: rt::ResourceUsage) -> Result<(), rt::Error> {
+        match held {
+            Held::Buffer(buffer) => {
+                (self.compute(id).encoder).use_resource(rt::Resource::Buffer(&buffer), usage)
+            }
+            Held::Texture(texture) => {
+                (self.compute(id).encoder).use_resource(rt::Resource::Texture(&texture), usage)
+            }
+            Held::Skipped => {
+                self.skips.calls += 1;
+                Ok(())
+            }
+        }
+    }
+
     /// An event argument: an event's, or a shared event's.
     fn event(&self, call: &Call, at: usize) -> Result<rt::Event, PlayError> {
         match self.get(call, Self::id(call, at)?)? {
@@ -371,23 +398,23 @@ impl NewRuntime {
                 }
             }
             "useResource:usage:" => {
-                let usage = rt::ResourceUsage::READ;
-                let usage = match uint(call, 1)? {
-                    1 => usage,
-                    2 => rt::ResourceUsage::WRITE,
-                    3 => usage | rt::ResourceUsage::WRITE,
-                    raw => return Err(refuse(call, format!("resource usage {raw}"))),
-                };
-                match self.resource(call, 0)? {
-                    Held::Buffer(buffer) => (self.compute(id).encoder)
-                        .use_resource(rt::Resource::Buffer(&buffer), usage),
-                    Held::Texture(texture) => (self.compute(id).encoder)
-                        .use_resource(rt::Resource::Texture(&texture), usage),
-                    Held::Skipped => {
-                        self.skips.calls += 1;
-                        Ok(())
+                let usage = resource_usage(call)?;
+                let held = self.resource(call, 0)?;
+                self.use_held(id, held, usage)
+            }
+            // The C array and its count are one list (docs/REPLAY-STREAM.md): each resource of
+            // it used as `useResource:usage:` uses its one.
+            "useResources:count:usage:" => {
+                let usage = resource_usage(call)?;
+                let mut used = Ok(());
+                for item in list(call, 0)? {
+                    let held = self.held(call, item)?;
+                    used = self.use_held(id, held, usage);
+                    if used.is_err() {
+                        break;
                     }
                 }
+                used
             }
             "updateFence:" => {
                 let fence = self.fence_of(call, 0)?;
@@ -404,6 +431,26 @@ impl NewRuntime {
                     Ok(())
                 }
             },
+            // Each heap of the list used as `useHeap:` uses its one.
+            "useHeaps:count:" => {
+                let mut used = Ok(());
+                for item in list(call, 0)? {
+                    let id_of = item
+                        .as_object()
+                        .ok_or_else(|| refuse(call, format!("heap {item}")))?;
+                    used = match self.block_of(call, id_of)? {
+                        Some(heap) => self.compute(id).encoder.use_heap(heap),
+                        None => {
+                            self.skips.calls += 1;
+                            Ok(())
+                        }
+                    };
+                    if used.is_err() {
+                        break;
+                    }
+                }
+                used
+            }
             _ => return Err(refuse(call, "not played on a compute encoder")),
         };
         result.map_err(failed(call))
