@@ -1805,8 +1805,9 @@ bound.
   halves Metal rounds away from zero. Ours is the unrounded `f32` sum; `R32Float`'s samples
   compare exactly. The largest difference per format, `float` and `half` results together, over
   lavapipe, the M3 on KosmicKrisp and on MoltenVK, a Radeon 780M, an RTX 3090 and an Iris Xe:
-  `RGBA8Unorm` `2.44e-4`, `R8Unorm` `1.53e-4`, `RGBA8Snorm` `4.88e-4`, `RGBA16Float` `3.74e-4`,
-  `RGBA16Unorm` `2.16e-4` on lavapipe, KosmicKrisp and the 3090 and `7.8e-6` elsewhere (lavapipe's
+  `RGBA8Unorm` `2.44e-4`, `R8Unorm` `1.53e-4`, `RGBA8Snorm` `4.88e-4`, `RGBA16Float` `3.74e-4`
+  (`4.73e-4` on lavapipe in the authored bicubic edge cases, at values in `[1, 2)` where a `half`
+  step is `9.77e-4`, at normalized and at pixel coordinates alike), `RGBA16Unorm` `2.16e-4` on lavapipe, KosmicKrisp and the 3090 and `7.8e-6` elsewhere (lavapipe's
   `half` results keep their `f32` values). Through a runtime sampler slot it holds only where the
   bound sampler filters (a linear minification or magnification filter, anisotropy, a cubic filter
   or a linear mip filter): a nearest sampler's sample is the decoded texel at Metal's position.
