@@ -17,12 +17,17 @@
 //! (`getelementptr`, casts, `phi`, `select`, `freeze`), a plain load or store address, a memory
 //! intrinsic's operand (`memset`, `memcpy`, `memmove`: its bytes are a data access), a compare,
 //! or a pointer stored into a forwarding cell: an atomic, any other call, `ptrtoint`, an
-//! aggregate holding it, a load or store of an aggregate that holds pointers, or a store of its
-//! pointer into other memory. It is open too when its slots are not disciplined: two pointer
-//! slots overlap, one slot is accessed as two pointer types, a pointer access at an unknown
-//! offset meets any data access, a data access (a load or store of a non-pointer, a memory
-//! intrinsic's bytes) overlaps a pointer slot, or a data access's bytes are not
-//! translation-time constants; unless it is a pool (below). And every alloca is open when some
+//! aggregate holding it that leaves SSA, a load or store of an aggregate that holds pointers, or
+//! a store of its pointer into other memory. An aggregate stays a value when its every use, and
+//! every use of each aggregate built on it, is an `extractvalue`, the aggregate operand of an
+//! `insertvalue`, or an incoming value of a `phi` of such aggregates (a struct of `array_ref`s
+//! passed by value to an inlined function): a pointer inserted into it reaches only the
+//! extractions of it, which provenance reads as the pointer itself, so its accesses are theirs.
+//! It is open too when its slots are not disciplined: two pointer slots overlap, one slot is
+//! accessed as two pointer types, a pointer access at an unknown offset meets any data access, a
+//! data access (a load or store of a non-pointer, a memory intrinsic's bytes) overlaps a pointer
+//! slot, or a data access's bytes are not translation-time constants; unless it is a pool
+//! (below). And every alloca is open when some
 //! access goes through a thread-space pointer that may be `Dynamic` (it may alias any alloca). A
 //! verification that opens allocas or makes pools reruns the fixpoint with them open or pooled; a
 //! second one opens every alloca, so the analysis runs at most three rounds.
@@ -84,15 +89,17 @@
 //! as well as every pointer stored there, and a load at an unknown offset reads null when its cell
 //! has any zero bytes. A slot copy moves the zero bytes inside the copied bytes to the destination
 //! at the same distance from the copy's start. Such a fill keeps its cells closed when it covers
-//! each pointer slot wholly or not at all and no pointer access of the cell is at an unknown offset
-//! ([`disciplined`]); any other `memset` is a data access, as above. The lowered fill writes the
+//! each pointer slot wholly or not at all and, where some pointer access of the cell is at an
+//! unknown offset, every such access lies at a multiple of the pointer's size (its offset's proven
+//! alignment), as each end of the fill does, so the fill covers whole slots wherever the access
+//! lands ([`disciplined`]); any other `memset` is a data access, as above. The lowered fill writes the
 //! zero bytes as it would into any private memory.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::air::intrinsics::LlvmIntrinsic;
 use crate::air::ir::{
-    AddrSpace, Body, Call, Callee, CastOp, Inst, InstId, InstKind, TypeId, Value,
+    AddrSpace, Body, Call, Callee, CastOp, Inst, InstId, InstKind, Type, TypeId, Value,
 };
 use crate::budget::{tree_bytes, Meter};
 use crate::error::Error;
@@ -787,6 +794,9 @@ struct Use {
     slots: BTreeMap<i64, TypeId>,
     /// The pointer type of a pointer access at an unknown offset.
     wild: Option<TypeId>,
+    /// Some pointer access at an unknown offset is not proven to lie at a multiple of the
+    /// pointer's size.
+    wild_unaligned: bool,
     /// The bytes of each data access, `[lo, hi)`, ordered, each once.
     data: BTreeSet<(i64, i64)>,
     /// Some data access has bytes that are not translation-time constants.
@@ -816,7 +826,10 @@ pub(super) fn verify(cx: &mut Cx<'_>, body: &Body, m: &mut Meter) -> Result<Verd
     let bits = pointer_bits(cx, m)?;
     let words = pointer_words(cx, m)?;
     let copied = bit_copy_ends(cx, body, m)?;
-    let result = verify_round(cx, body, &bits, &words, &copied, m);
+    let held = held_insertions(cx, body, m)?;
+    let result = verify_round(cx, body, &bits, &words, &copied, &held, m);
+    m.release(held.len() * map_entry_bytes::<InstId, ()>());
+    drop(held);
     let copied_bytes = copied.0.len() * map_entry_bytes::<InstId, Vec<CopyEnds>>()
         + copied.1.len() * map_entry_bytes::<InstId, InstId>();
     drop(copied);
@@ -949,6 +962,88 @@ fn pointer_bits(cx: &mut Cx<'_>, m: &mut Meter) -> Result<Bits, Error> {
     Ok((by_store, by_cast))
 }
 
+/// The `insertvalue`s whose aggregate stays a value (module doc): every use of it, and of each
+/// aggregate built on it, is an `extractvalue`, the aggregate operand of an `insertvalue`, or an
+/// incoming value of a `phi` of such aggregates. One work unit per instruction and per aggregate
+/// that leaves; the set is charged to the ledger, which [`verify`] returns.
+fn held_insertions(cx: &Cx<'_>, body: &Body, m: &mut Meter) -> Result<BTreeSet<InstId>, Error> {
+    let types = cx.e.module.types();
+    // An `insertvalue` or a `phi` of an aggregate that holds a pointer.
+    let builds = |v: Value| match v {
+        Value::Inst(c) => body.insts.get(c).is_some_and(|i| {
+            matches!(i.kind, InstKind::InsertValue { .. } | InstKind::Phi { .. })
+                && types.get(i.ty).is_some_and(Type::is_aggregate)
+                && types.holds_pointer(i.ty)
+        }),
+        _ => false,
+    };
+    // The aggregates some use takes out of SSA, and those still to follow to what they are built on.
+    let mut left: BTreeSet<InstId> = BTreeSet::new();
+    let mut work: Vec<InstId> = Vec::new();
+    let mut grown = 0usize;
+    for (_, inst) in body.insts.iter() {
+        m.tick(1)?;
+        let keeps = |v: Value| match &inst.kind {
+            InstKind::ExtractValue { agg, .. } | InstKind::InsertValue { agg, .. } => *agg == v,
+            // A `phi` of an aggregate that holds a pointer is itself such an aggregate.
+            InstKind::Phi { .. } => true,
+            _ => false,
+        };
+        let mut found = Ok(());
+        inst.kind.for_each_value(|v| {
+            if found.is_err() || !builds(v) || keeps(v) {
+                return;
+            }
+            if let Value::Inst(c) = v {
+                found = leave(c, (&mut left, &mut work, &mut grown), m);
+            }
+        });
+        found?;
+    }
+    // An aggregate built on one that leaves leaves with it.
+    while let Some(c) = work.pop() {
+        m.tick(1)?;
+        let (agg, incoming) = match body.insts.get(c).map(|i| &i.kind) {
+            Some(InstKind::InsertValue { agg, .. }) => (Some(*agg), &[][..]),
+            Some(InstKind::Phi { incoming, .. }) => (None, &incoming[..]),
+            _ => (None, &[][..]),
+        };
+        for v in agg.into_iter().chain(incoming.iter().map(|(v, _)| *v)) {
+            if let (Value::Inst(a), true) = (v, builds(v)) {
+                leave(a, (&mut left, &mut work, &mut grown), m)?;
+            }
+        }
+    }
+    m.release(grown);
+    let mut held = BTreeSet::new();
+    for (id, inst) in body.insts.iter() {
+        m.tick(1)?;
+        if matches!(inst.kind, InstKind::InsertValue { .. })
+            && builds(Value::Inst(id))
+            && !left.contains(&id)
+        {
+            m.charge(map_entry_bytes::<InstId, ()>())?;
+            held.insert(id);
+        }
+    }
+    m.release(left.len() * map_entry_bytes::<InstId, ()>());
+    Ok(held)
+}
+
+/// Record that aggregate `c` leaves SSA ([`held_insertions`]): new, it is charged to the ledger and
+/// queued to follow.
+fn leave(
+    c: InstId,
+    (left, work, grown): (&mut BTreeSet<InstId>, &mut Vec<InstId>, &mut usize),
+    m: &mut Meter,
+) -> Result<(), Error> {
+    if left.insert(c) {
+        m.charge(map_entry_bytes::<InstId, ()>())?;
+        push_working(work, c, grown, m)?;
+    }
+    Ok(())
+}
+
 /// [`verify`]'s walk of one round, with the round's pointer bits. Its working tables are
 /// returned to the ledger when it returns ([`Round::charged`]).
 fn verify_round(
@@ -957,10 +1052,11 @@ fn verify_round(
     bits: &Bits,
     words: &BTreeMap<InstId, InstId>,
     ends: &BitCopies,
+    held: &BTreeSet<InstId>,
     m: &mut Meter,
 ) -> Result<Verdict, Error> {
     let mut round = Round::default();
-    let r = round.walk(cx, body, (bits, words, ends), m);
+    let r = round.walk(cx, body, (bits, words, ends, held), m);
     m.release(round.charged());
     r
 }
@@ -976,8 +1072,14 @@ struct Round {
     grown: usize,
 }
 
-/// What a round reads besides the body: the pointer bits, the pointer words, and the bit copies.
-type RoundInputs<'r> = (&'r Bits, &'r BTreeMap<InstId, InstId>, &'r BitCopies);
+/// What a round reads besides the body: the pointer bits, the pointer words, the bit copies, and
+/// the insertions into aggregates that stay values.
+type RoundInputs<'r> = (
+    &'r Bits,
+    &'r BTreeMap<InstId, InstId>,
+    &'r BitCopies,
+    &'r BTreeSet<InstId>,
+);
 
 impl Round {
     /// The ledger bytes the tables hold: every cell's entry, exact slot, data range, and zero
@@ -1006,7 +1108,7 @@ impl Round {
         &mut self,
         cx: &mut Cx<'_>,
         body: &Body,
-        ((by_store, by_cast), words, (copy_ends, copy_stores)): RoundInputs<'_>,
+        ((by_store, by_cast), words, (copy_ends, copy_stores), held): RoundInputs<'_>,
         m: &mut Meter,
     ) -> Result<Verdict, Error> {
         // The pointer a store of pointer bits stores, when it is a store of that pointer.
@@ -1132,6 +1234,9 @@ impl Round {
                     op: CastOp::PtrToInt,
                     ..
                 } if by_cast.get(&id).is_some_and(|e| e.1) => {}
+                // A pointer inserted into an aggregate that stays a value reaches only the
+                // extractions of it, which are the pointer itself (module doc).
+                InstKind::InsertValue { .. } if held.contains(&id) => {}
                 other => {
                     // Any other operand use reaches the memory it points to: an atomic, a call,
                     // `ptrtoint`, an aggregate.
@@ -1740,7 +1845,15 @@ fn disciplined(u: &Use, m: &mut Meter) -> Result<bool, Error> {
         return Ok(false);
     }
     if let Some(w) = u.wild {
-        if !u.data.is_empty() || u.data_unknown || !u.zero.is_empty() {
+        if !u.data.is_empty() || u.data_unknown {
+            return Ok(false);
+        }
+        // A zero fill beside them covers whole slots: every access at an unknown offset lies at
+        // a multiple of the pointer's size, and so does each end of every fill.
+        let whole = |&(lo, hi): &(i64, i64)| {
+            lo.rem_euclid(POINTER_BYTES) == 0 && hi.rem_euclid(POINTER_BYTES) == 0
+        };
+        if !u.zero.is_empty() && (u.wild_unaligned || !u.zero.iter().all(whole)) {
             return Ok(false);
         }
         for t in u.slots.values() {
@@ -1749,7 +1862,7 @@ fn disciplined(u: &Use, m: &mut Meter) -> Result<bool, Error> {
                 return Ok(false);
             }
         }
-        return Ok(true);
+        return fills_cover_slots(u, m);
     }
     if u.data_unknown {
         return Ok(false);
@@ -1769,7 +1882,11 @@ fn disciplined(u: &Use, m: &mut Meter) -> Result<bool, Error> {
             return Ok(false);
         }
     }
-    // Every zero fill covers each pointer slot wholly or not at all.
+    fills_cover_slots(u, m)
+}
+
+/// Whether every zero fill of `u` covers each exact pointer slot wholly or not at all.
+fn fills_cover_slots(u: &Use, m: &mut Meter) -> Result<bool, Error> {
     for &(lo, hi) in &u.zero {
         m.tick(1)?;
         if lo >= hi {
@@ -1858,6 +1975,7 @@ fn note_access(
                     if u.wild.replace(ty).is_some_and(|t| t != ty) {
                         u.open = true;
                     }
+                    u.wild_unaligned |= (1i64 << f.align) < POINTER_BYTES;
                 }
             }
         } else if cx.e.module.types().holds_pointer(ty) {
