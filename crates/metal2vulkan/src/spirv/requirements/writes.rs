@@ -15,14 +15,16 @@
 //! (`lower::push`'s `the_status_address_is_always_placed_in_the_push_block`); one of a device that
 //! does not reaches it through its `Synthetic(ExecutionStatus)` storage buffer, the buffer's
 //! binding, which counts as the buffer too. A
-//! written pointer is traced back through access chains, `OpConvertUToPtr`, and an `OpIAdd` of a
-//! constant; it addresses the status buffer exactly when the trace ends at that binding or at a
-//! load of that member. A pointer that traces anywhere else, or not at all (a phi, a parameter, a
-//! selected value), is the function's: the guest never holds the status buffer's address, so no
-//! write of the guest's is taken for the product's.
+//! written pointer is traced back through access chains, `OpConvertUToPtr`, an `OpIAdd` of a
+//! constant, and an `OpSelect` whose one hand is a constant (the floor's tail folds into each
+//! pushed field so: `lower::push::fold_never_pushed`); it addresses the status buffer exactly when
+//! the trace ends at that binding or at a load of that member. A pointer that traces anywhere else,
+//! or not at all (a phi, a parameter, a selection of two values), is the function's: the guest
+//! never holds the status buffer's address, so no write of the guest's is taken for the product's.
 //!
-//! The trace also ends at an `OpIAdd` whose one operand is a load of the address member, whatever
-//! the other: the guest does not hold the address, so no sum of the guest's has such an operand.
+//! The trace also ends at an `OpIAdd` whose one operand is a load of the address member, folded or
+//! not, whatever the other: the guest does not hold the address, so no sum of the guest's has such
+//! an operand.
 //!
 //! A tile function's color attachment (`TileAttachment`) is the product's too: its writes carry
 //! Metal's color attachment write, a color output, which no other invocation or command reads but
@@ -92,8 +94,8 @@ struct Status<'m> {
     block: Option<Value>,
     /// The indices of its `ExecutionStatusAddress` members, the product's address.
     members: Vec<u32>,
-    /// The defining instruction of every access chain, `OpConvertUToPtr`, `OpIAdd`, and load;
-    /// empty when the module reaches no status buffer.
+    /// The defining instruction of every access chain, `OpConvertUToPtr`, `OpIAdd`, `OpSelect`,
+    /// and load; empty when the module reaches no status buffer.
     defs: BTreeMap<Value, &'m Inst>,
 }
 
@@ -155,6 +157,7 @@ impl<'m> Status<'m> {
                             op: BinOp::IAdd,
                             ..
                         }
+                        | Inst::Select { .. }
                         | Inst::Load { .. }
                 );
                 if let (true, Some(r)) = (traced, n.result) {
@@ -201,6 +204,10 @@ impl<'m> Status<'m> {
                     }
                     (true, true) => return Ok(false),
                 },
+                Some(Inst::Select { .. }) => match self.unfolded(m, v)? {
+                    Some(other) => other,
+                    None => return Ok(false),
+                },
                 Some(Inst::Load { ptr, .. }) => return self.is_member(m, *ptr),
                 _ => return Ok(false),
             };
@@ -208,12 +215,27 @@ impl<'m> Status<'m> {
         Ok(false)
     }
 
-    /// Whether `v` is a load of the push block's product address member.
+    /// Whether `v` is a load of the push block's product address member, or such a load folded
+    /// ([`Self::unfolded`]).
     fn loads_member(&self, m: &TypedModule, v: Value) -> BResult<bool> {
+        let v = self.unfolded(m, v)?.unwrap_or(v);
         match self.defs.get(&v) {
             Some(Inst::Load { ptr, .. }) => self.is_member(m, *ptr),
             _ => Ok(false),
         }
+    }
+
+    /// The other hand of `v` where `v` is an `OpSelect` whose one hand is a constant, the form the
+    /// floor's tail folds a pushed field in.
+    fn unfolded(&self, m: &TypedModule, v: Value) -> BResult<Option<Value>> {
+        let Some(Inst::Select { t, f, .. }) = self.defs.get(&v) else {
+            return Ok(None);
+        };
+        Ok(match (constant(m, *t)?, constant(m, *f)?) {
+            (true, false) => Some(*f),
+            (false, true) => Some(*t),
+            _ => None,
+        })
     }
 
     /// Whether `ptr` points to the push block's `ExecutionStatusAddress` member.

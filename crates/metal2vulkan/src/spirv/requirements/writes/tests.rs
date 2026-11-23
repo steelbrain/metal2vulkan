@@ -65,9 +65,10 @@ fn fragment(mut b: ModuleBuilder, main: FuncId) -> TypedModule {
 /// A fragment that counts a resident miss as `lower::access::dynamic` does (`ResidentMisses += 1`
 /// and `Status |= RESIDENT_MISS`, relaxed device atomics at a constant offset from the push
 /// block's `ExecutionStatusAddress`), then reads through a slot's guest base and writes as `guest`
-/// says. Its push members follow the kind order: `RootTableAddress`, `ExecutionStatusAddress`, then
-/// the slot's `SlotGuestBase`.
-fn miss_counting(guest: Guest) -> TypedModule {
+/// says. Its push members follow the kind order: `RootTableAddress`, `ExecutionStatusAddress`, the
+/// slot's `SlotGuestBase`, then, where `folded`, the floor's `TailWord`, whose test folds into each
+/// other field as lowering folds it (`lower::push::fold_never_pushed`).
+fn miss_counting(guest: Guest, folded: bool) -> TypedModule {
     let mut b = ModuleBuilder::new();
     let u32_ = int(&mut b, 32);
     let u64_ = int(&mut b, 64);
@@ -87,10 +88,28 @@ fn miss_counting(guest: Guest) -> TypedModule {
     let base = b
         .push_member(PushField::SlotGuestBase(slot), uvec2, 16)
         .expect("base field");
+    let tail = folded.then(|| {
+        b.push_member(PushField::TailWord, u32_, 24)
+            .expect("tail field")
+    });
     let push = b.push_global().expect("push block");
     let void = b.ty(Type::Void).expect("void");
     let mut f = b.function(void).expect("main");
-    let at = field(&mut f, push, status.index);
+    let never = tail.map(|t| {
+        let word = field(&mut f, push, t.index);
+        crate::lower::push::tail_never_pushed(&mut f, word, PushField::TailWord)
+            .expect("test")
+            .expect("the tail's test")
+    });
+    // Member `index`'s value, folded where the tail is.
+    let pushed = |f: &mut FunctionBuilder<'_>, index: u32| {
+        let v = field(f, push, index);
+        match never {
+            Some(never) => crate::lower::push::fold_never_pushed(f, never, v).expect("fold"),
+            None => v,
+        }
+    };
+    let at = pushed(&mut f, status.index);
     for (word, op, value) in [
         (StatusWord::ResidentMisses, AtomicOp::IAdd, 1),
         (
@@ -106,7 +125,7 @@ fn miss_counting(guest: Guest) -> TypedModule {
         f.atomic(op, p, Scope::Device, Semantics::RELAXED, v)
             .expect("atomic");
     }
-    let words = field(&mut f, push, base.index);
+    let words = pushed(&mut f, base.index);
     let addr = f.convert(ConvOp::Bitcast, words, u64_).expect("address");
     let sixteen = k(&mut f, u64_, 16);
     let addr = f.binary(BinOp::IAdd, addr, sixteen).expect("add");
@@ -120,7 +139,7 @@ fn miss_counting(guest: Guest) -> TypedModule {
         Guest::Reads => {}
         Guest::Stores => f.store(p, v, access).expect("store"),
         Guest::StoresThroughAnotherAddress => {
-            let other = field(&mut f, push, root.index);
+            let other = pushed(&mut f, root.index);
             let eight = k(&mut f, u64_, 8);
             let a = f.binary(BinOp::IAdd, other, eight).expect("add");
             let q = f.device_place(a, u32_).expect("place");
@@ -178,12 +197,18 @@ fn status_binding() -> TypedModule {
 /// `uvec2` push member bitcast to an address, whose trace ends at the bitcast) does, and so does
 /// one that stores in the count's own shape through the push block's other `u64` address,
 /// `RootTableAddress`, whose trace reaches the push block's load and is told from the status
-/// address by its member index alone.
+/// address by its member index alone. Each holds with the floor's tail folded into every field.
 #[test]
 fn the_status_words_are_not_the_functions_writes() {
-    assert!(!writes_memory(&miss_counting(Guest::Reads)).expect("reads"));
-    assert!(writes_memory(&miss_counting(Guest::Stores)).expect("stores"));
-    assert!(writes_memory(&miss_counting(Guest::StoresThroughAnotherAddress)).expect("root"));
+    for folded in [false, true] {
+        let writes = |guest| writes_memory(&miss_counting(guest, folded)).expect("writes");
+        assert!(!writes(Guest::Reads), "reads, folded {folded}");
+        assert!(writes(Guest::Stores), "stores, folded {folded}");
+        assert!(
+            writes(Guest::StoresThroughAnotherAddress),
+            "root, folded {folded}"
+        );
+    }
     assert!(!writes_memory(&status_binding()).expect("binding"));
 }
 

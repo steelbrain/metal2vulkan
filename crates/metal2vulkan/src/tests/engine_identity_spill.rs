@@ -245,7 +245,9 @@ fn a_vertex_function_past_its_share_spills_the_checks_fields_into_its_block() {
 }
 
 /// The loads through a parameter block's address in disassembly `text`: a `ulong` loaded from the
-/// push block, plus a constant (none for the block's first line, where the sum may fold), made a
+/// push block (selected against null by the floor's tail's test where the function has the tail,
+/// `lower::push::fold_never_pushed`), plus a constant (none for the block's first line, where the
+/// sum may fold), made a
 /// pointer to a one-member block (`OpConvertUToPtr`), whose member is loaded. Their number, how
 /// many of them lie in a function's first block, and how many read a 16-byte line: a `uvec4`,
 /// `Aligned 16`, through a block whose member is `NonWritable`.
@@ -283,6 +285,9 @@ fn block_loads(text: &str) -> (usize, usize, usize) {
                 chains.insert(id);
             }
             [id, "=", "OpLoad", "%ulong", chain, ..] if chains.contains(chain) => {
+                bases.insert(id);
+            }
+            [id, "=", "OpSelect", "%ulong", _, _, base] if bases.contains(base) => {
                 bases.insert(id);
             }
             [id, "=", "OpIAdd", "%ulong", a, b]
