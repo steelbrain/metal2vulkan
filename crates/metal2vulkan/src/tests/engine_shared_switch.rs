@@ -12,8 +12,7 @@
 //!
 //! Both hold under the resident-table domains and under the identity domains, where each arm reads
 //! its texture slot's element of the set-1 array at the index its pushed resource ID holds and its
-//! format's bits from its pushed `BicubicTexels` (there at normalized coordinates alone: the
-//! identity domains refuse a bicubic sample at pixel coordinates).
+//! format's bits from its pushed `BicubicTexels`.
 //!
 //! `llvm-as` assembles the kernels; without it the tests skip visibly.
 
@@ -126,14 +125,6 @@ fn clamped() -> Form {
     }
 }
 
-/// The pair under the identity domains, which refuse a bicubic sample at pixel coordinates
-/// (`select::BICUBIC_PIXEL_FORM`): the repeating sampler's emulation, which reads Metal's
-/// position on a repeating axis, and the clamping one's, which reads it on a clamped axis.
-fn identity_forms() -> [Form; 2] {
-    let [repeat, _] = forms();
-    [repeat, clamped()]
-}
-
 /// The same sample without an emulation: a nearest sample in pixel coordinates.
 fn plain() -> Form {
     Form {
@@ -211,15 +202,14 @@ fn words(p: &DeviceProfile, n: Option<u32>, form: Form) -> Option<usize> {
 
 /// An arm of a switch-at-use whose arms take one emulation costs its image's reads, not the
 /// emulation, under either domains. Between 16 and 32 candidates each arm adds the same words
-/// whatever the emulation (under the resident-table domains, one that reads Metal's position, a
-/// repeating sampler's, and one that reads none, a pixel sampler's; under the identity domains
-/// [`identity_forms`]), and an arm's words past the plain sample's are less than a quarter of the
-/// emulation's own.
+/// whether the emulation reads Metal's position (a repeating sampler) or not (a pixel one), and an
+/// arm's words past the plain sample's are less than a quarter of the emulation's own.
 #[test]
 fn the_switch_words_do_not_scale_with_arms_times_emulation() {
-    for (domains, p, [big, small]) in [
-        ("resident-table", lavapipe(), forms()),
-        ("identity", lavapipe_identity(), identity_forms()),
+    let [big, small] = forms();
+    for (domains, p) in [
+        ("resident-table", lavapipe()),
+        ("identity", lavapipe_identity()),
     ] {
         let mut slopes = Vec::new();
         // The 16 arms from 16 to 32 candidates (and one more interned constant at most, the same
@@ -474,8 +464,6 @@ fn the_shared_emulation_answers_each_candidates_own_lane() {
     .collect();
     let [repeat, pixel_edge] = forms();
     for form in [repeat, pixel_edge, clamped()] {
-        // The identity domains refuse a bicubic sample at pixel coordinates.
-        let identity_too = form.name != pixel_edge.name;
         for n in [3u32, 4] {
             let what = format!("{} n={n}", form.name);
             let Some(one) = assemble(&what, &kernel(None, form)) else {
@@ -531,34 +519,31 @@ fn the_shared_emulation_answers_each_candidates_own_lane() {
             let images = (0..n).map(|k| image(slots[&k], k, class_of(k))).collect();
             let res = resources(&plan, &[coords.clone(), out.clone(), ks.clone()], &spec);
             let got = run(&m, &res, images, lanes);
-            let mut runs = vec![("resident-table", got)];
             // The same switch under the identity domains, each candidate `k` the set-1 element
             // `k`.
-            if identity_too {
-                let (a, plan, m) =
-                    compile_kept(&many, "k", &identity).unwrap_or_else(|e| panic!("{what}: {e}"));
-                let (table, _) =
-                    link_and_validate(&a, &identity).unwrap_or_else(|e| panic!("{what}: {e}"));
-                let set1 = (table.bindings.iter())
-                    .find_map(|(s, b)| (*b == (1, 0)).then_some(*s))
-                    .unwrap_or_else(|| panic!("{what}: no set-1 sampled-image array"));
-                let images = (0..n)
-                    .map(|k| {
-                        let mut img = image(set1, k, class_of(k));
-                        img.element = k;
-                        img
-                    })
-                    .collect();
-                let kinds: Vec<u32> = (0..n).map(class_of).collect();
-                let res = identity_resources(
-                    &plan,
-                    &[coords.clone(), out.clone(), ks.clone()],
-                    &kinds,
-                    lanes,
-                );
-                runs.push(("identity", run(&m, &res, images, lanes)));
-            }
-            for (domains, got) in &runs {
+            let (a, plan, m) =
+                compile_kept(&many, "k", &identity).unwrap_or_else(|e| panic!("{what}: {e}"));
+            let (table, _) =
+                link_and_validate(&a, &identity).unwrap_or_else(|e| panic!("{what}: {e}"));
+            let set1 = (table.bindings.iter())
+                .find_map(|(s, b)| (*b == (1, 0)).then_some(*s))
+                .unwrap_or_else(|| panic!("{what}: no set-1 sampled-image array"));
+            let images = (0..n)
+                .map(|k| {
+                    let mut img = image(set1, k, class_of(k));
+                    img.element = k;
+                    img
+                })
+                .collect();
+            let kinds: Vec<u32> = (0..n).map(class_of).collect();
+            let res = identity_resources(
+                &plan,
+                &[coords.clone(), out.clone(), ks.clone()],
+                &kinds,
+                lanes,
+            );
+            let identity_got = run(&m, &res, images, lanes);
+            for (domains, got) in [("resident-table", &got), ("identity", &identity_got)] {
                 for (lane, k) in index.iter().enumerate() {
                     let at = lane * size..(lane + 1) * size;
                     let want = match alone.get(*k as usize) {

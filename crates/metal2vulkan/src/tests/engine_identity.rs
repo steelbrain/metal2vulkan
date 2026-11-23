@@ -78,9 +78,10 @@
 //!   coordinates (`engine/bcu_formats`, `float` and `half` results) reads how the filter treats
 //!   each slot's bound format from the slot's pushed field (`PushField::BicubicTexels`): no
 //!   specialization constant and no fact, where the resident-table domains specialize
-//!   `SpecKey::BicubicTexels` and state `RuntimeFact::BicubicTexels` as before. It passes L3. A
-//!   bicubic sample of a 1D texture (`engine/bcu_forms`) or at pixel coordinates
-//!   (`engine/bcu_address`) is still refused as `Unsupported{IdentityDomains}`, not implemented.
+//!   `SpecKey::BicubicTexels` and state `RuntimeFact::BicubicTexels` as before. It passes L3. So
+//!   does one that samples at pixel coordinates too (`engine/bcu_address`). A bicubic sample of a
+//!   1D texture (`engine/bcu_forms`) is still refused as `Unsupported{IdentityDomains}`, not
+//!   implemented.
 //! - A kernel that samples, compares or fetches through a pixel sampler a texture its argument
 //!   buffer holds, through a runtime sampler slot or a constexpr sampler (`engine/handles`' heap
 //!   samplings, `examples/heap_samples`' `hs_sample`, and a generated comparison, alone and beside
@@ -130,7 +131,7 @@ use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{Error, Feature, Needs};
 use crate::library::Library;
 use crate::lower::dispatch::{nonuniform_region_bytes, region_bytes, NONUNIFORM};
-use crate::lower::select::{LowerInputs, Plan, BICUBIC_LINE_FORM, BICUBIC_PIXEL_FORM};
+use crate::lower::select::{LowerInputs, Plan, BICUBIC_LINE_FORM};
 use crate::memory::handles::Lookup;
 use crate::metal::resource_word::TextureWord;
 use crate::metal::{PixelFormat, TextureSwizzleChannels};
@@ -811,9 +812,9 @@ fn bicubic_slots() -> BTreeSet<SlotRef> {
 
 /// A kernel that samples 2D textures through a bicubic constexpr sampler at normalized
 /// coordinates reads how the filter treats each slot's bound format from the slot's push field
-/// under the identity domains, where the resident-table domains specialize it and state its fact; a
-/// bicubic sample of a 1D texture ([`BICUBIC_LINE_FORM`]) and one at pixel coordinates
-/// ([`BICUBIC_PIXEL_FORM`]) are still refused there, each naming its own form.
+/// under the identity domains, where the resident-table domains specialize it and state its fact,
+/// and so does one that samples at pixel coordinates too (`bcu_address`); a bicubic sample of a 1D
+/// texture is still refused there ([`BICUBIC_LINE_FORM`]).
 #[test]
 fn a_bicubic_kernel_reads_each_slots_format_treatment_from_its_pushed_field() {
     use crate::pipeline::artifact::PrecisionNote;
@@ -877,29 +878,43 @@ fn a_bicubic_kernel_reads_each_slots_format_treatment_from_its_pushed_field() {
                 .contains(&PrecisionNote::BicubicFilterArithmetic),
             "{stem}"
         );
-        // `bcu_forms` samples a 1D texture at normalized coordinates, and `bcu_address` a 2D
-        // texture at pixel coordinates: each refused with its own form.
-        for (bc, entry, form) in [
-            (&forms, "bcu_forms", BICUBIC_LINE_FORM),
-            (&address, "bcu_address", BICUBIC_PIXEL_FORM),
-        ] {
-            compile(bc, entry, &default)
-                .unwrap_or_else(|e| panic!("{stem}: {entry}: resident-table domains: {e}"));
-            match compile(bc, entry, &p) {
-                Err(Error::Unsupported(u)) => {
-                    assert_eq!(
-                        (u.feature, u.needs),
-                        (Feature::IdentityDomains, Needs::NotImplemented),
-                        "{stem}: {entry}"
-                    );
-                    assert_eq!(
-                        u.symbol.map(|f| f.to_string()).as_deref(),
-                        Some(form),
-                        "{stem}: {entry}"
-                    );
-                }
-                other => panic!("{stem}: {entry}: {other:?}"),
+        // `bcu_address` samples its 2D texture at normalized and at pixel coordinates: its one
+        // slot's field, no specialization constant and no fact, and it passes L3.
+        let (a, plan, _) = compile_kept(&address, "bcu_address", &p)
+            .unwrap_or_else(|e| panic!("{stem}: bcu_address: {e}"));
+        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: bcu_address: L3: {e}"));
+        let pushed: Vec<SlotRef> = (plan.push.fields.iter())
+            .filter_map(|f| match f.field {
+                PushField::BicubicTexels(slot) => Some(slot),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            pushed,
+            bicubic_slots().into_iter().take(1).collect::<Vec<_>>(),
+            "{stem}: bcu_address"
+        );
+        assert!(
+            !(a.interface.spec.iter()).any(|c| matches!(c.key, SpecKey::BicubicTexels(_))),
+            "{stem}: bcu_address"
+        );
+        // `bcu_forms` samples a 1D texture at normalized coordinates: refused with its form.
+        compile(&forms, "bcu_forms", &default)
+            .unwrap_or_else(|e| panic!("{stem}: bcu_forms: resident-table domains: {e}"));
+        match compile(&forms, "bcu_forms", &p) {
+            Err(Error::Unsupported(u)) => {
+                assert_eq!(
+                    (u.feature, u.needs),
+                    (Feature::IdentityDomains, Needs::NotImplemented),
+                    "{stem}: bcu_forms"
+                );
+                assert_eq!(
+                    u.symbol.map(|f| f.to_string()).as_deref(),
+                    Some(BICUBIC_LINE_FORM),
+                    "{stem}: bcu_forms"
+                );
             }
+            other => panic!("{stem}: bcu_forms: {other:?}"),
         }
     }
 }
