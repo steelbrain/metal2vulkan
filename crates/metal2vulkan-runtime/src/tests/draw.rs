@@ -3033,8 +3033,10 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
             let plain = state(name, &device, &plain);
             let reading = state(name, &device, &own);
             for (what, state) in [("reading no texture", &plain), ("reading one", &reading)] {
+                // Raw: ash's flag types are not `Debug` under the features the runtime takes.
                 assert_eq!(
-                    state.inner.compiled.flags, want,
+                    state.inner.compiled.flags.as_raw(),
+                    want.as_raw(),
                     "{name}: a state's pipelines {what}, the loop {looped}"
                 );
             }
