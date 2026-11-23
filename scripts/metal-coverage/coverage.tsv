@@ -1116,7 +1116,7 @@ MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithTileDescriptor:options:re
 MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithTileDescriptor:options:completionHandler:		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
 MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithMeshDescriptor:options:reflection:error:		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
 MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithMeshDescriptor:options:completionHandler:		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
-MTLDevice.h	MTLDevice	property	maxThreadgroupMemoryLength		M			a query or call metal2vulkan-runtime does not answer	S	queries
+MTLDevice.h	MTLDevice	property	maxThreadgroupMemoryLength		I	runtime	Device::max_threadgroup_memory_length			
 MTLDevice.h	MTLDevice	property	maxArgumentBufferSamplerCount		M			a query or call metal2vulkan-runtime does not answer	S	queries
 MTLDevice.h	MTLDevice	property	programmableSamplePositionsSupported		M			a query or call metal2vulkan-runtime does not answer	S	queries
 MTLDevice.h	MTLDevice	method	getDefaultSamplePositions:count:		M			the standard positions a pass without `sample_positions` rasterizes at	S	queries

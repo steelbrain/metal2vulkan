@@ -18,7 +18,7 @@ use crate::instance::{Instance, PhysicalDevice};
 use crate::kernel_map::KernelMap;
 use crate::memory::{self, BlockId, BlockMappings, Memory, MemoryClass, Pool};
 use crate::pass::ResolveModes;
-use crate::pipeline::PUSH_STAGES;
+use crate::pipeline::{PUSH_STAGES, VOTE_BYTES};
 use crate::places::Places;
 use crate::reaper::{self, Job, Reaper};
 use crate::record::Recorders;
@@ -392,6 +392,10 @@ pub(crate) struct Core {
     /// last field, so it drops once every other field has.
     _live: Live,
 }
+
+/// Metal's `maxThreadgroupMemoryLength` on Apple's GPUs: 32 KiB, the most
+/// [`Device::max_threadgroup_memory_length`] answers.
+const METAL_THREADGROUP_MEMORY: u32 = 32 * 1024;
 
 /// No stop has begun.
 const RUNNING: u8 = 0;
@@ -923,6 +927,20 @@ impl Device {
     /// across its bus, as on a Mac with a discrete GPU.
     pub fn has_unified_memory(&self) -> bool {
         self.shared.core.unified_memory
+    }
+
+    /// `maxThreadgroupMemoryLength`: the device's `maxComputeSharedMemorySize` less the 4-byte
+    /// vote word a kernel's partial-threadgroups variant may take beside its threadgroup memory,
+    /// rounded down to 16, and at most Metal's 32 KiB. A kernel whose threadgroup memory, its own
+    /// and the lengths set, is within this answer runs its every dispatch, ragged grids included.
+    /// On a device of 32,768 bytes it is 32,752, where a Mac answers 32,768. It changes only the
+    /// answer: every dispatch is still checked against the device's own limit
+    /// ([`Limit::ThreadgroupMemory`](crate::Limit::ThreadgroupMemory)), so one past this answer
+    /// and within that limit runs as before. An emulated SIMD group's scratch, which varies by
+    /// kernel, is not counted (the crate's README, known gaps).
+    pub fn max_threadgroup_memory_length(&self) -> u32 {
+        let max = self.shared.core.limits.max_shared_memory;
+        (max.saturating_sub(VOTE_BYTES) / 16 * 16).min(METAL_THREADGROUP_MEMORY)
     }
 
     /// `supportsTextureSampleCount:`: whether `count` is a sample count the device renders into a

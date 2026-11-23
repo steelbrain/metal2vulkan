@@ -5980,6 +5980,7 @@ method	metal2vulkan-runtime::Device::import_dma_buf	#[cfg(unix)] pub fn import_d
 method	metal2vulkan-runtime::Device::import_dma_bufs	#[cfg(unix)] pub fn import_dma_bufs(&self, chunks: Vec<(std::os::fd::OwnedFd, u64)>, release: Option<Box<dyn FnOnce() + Send>>) -> Result<(Block, u32), Error>
 method	metal2vulkan-runtime::Device::import_host_memory	pub unsafe fn import_host_memory(&self, pointer: NonNull<u8>, len: u64, release: Option<Box<dyn FnOnce() + Send>>) -> Result<(Block, u32), Error>
 method	metal2vulkan-runtime::Device::loss	pub fn loss(&self) -> Option<DeviceLoss>
+method	metal2vulkan-runtime::Device::max_threadgroup_memory_length	pub fn max_threadgroup_memory_length(&self) -> u32
 method	metal2vulkan-runtime::Device::memory_types	pub fn memory_types(&self) -> floor::MemoryTypes
 method	metal2vulkan-runtime::Device::minimum_linear_texture_alignment	pub fn minimum_linear_texture_alignment(&self, pixel_format: PixelFormat) -> Result<u64, Error>
 method	metal2vulkan-runtime::Device::minimum_texture_buffer_alignment	pub fn minimum_texture_buffer_alignment(&self, pixel_format: PixelFormat) -> Result<u64, Error>

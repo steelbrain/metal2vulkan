@@ -150,6 +150,12 @@ impl DispatchVariant {
 /// (`ComputePipelineMetalInfo::metal_max_total_threads_per_threadgroup`).
 const METAL_MAX_THREADS: u32 = 1024;
 
+/// The bytes of a predicated walk's vote word (`RuntimeFact::PredicationVote`), which a kernel's
+/// partial-threadgroups variant takes beside its threadgroup memory ([`Memory::vote`]), and which
+/// [`Device::max_threadgroup_memory_length`](crate::Device::max_threadgroup_memory_length) leaves
+/// room for.
+pub(crate) const VOTE_BYTES: u32 = 4;
+
 /// The number the next [`Compiled`] takes: each content made has its own, never reused in the
 /// process, which a [`DispatchVariant`] names it by.
 static CONTENTS: AtomicU64 = AtomicU64::new(0);
@@ -765,7 +771,7 @@ pub(crate) struct Interface {
 #[derive(Clone, Copy)]
 pub(crate) struct Memory {
     pub(crate) own: OwnMemory,
-    /// A predicated walk's vote word: 4 bytes, or 0.
+    /// A predicated walk's vote word: [`VOTE_BYTES`], or 0.
     pub(crate) vote: u32,
 }
 
@@ -1644,7 +1650,7 @@ pub(crate) fn interface(
                 align,
             } if align.is_power_of_two() => aligned.push((index, u64::from(align) - 1)),
             // The walk's vote word: 4 bytes beside the threadgroup memory.
-            RuntimeFact::PredicationVote => vote = 4,
+            RuntimeFact::PredicationVote => vote = VOTE_BYTES,
             // Each invocation's slot of the private arena, which the encoder places
             // (`FieldValue::PrivateArena`).
             RuntimeFact::PrivateArena { slot_bytes } => private_arena = Some(slot_bytes),

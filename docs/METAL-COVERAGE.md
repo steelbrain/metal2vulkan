@@ -10,12 +10,12 @@ Every public item of the macOS 27.2 SDK (Xcode 27.2, 27B52)'s Metal headers, by 
 
 | Status | Items | Of which deprecated |
 |---|---|---|
-| implemented | 637 | 29 |
-| missing | 1074 | 34 |
+| implemented | 638 | 29 |
+| missing | 1073 | 34 |
 | out of scope | 424 | 5 |
 | all | 2135 | 68 |
 
-Implemented by the runtime: 280; by the translator's values: 357. Missing by size: S 182, M 203, L 313, XL 376.
+Implemented by the runtime: 281; by the translator's values: 357. Missing by size: S 181, M 203, L 313, XL 376.
 
 ## Missing, in build order
 
@@ -28,7 +28,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | command queue descriptor | S | 3 | `MTLCommandQueueDescriptor`, `MTLCommandQueueDescriptor.maxCommandBufferCount`, `MTLDevice.newCommandQueueWithDescriptor:` |
 | compute, blit and resource-state pass descriptors | S | 10 | `MTLBlitPassDescriptor`, `MTLBlitPassDescriptor.blitPassDescriptor`, `MTLCommandBuffer.computeCommandEncoderWithDescriptor:`, ... |
 | libraries from a file path or URL | S | 2 | `MTLDevice.newLibraryWithFile:error:`, `MTLDevice.newLibraryWithURL:error:` |
-| device, state and resource queries | S | 71 | `MTLAllocation.allocatedSize`, `MTLBuffer.sparseBufferTier`, `MTLCommandBuffer.device`, ... |
+| device, state and resource queries | S | 70 | `MTLAllocation.allocatedSize`, `MTLBuffer.sparseBufferTier`, `MTLCommandBuffer.device`, ... |
 | plain-value constructors (`MTLOriginMake` and the rest) | S | 7 | `MTLOriginMake`, `MTLSizeMake`, `MTLRegionMake1D`, ... |
 | a buffer made with bytes | S | 1 | `MTLDevice.newBufferWithBytes:length:options:` |
 | pipeline creation forms (from a function, with a completion handler) | S | 6 | `MTLDevice.newRenderPipelineStateWithDescriptor:options:completionHandler:`, `MTLDevice.newComputePipelineStateWithFunction:error:`, `MTLDevice.newComputePipelineStateWithFunction:options:reflection:error:`, ... |
@@ -1452,7 +1452,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLDevice.newRenderPipelineStateWithTileDescriptor:options:completionHandler:` | method | missing | L: tile render pipelines; metal2vulkan-runtime makes none |
 | `MTLDevice.newRenderPipelineStateWithMeshDescriptor:options:reflection:error:` | method | missing | L: mesh render pipelines; metal2vulkan-runtime makes none |
 | `MTLDevice.newRenderPipelineStateWithMeshDescriptor:options:completionHandler:` | method | missing | L: mesh render pipelines; metal2vulkan-runtime makes none |
-| `MTLDevice.maxThreadgroupMemoryLength` | property | missing | S: a query or call metal2vulkan-runtime does not answer |
+| `MTLDevice.maxThreadgroupMemoryLength` | property | implemented | `Device::max_threadgroup_memory_length` (runtime) |
 | `MTLDevice.maxArgumentBufferSamplerCount` | property | missing | S: a query or call metal2vulkan-runtime does not answer |
 | `MTLDevice.programmableSamplePositionsSupported` | property | missing | S: a query or call metal2vulkan-runtime does not answer |
 | `MTLDevice.getDefaultSamplePositions:count:` | method | missing | S: the standard positions a pass without `sample_positions` rasterizes at |

@@ -94,6 +94,14 @@ them over this crate's items:
   `Device::with_present_queue` runs the consumer's presents on the presenting queue under its lock
   (see "Presenting"). The runtime keeps owning every handle.
 - `Device::has_unified_memory` is true where Vulkan's device type is integrated or CPU.
+- `Device::max_threadgroup_memory_length` answers `maxThreadgroupMemoryLength`: the device's
+  `maxComputeSharedMemorySize` less the 4-byte vote word a kernel's partial-threadgroups variant
+  may take beside its threadgroup memory, rounded down to 16, and at most Metal's 32,768. A kernel
+  whose threadgroup memory, its own and the lengths set, is within it runs every dispatch, ragged
+  grids included. On a device of 32,768 bytes it is 32,752, where a Mac reads 32,768. Every
+  dispatch is still checked against the device's own limit, so one past the answer and within
+  that limit runs as before. Unaudited: a guest that rounds the answer down to a power of two
+  gets 16 KiB there, where a Mac's answer gives it 32 KiB.
 - `Device::supports_function_pointers` is true on every device: a kernel's call through a
   visible-function table is a switch over the functions its state links, known when the state is
   made, and needs no Vulkan feature (see "Visible-function tables"). The runtime gives no
@@ -2387,8 +2395,9 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   makes, is in docs/API.md, section 5 (`PushField::SlotBounds`).
 - A dispatch's threadgroup memory, the kernel's own and the lengths set, each rounded up to 16
   bytes, is at most the device's `maxComputeSharedMemorySize` (`Limit::ThreadgroupMemory`), where
-  Metal's is its `maxThreadgroupMemoryLength`. A kernel's access past its threadgroup memory is
-  undefined, as in Metal, and the runtime does not confine it.
+  Metal's is its `maxThreadgroupMemoryLength`, which `Device::max_threadgroup_memory_length`
+  answers with room for a partial threadgroup's vote word. A kernel's access past its threadgroup
+  memory is undefined, as in Metal, and the runtime does not confine it.
 - Threadgroup memory, a function's declared threadgroup variables and its `[[threadgroup(n)]]`
   arguments, reads zero in every threadgroup until the program writes it, as an Apple GPU reads it
   (the translator's null initializers, docs/API.md, "Threadgroup memory before the program writes
@@ -3530,7 +3539,11 @@ cache is answered compile-required on both.
   device's compute subgroups are neither 32 lanes nor 64 or 128 split into 32-lane clusters. It
   refuses the variant of a kernel whose barriers in a
   loop need a vote word that does not fit beside its threadgroup memory in
-  `maxComputeSharedMemorySize`.
+  `maxComputeSharedMemorySize`, which `Device::max_threadgroup_memory_length` leaves room for: a
+  kernel that takes more threadgroup memory than that answer, as one built for a Mac's 32,768
+  bytes does on a device of 32,768, keeps this refusal for its ragged grids. The answer does not
+  count an emulated SIMD group's scratch, whose bytes vary by kernel, so a kernel at the answer
+  whose SIMD groups are emulated can still pass the device's limit (`Limit::ThreadgroupMemory`).
 - A kernel that observes its threadgroup partition makes a `VkPipeline` per threadgroup size it
   is dispatched at: the state's main pipeline at the descriptor's
   `requiredThreadsPerThreadgroup` where the kernel takes no threadgroup memory length from the

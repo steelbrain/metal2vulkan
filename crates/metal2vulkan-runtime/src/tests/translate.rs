@@ -4600,8 +4600,9 @@ $REGION_META!3 = !{i32 $OUT, !"air.buffer", !"air.location_index", i32 0, i32 1,
     /// [`SCAN`] at 1,024 threads, Metal's largest threadgroup, in its two shapes ([`scan_kernel`]):
     /// `scan_static`'s declared array and `scan_length`'s region the encoder sets, each of the
     /// bytes a guest is told for Metal's `maxThreadgroupMemoryLength`: Metal's own 32 KiB (or the
-    /// device's `maxComputeSharedMemorySize` where smaller), and `room`, the device's limit less
-    /// the predicated walk's 4-byte vote word, rounded down to 16 and at most 32 KiB. Each state's
+    /// device's `maxComputeSharedMemorySize` where smaller), and `room`, the device's answer
+    /// (`Device::max_threadgroup_memory_length`: its limit less the predicated walk's 4-byte vote
+    /// word, rounded down to 16 and at most 32 KiB, which the test checks). Each state's
     /// ragged grid of 25 threads, one partial threadgroup of 25, and its whole grid of 1,024
     /// threads: at `room` every one runs and answers the program's inclusive sums,
     /// `(t + 1)(t + 2) / 2` for thread `t` of its threadgroup. At 32 KiB, where the bytes and the
@@ -4612,12 +4613,17 @@ $REGION_META!3 = !{i32 $OUT, !"air.buffer", !"air.location_index", i32 0, i32 1,
     /// answer the sums. Each outcome is printed; the test fails on any other.
     #[test]
     fn every_device_runs_a_1024_thread_observers_ragged_grid_in_the_limit_less_its_vote_word() {
-        use crate::pipeline::Which;
+        use crate::pipeline::{Which, VOTE_BYTES};
 
         each_device("compute_scan_at_the_told_limit", |name, _, device| {
             let limit = device.core().limits.max_shared_memory;
             let metal = limit.min(32 * 1024);
-            let room = ((limit - 4) / 16 * 16).min(32 * 1024);
+            let room = device.max_threadgroup_memory_length();
+            assert_eq!(
+                room,
+                ((limit - VOTE_BYTES) / 16 * 16).min(32 * 1024),
+                "{name}: the answer, the limit less the vote word, rounded down to 16, at most 32 KiB"
+            );
             let mut told = vec![metal];
             if room != metal {
                 told.push(room);
@@ -4716,6 +4722,113 @@ $REGION_META!3 = !{i32 $OUT, !"air.buffer", !"air.location_index", i32 0, i32 1,
                 }
             }
             assert!(failed.is_empty(), "{name}: {failed:?}");
+        });
+    }
+
+    /// A kernel of one barrier, in no loop, over its `[[threadgroup(0)]]` region: thread `t` stores
+    /// `t + 1` at word `t`, and past the barrier writes word `(t + 1) % n` to `out[g]`, `n` its
+    /// threadgroup's threads and `g` its position in the grid. It observes its threadgroup
+    /// partition, and its partial-threadgroups variant's predicated walk takes no vote word.
+    const NEIGHBOUR_LENGTH: &str = r#"target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
+target triple = "air64_v28-apple-macosx26.0.0"
+
+define void @neighbour_length(ptr addrspace(3) %a, ptr addrspace(1) %out, i32 %t, i32 %g, <3 x i32> %size) {
+entry:
+  %n = extractelement <3 x i32> %size, i64 0
+  %pt = getelementptr inbounds i32, ptr addrspace(3) %a, i32 %t
+  %v = add i32 %t, 1
+  store i32 %v, ptr addrspace(3) %pt, align 4
+  tail call void @air.wg.barrier(i32 2, i32 1)
+  %nb = urem i32 %v, %n
+  %pn = getelementptr inbounds i32, ptr addrspace(3) %a, i32 %nb
+  %x = load i32, ptr addrspace(3) %pn, align 4
+  %o = getelementptr inbounds i32, ptr addrspace(1) %out, i32 %g
+  store i32 %x, ptr addrspace(1) %o, align 4
+  ret void
+}
+
+declare void @air.wg.barrier(i32, i32)
+
+!air.kernel = !{!0}
+!air.version = !{!8}
+!air.language_version = !{!9}
+!0 = !{ptr @neighbour_length, !1, !2}
+!1 = !{}
+!2 = !{!3, !4, !5, !6, !7}
+!3 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 3, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"a"}
+!4 = !{i32 1, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"out"}
+!5 = !{i32 2, !"air.thread_index_in_threadgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"t"}
+!6 = !{i32 3, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"g"}
+!7 = !{i32 4, !"air.threads_per_threadgroup", !"air.arg_type_name", !"uint3", !"air.arg_name", !"size"}
+!8 = !{i32 2, i32 8, i32 0}
+!9 = !{!"Metal", i32 4, i32 0, i32 0}
+"#;
+
+    /// [`NEIGHBOUR_LENGTH`] at 1,024 threads with its region set at Metal's 32 KiB (the device's
+    /// `maxComputeSharedMemorySize` where smaller), past `Device::max_threadgroup_memory_length`
+    /// on a device of 32,768 bytes: the answer changes only what a guest is told, and a kernel
+    /// whose variant takes no vote word runs its ragged grid of 25 threads and its whole grid of
+    /// 1,024 within the device's own limit, each answering `(t + 1) % n + 1` for thread `t` of a
+    /// threadgroup of `n`.
+    #[test]
+    fn every_device_runs_a_kernel_without_a_vote_word_at_a_length_past_its_answer() {
+        use crate::pipeline::Which;
+
+        let bitcode = match metal2vulkan_devtools::llvm_assemble_text(NEIGHBOUR_LENGTH) {
+            Ok(bitcode) => bitcode,
+            Err(AssembleError::Missing(why)) => {
+                eprintln!("SKIPPED: {why}");
+                return;
+            }
+            Err(error) => panic!("neighbour_length: {error:?}"),
+        };
+        let library = Library::from_air(&bitcode).expect("the library");
+        let function = library.function("neighbour_length").expect("the kernel");
+        let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
+            FunctionDescriptor::new(function),
+        ));
+        each_device("compute_length_past_the_answer", |name, _, device| {
+            let limit = device.core().limits.max_shared_memory;
+            let length = limit.min(32 * 1024);
+            let answer = device.max_threadgroup_memory_length();
+            let state = state(name, &device, &descriptor);
+            let compiled = &state.inner.compiled;
+            let partial = (compiled.variant_kernel(Which::Partial, |why| {
+                panic!("{name}: the partial-threadgroups variant is refused: {why:?}")
+            }))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(partial.interface.memory.vote, 0, "{name}: no vote word");
+            let queue = device.new_command_queue(4).expect("a queue");
+            let mut buffers = Buffers::new(&device, 1 << 16);
+            for grid in [25, 1024] {
+                let want: Vec<u32> = (0..grid).map(|t| (t + 1) % grid + 1).collect();
+                let out = buffers.buffer(4 * 1024);
+                write(&out, 0, &le_bytes(&[0xEEEE_EEEE; 1024]));
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = command_buffer
+                    .compute_command_encoder(DispatchType::Serial)
+                    .expect("an encoder");
+                encoder.set_compute_pipeline_state(&state).expect("a state");
+                (encoder.set_threadgroup_memory_length(length, 0)).expect("a length");
+                encoder.set_buffer(Some(&out), 0, 0).expect("a buffer");
+                (encoder.dispatch_threads([grid, 1, 1], [1024, 1, 1])).unwrap_or_else(|error| {
+                    panic!("{name}: a length of {length} past the answer {answer}: {error}")
+                });
+                encoder.end_encoding();
+                command_buffer.commit().expect("a commit");
+                finished(name, &command_buffer);
+                assert_eq!(command_buffer.error(), None, "{name}");
+                let got = words(&out, 0, grid as usize);
+                let first = got.iter().zip(&want).position(|(got, want)| got != want);
+                assert_eq!(
+                    first, None,
+                    "{name}: grid {grid}: the first word that differs"
+                );
+            }
+            println!(
+                "{name}: a length of {length} of {limit} bytes, past the answer {answer}, ran \
+                 [25, 1, 1] and [1024, 1, 1] in [1024, 1, 1] and answered every word"
+            );
         });
     }
 
