@@ -93,7 +93,9 @@ mod tests;
 /// 8: a case's pipeline compiles as the runtime compiles it (`engine::case_compile`): a kernel
 ///    under the module its dispatch's threadgroup size chooses (`variants::compile_kernel`), a
 ///    draw or mesh draw with no binding plan's variant.
-pub const AUTHORED_COMPILE_CENSUS_VERSION: u32 = 8;
+/// 9: a kernel case with an explicit imageblock compiles at the size its run sets
+///    (`ComputeCommandEncoder::set_imageblock_size`), where it was refused as `KernelImageblock`.
+pub const AUTHORED_COMPILE_CENSUS_VERSION: u32 = 9;
 
 /// The expectation file's name under the corpus root (`validation/corpus`).
 pub const EXPECTATIONS: &str = "authored-compile.tsv";
