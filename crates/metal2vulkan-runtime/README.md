@@ -624,14 +624,16 @@ dma-bufs. On the other answer, given by a probe for this measurement alone, the 
 buffers instead, and about 120 imports are live at the most, one of them a dma-buf. First run, then
 second:
 
-| Guest's buffers | Imports live at most | Time in each `vkQueueSubmit2` | Submitting thread's CPU time | Scored pass | Score | Device memory at peak (Shared and Private) | Jobs |
+| Guest's buffers | Imports live at most | Time in each `vkQueueSubmit2` | Submitting thread's CPU time | Scored pass | Score | The runtime's Shared and Private memory at peak, by its gauges | Jobs |
 |---|---|---|---|---|---|---|---|
 | No-copy | 802, 795 | 0.832, 0.803 ms | 12.99, 12.74 s | 174.4, 172.9 s | 21,711, 21,996 | 988, 821 MiB | m3-max-68988, m3-max-69040 |
 | Managed | 118, 148 | 0.119, 0.114 ms | 2.34, 2.29 s | 162.4, 163.3 s | 22,164, 22,003 | 3.31, 3.34 GiB | m3-max-69016, m3-max-69073 |
 
 Between the arms' means, the submitting thread's CPU time differs by about 10.5 s and the scored
-pass by about 10.8 s; the score differs by 1.1%. The Managed arm holds about 2.3 to 2.5 GiB more
-device memory at its peak.
+pass by about 10.8 s; the score differs by 1.1%. By the runtime's gauges the Managed arm holds about
+2.3 to 2.5 GiB more Shared and Private memory at its peak; that is new host memory, since the
+no-copy arm's imports are the guest's own pages. The driver's own total of device memory counts
+those imports, and reads 2.36 and 2.25 GiB against 3.66 and 3.69 GiB, about 1.4 GiB more.
 
 A texture over a buffer in a dma-buf's one import (`import_dma_buf`) is in place, as over a
 Shared block of the runtime's own (Textures), on a device that offers a linear image for a
