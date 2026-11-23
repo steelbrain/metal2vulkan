@@ -6131,6 +6131,7 @@ method	metal2vulkan-runtime::RenderPipelineDescriptor::slot_writes	pub fn slot_w
 method	metal2vulkan-runtime::RenderPipelineDescriptor::stages_using_direct_arguments	pub fn stages_using_direct_arguments(&self, budget: &crate::Budget, entries: &StageEntries) -> Result<Vec<DirectArgumentUse>, Error>
 method	metal2vulkan-runtime::RenderPipelineDescriptor::unwritten_fragment_inputs	pub fn unwritten_fragment_inputs(&self, budget: &crate::Budget, entries: &StageEntries) -> Result<Option<UnwrittenFragmentInputs>, Error>
 method	metal2vulkan-runtime::RenderPipelineDescriptor::vertex_returns_value	pub fn vertex_returns_value(&self, budget: &crate::Budget, entries: &StageEntries) -> Result<bool, Error>
+method	metal2vulkan-runtime::RenderPipelineState::content_digest	pub fn content_digest(&self) -> Hash256
 method	metal2vulkan-runtime::RenderPipelineState::finish_pipeline	pub fn finish_pipeline(&self) -> Result<(), Error>
 method	metal2vulkan-runtime::RenderPipelineState::imageblock_memory_length_for_dimensions	pub fn imageblock_memory_length_for_dimensions(&self, dimensions: [u32; 3]) -> Result<u64, Error>
 method	metal2vulkan-runtime::RenderPipelineState::imageblock_sample_length	pub fn imageblock_sample_length(&self) -> Result<u32, Error>

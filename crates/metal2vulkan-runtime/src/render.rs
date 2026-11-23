@@ -244,6 +244,8 @@ pub(crate) struct RenderCompiled {
     /// The translator's notes of where the pipeline's answers may differ from Metal's, and its
     /// functions' constexpr samplers' (`constexpr_notes`).
     notes: Vec<PrecisionNote>,
+    /// The translator's content digest of the pipeline (`RenderPipeline::content_digest`).
+    digest: Hash256,
     /// What a draw supplies.
     pub(crate) draws: Draws,
     /// The samplers a state numbers, the vertex function's then the fragment function's, each in
@@ -1254,6 +1256,7 @@ impl RenderCompiled {
             rasterizes_points: pipeline.graphics.writes_point_size
                 || lowered.input_primitive_topology == PrimitiveTopologyClass::Point,
             notes,
+            digest: pipeline.content_digest(),
             draws,
             numbered,
             constexprs,
@@ -1549,6 +1552,18 @@ impl RenderPipelineState {
     /// ([`RenderCommandEncoder::LINE_NOTE`](crate::RenderCommandEncoder::LINE_NOTE)).
     pub fn precision_notes(&self) -> Vec<PrecisionNote> {
         self.inner.compiled.notes.clone()
+    }
+
+    /// No Metal counterpart: the translator's content digest of the state's pipeline
+    /// ([`RenderPipeline::content_digest`]). It covers each stage's module (its SPIR-V words and
+    /// everything else the translator states of it), the layout, the vertex input, the
+    /// fixed-function state, the interface, the runtime dependencies, the requirements and the
+    /// variant bits, and no version of either crate: two builds that translate the state's content
+    /// to the same pipeline answer one digest, and one SPIR-V word changed answers another. The
+    /// states of one content answer one digest; the samplers' numbering, each state's own, is not
+    /// in it. Computed once per content, when its translation is made.
+    pub fn content_digest(&self) -> Hash256 {
+        self.inner.compiled.digest
     }
 
     /// No Metal counterpart as such: each texture slot `stage`'s function uses

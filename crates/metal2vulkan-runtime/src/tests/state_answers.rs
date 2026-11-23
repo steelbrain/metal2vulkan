@@ -5,7 +5,9 @@
 //! answers its descriptor's required threadgroup size, zeros where it set none, as Metal does. A
 //! render state of `R8Unorm` and `R32Float` colors answers Metal's measured sample of 8 bytes (the
 //! float at its alignment), and 8 by 8 pixels of one sample 512 bytes. No state the runtime makes
-//! supports indirect command buffers.
+//! supports indirect command buffers. A render state answers its pipeline's content digest, the
+//! translator's of the state's descriptor: one for two states of one content, another for a state
+//! of another fragment function.
 //!
 //! `llvm-as` assembles the functions; without it the test skips visibly.
 
@@ -18,6 +20,7 @@ mod on_device {
         ColorAttachmentDescriptor, ComputePipelineDescriptor, FunctionDescriptor, PixelFormat,
         StageSource,
     };
+    use metal2vulkan::Budget;
     use metal2vulkan_devtools::fixtures_dir;
 
     #[test]
@@ -75,6 +78,31 @@ mod on_device {
             assert_eq!(pixels, 512, "{name}: 8 by 8 of one sample");
             assert!(!render.support_indirect_command_buffers(), "{name}");
             println!("{name}: a state's static threadgroup memory, width and imageblock answered");
+        });
+    }
+
+    #[test]
+    fn every_device_s_render_states_answer_their_pipelines_content_digest() {
+        let Some(examples) = examples() else {
+            return;
+        };
+        let first = descriptor(&examples, "first_texel_fragment", PixelFormat::R8Unorm);
+        let colored = descriptor(&examples, "colored_fragment", PixelFormat::R8Unorm);
+        each_device("content_digest", |name, _, device| {
+            let digest = state(name, &device, &first).content_digest();
+            let again = state(name, &device, &first).content_digest();
+            assert_eq!(again, digest, "{name}: two states of one content");
+            let translated = (device.translator())
+                .compile_render_pipeline(&first, &Budget::standard())
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(
+                translated.content_digest(),
+                digest,
+                "{name}: the translator's"
+            );
+            let other = state(name, &device, &colored).content_digest();
+            assert_ne!(other, digest, "{name}: another fragment function");
+            println!("{name}: a render state answers its pipeline's content digest");
         });
     }
 }
