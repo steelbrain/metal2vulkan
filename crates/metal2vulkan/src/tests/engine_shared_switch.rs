@@ -10,13 +10,20 @@
 //!   candidate's size and format), and the null texture (the switch's null arm) reads zero.
 //!   Candidates differ in size and format, so the emulation's facts must be the named one's.
 //!
+//! Both hold under the resident-table domains and under the identity domains, where each arm reads
+//! its texture slot's element of the set-1 array at the index its pushed resource ID holds and its
+//! format's bits from its pushed `BicubicTexels` (there at normalized coordinates alone: the
+//! identity domains refuse a bicubic sample at pixel coordinates).
+//!
 //! `llvm-as` assembles the kernels; without it the tests skip visibly.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use super::engine_word_phases::{bounds_word, slot_word, ZERO_UNMAPPED};
 use crate::device::profile::DeviceProfile;
 use crate::device::DevicePolicy;
+use crate::lower::dispatch::region_bytes;
 use crate::lower::select::Plan;
 use crate::metal::bicubic::BicubicTexels;
 use crate::metal::PixelFormat;
@@ -25,7 +32,7 @@ use crate::pipeline::sym::{
     Axis, PushField, ResourceKind, ResourceSlot, SlotClass, SlotRef, SpecKey, Stage,
 };
 use crate::pipeline::testing::{
-    compile, link_and_validate, llvm_assemble, profile, typed_module, AssembleError,
+    compile, compile_kept, link_and_validate, llvm_assemble, profile, typed_module, AssembleError,
 };
 use crate::spirv::interp::{run_with_images, Buffer, Config, Image, Order, Resources};
 use crate::spirv::ir::{GlobalKind, TypedModule};
@@ -58,6 +65,11 @@ fn assemble(name: &str, body: &str) -> Option<Vec<u8>> {
 
 fn lavapipe() -> DeviceProfile {
     profile("lavapipe", DevicePolicy::RESIDENT_TABLES).expect("profile")
+}
+
+/// lavapipe under the identity domains, the runtime's.
+fn lavapipe_identity() -> DeviceProfile {
+    profile("lavapipe", DevicePolicy::default()).expect("profile")
 }
 
 const EDGE: u64 = 1;
@@ -104,6 +116,22 @@ fn forms() -> [Form; 2] {
             words: bicubic(EDGE, true),
         },
     ]
+}
+
+/// The emulation through a clamping sampler at normalized coordinates.
+fn clamped() -> Form {
+    Form {
+        name: "bicubic edge",
+        words: bicubic(EDGE, false),
+    }
+}
+
+/// The pair under the identity domains, which refuse a bicubic sample at pixel coordinates
+/// (`select::BICUBIC_PIXEL_FORM`): the repeating sampler's emulation, which reads Metal's
+/// position on a repeating axis, and the clamping one's, which reads it on a clamped axis.
+fn identity_forms() -> [Form; 2] {
+    let [repeat, _] = forms();
+    [repeat, clamped()]
 }
 
 /// The same sample without an emulation: a nearest sample in pixel coordinates.
@@ -172,56 +200,64 @@ declare {{ {vec4}, i8 }} {decl}
     )
 }
 
-/// The words of `form`'s kernel over `n` candidates on lavapipe, which validates.
-fn words(n: Option<u32>, form: Form) -> Option<usize> {
+/// The words of `form`'s kernel over `n` candidates on lavapipe profile `p`, which validates.
+fn words(p: &DeviceProfile, n: Option<u32>, form: Form) -> Option<usize> {
     let what = format!("{} n={n:?}", form.name);
     let bc = assemble(&what, &kernel(n, form))?;
-    let p = lavapipe();
-    let a = compile(&bc, "k", &p).unwrap_or_else(|e| panic!("{what}: {e}"));
-    link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
+    let a = compile(&bc, "k", p).unwrap_or_else(|e| panic!("{what}: {e}"));
+    link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: {e}"));
     Some(a.module.words.len())
 }
 
 /// An arm of a switch-at-use whose arms take one emulation costs its image's reads, not the
-/// emulation. Between 16 and 32 candidates each arm adds the same words whether the emulation reads
-/// Metal's position (a repeating sampler) or not (a pixel one), and an arm's words past the plain
-/// sample's are less than a quarter of the emulation's own.
+/// emulation, under either domains. Between 16 and 32 candidates each arm adds the same words
+/// whatever the emulation (under the resident-table domains, one that reads Metal's position, a
+/// repeating sampler's, and one that reads none, a pixel sampler's; under the identity domains
+/// [`identity_forms`]), and an arm's words past the plain sample's are less than a quarter of the
+/// emulation's own.
 #[test]
 fn the_switch_words_do_not_scale_with_arms_times_emulation() {
-    let [big, small] = forms();
-    let mut slopes = Vec::new();
-    // The 16 arms from 16 to 32 candidates (and one more interned constant at most, the same
-    // for both forms).
-    for form in [big, small] {
-        let (Some(w16), Some(w32)) = (words(Some(16), form), words(Some(32), form)) else {
+    for (domains, p, [big, small]) in [
+        ("resident-table", lavapipe(), forms()),
+        ("identity", lavapipe_identity(), identity_forms()),
+    ] {
+        let mut slopes = Vec::new();
+        // The 16 arms from 16 to 32 candidates (and one more interned constant at most, the same
+        // for both forms).
+        for form in [big, small] {
+            let (Some(w16), Some(w32)) = (words(&p, Some(16), form), words(&p, Some(32), form))
+            else {
+                return;
+            };
+            slopes.push((w32 - w16) / 16);
+        }
+        let plain = plain();
+        let (Some(p16), Some(p32)) = (words(&p, Some(16), plain), words(&p, Some(32), plain))
+        else {
             return;
         };
-        slopes.push((w32 - w16) / 16);
+        let plain_slope = (p32 - p16) / 16;
+        let (Some(one), Some(one_plain)) = (words(&p, None, big), words(&p, None, plain)) else {
+            return;
+        };
+        let emulation = one - one_plain;
+        eprintln!(
+            "{domains}: {}: per arm {} ({}: {}), plain {plain_slope}, emulation {emulation}",
+            big.name, slopes[0], small.name, slopes[1]
+        );
+        assert_eq!(
+            slopes[0], slopes[1],
+            "{domains}: {} and {}: an arm's words depend on the emulation's",
+            big.name, small.name
+        );
+        assert!(
+            4 * slopes[0].saturating_sub(plain_slope) < emulation,
+            "{domains}: {}: an arm adds {} words past the plain {plain_slope}, against an \
+             emulation of {emulation}",
+            big.name,
+            slopes[0]
+        );
     }
-    let plain = plain();
-    let (Some(p16), Some(p32)) = (words(Some(16), plain), words(Some(32), plain)) else {
-        return;
-    };
-    let plain_slope = (p32 - p16) / 16;
-    let (Some(one), Some(one_plain)) = (words(None, big), words(None, plain)) else {
-        return;
-    };
-    let emulation = one - one_plain;
-    eprintln!(
-        "{}: per arm {} ({}: {}), plain {plain_slope}, emulation {emulation}",
-        big.name, slopes[0], small.name, slopes[1]
-    );
-    assert_eq!(
-        slopes[0], slopes[1],
-        "{} and {}: an arm's words depend on the emulation's",
-        big.name, small.name
-    );
-    assert!(
-        4 * slopes[0].saturating_sub(plain_slope) < emulation,
-        "{}: an arm adds {} words past the plain {plain_slope}, against an emulation of {emulation}",
-        big.name,
-        slopes[0]
-    );
 }
 
 /// The combined image-sampler bindings of `m`, by texture slot.
@@ -281,6 +317,60 @@ fn resources(plan: &Plan, init: &[Vec<u8>], spec: &[(SpecKey, u64)]) -> Resource
         buffers,
         push,
         spec: s,
+    }
+}
+
+/// The address of [`kernel`]'s buffer `i` under the identity domains.
+fn address(i: usize) -> u64 {
+    0x4_0000_0000 + 0x1_0000 * i as u64
+}
+
+/// Resources of a dispatch of `lanes` one-thread threadgroups under the identity domains:
+/// `[[buffer(i)]]` holding `init[i]` at [`address`]`(i)`, and texture slot `k`'s resource ID
+/// naming element `k` of the set-1 array, its format's bits `classes[k]`, each pushed.
+fn identity_resources(plan: &Plan, init: &[Vec<u8>], classes: &[u32], lanes: u32) -> Resources {
+    let mut push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
+    for f in &plan.push.fields {
+        let PushLoc::Push { offset } = f.loc else {
+            panic!("{f:?} past the push window");
+        };
+        let o = offset as usize;
+        let bytes: Vec<u8> = match f.field {
+            PushField::SlotGuestBase(s) if s.class == SlotClass::Buffer => {
+                slot_word(address(s.index as usize)).to_le_bytes().to_vec()
+            }
+            PushField::SlotGuestBase(s) if s.class == SlotClass::Texture => {
+                u64::from(s.index).to_le_bytes().to_vec()
+            }
+            PushField::BicubicTexels(s) => classes[s.index as usize].to_le_bytes().to_vec(),
+            PushField::ConstexprSampler(_) => 0u32.to_le_bytes().to_vec(),
+            PushField::SlotBounds(s) => bounds_word(init[s.index as usize].len(), 0).to_vec(),
+            PushField::ZeroAddress => ZERO_UNMAPPED.to_le_bytes().to_vec(),
+            PushField::DispatchRegion => region_bytes([0; 3], [lanes, 1, 1], [1, 1, 1])
+                .expect("packs")
+                .to_vec(),
+            other => panic!("unexpected push field {other:?}"),
+        };
+        push[o..o + bytes.len()].copy_from_slice(&bytes);
+    }
+    let mut spec = BTreeMap::new();
+    for axis in [Axis::X, Axis::Y, Axis::Z] {
+        spec.insert(SpecKey::LocalSize(axis), 1);
+    }
+    spec.insert(SpecKey::FlatLocalSize, 1);
+    let buffers = init
+        .iter()
+        .enumerate()
+        .map(|(i, b)| Buffer {
+            slot: None,
+            address: Some(address(i)),
+            bytes: b.clone(),
+        })
+        .collect();
+    Resources {
+        buffers,
+        push,
+        spec,
     }
 }
 
@@ -363,10 +453,13 @@ fn image(slot: ResourceSlot, k: u32, class: u32) -> Image {
 
 /// Every lane of the shared emulation over `n` candidates of different sizes and formats is its
 /// candidate's own lane, and the null texture reads zero, for Metal's bicubic filter on the
-/// interpreter.
+/// interpreter, under either domains: under the identity domains, each candidate its slot's
+/// element of the set-1 array and its format's bits pushed, every lane equals the resident-table
+/// domains' lane of its candidate alone.
 #[test]
 fn the_shared_emulation_answers_each_candidates_own_lane() {
     let p = lavapipe();
+    let identity = lavapipe_identity();
     let classes: Vec<u32> = [
         PixelFormat::RGBA8Unorm,
         PixelFormat::RGBA32Float,
@@ -379,7 +472,10 @@ fn the_shared_emulation_answers_each_candidates_own_lane() {
             .0
     })
     .collect();
-    for form in forms() {
+    let [repeat, pixel_edge] = forms();
+    for form in [repeat, pixel_edge, clamped()] {
+        // The identity domains refuse a bicubic sample at pixel coordinates.
+        let identity_too = form.name != pixel_edge.name;
         for n in [3u32, 4] {
             let what = format!("{} n={n}", form.name);
             let Some(one) = assemble(&what, &kernel(None, form)) else {
@@ -435,13 +531,46 @@ fn the_shared_emulation_answers_each_candidates_own_lane() {
             let images = (0..n).map(|k| image(slots[&k], k, class_of(k))).collect();
             let res = resources(&plan, &[coords.clone(), out.clone(), ks.clone()], &spec);
             let got = run(&m, &res, images, lanes);
-            for (lane, k) in index.iter().enumerate() {
-                let at = lane * size..(lane + 1) * size;
-                let want = match alone.get(*k as usize) {
-                    Some(a) => a[at.clone()].to_vec(),
-                    None => vec![0; size],
-                };
-                assert_eq!(got[at], want[..], "{what} lane {lane} (candidate {k})");
+            let mut runs = vec![("resident-table", got)];
+            // The same switch under the identity domains, each candidate `k` the set-1 element
+            // `k`.
+            if identity_too {
+                let (a, plan, m) =
+                    compile_kept(&many, "k", &identity).unwrap_or_else(|e| panic!("{what}: {e}"));
+                let (table, _) =
+                    link_and_validate(&a, &identity).unwrap_or_else(|e| panic!("{what}: {e}"));
+                let set1 = (table.bindings.iter())
+                    .find_map(|(s, b)| (*b == (1, 0)).then_some(*s))
+                    .unwrap_or_else(|| panic!("{what}: no set-1 sampled-image array"));
+                let images = (0..n)
+                    .map(|k| {
+                        let mut img = image(set1, k, class_of(k));
+                        img.element = k;
+                        img
+                    })
+                    .collect();
+                let kinds: Vec<u32> = (0..n).map(class_of).collect();
+                let res = identity_resources(
+                    &plan,
+                    &[coords.clone(), out.clone(), ks.clone()],
+                    &kinds,
+                    lanes,
+                );
+                runs.push(("identity", run(&m, &res, images, lanes)));
+            }
+            for (domains, got) in &runs {
+                for (lane, k) in index.iter().enumerate() {
+                    let at = lane * size..(lane + 1) * size;
+                    let want = match alone.get(*k as usize) {
+                        Some(a) => a[at.clone()].to_vec(),
+                        None => vec![0; size],
+                    };
+                    assert_eq!(
+                        got[at],
+                        want[..],
+                        "{domains}: {what} lane {lane} (candidate {k})"
+                    );
+                }
             }
         }
     }
