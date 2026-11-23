@@ -44,7 +44,10 @@
 //! **Bounds** of an arena access are checked unless the arena is threadgroup memory on a profile
 //! whose `ThreadgroupMemory` is `Native` ([`contained`]): there no threadgroup access is contained, an arena's, its atomics', memory
 //! intrinsics', pointer cells' and imageblock's alike, nor a typed threadgroup object's index, and
-//! one past the memory is undefined, as in Metal (no robustness feature covers arenas). Contained,
+//! one past the memory is undefined, as in Metal (no robustness feature covers arenas). An
+//! unchecked load or store at a constant offset outside the arena, which lies outside every object
+//! in it and may lie past its words, where no access chain may index with a constant, is a zero
+//! load or no store, as a contained one is. Contained,
 //! with `inb` the normative check against the arena's exact byte
 //! size, a load reads at `select(inb, off, 0)` and yields `select(inb, v, 0)`, and a store sits in
 //! a builder-closed `if_(inb)`. A dereference of a null private pointer (undefined in Metal) reads
@@ -2033,6 +2036,15 @@ pub(super) fn emit_access_at(
         mem: ArenaMem(decl, ops),
         kept,
     };
+    // An unchecked access at a constant offset outside the arena lies outside every object in it,
+    // where Metal leaves the access undefined, and no access chain may index the arena's words
+    // with a constant past them: it is a zero load or no store, as a contained one is.
+    if !a.contained && outside_arena(fb, off, &decl, u64::from(leaf.bytes))? {
+        return match stored {
+            None => leaf::zero(fb, &leaf).map(Some),
+            Some(_) => Ok(None),
+        };
+    }
     if decl.floats {
         return float_words(cx, fb, (a, decl, ops), off, stored);
     }
@@ -2074,6 +2086,24 @@ pub(super) fn emit_access_at(
             Ok(None)
         }
     }
+}
+
+/// Whether a `bytes`-byte access at `off` lies outside `decl`'s arena by the normative check
+/// (`contain::in_bounds`), decided at translation time: `off` and the arena's size are plain
+/// constants. `false` when either is not one.
+fn outside_arena(
+    fb: &mut FunctionBuilder<'_>,
+    off: SValue,
+    decl: &ArenaDecl,
+    bytes: u64,
+) -> BResult<bool> {
+    let Some(off) = fb.const_scalar(off)? else {
+        return Ok(false);
+    };
+    let Some(ConstBits(size)) = fb.module().consts().scalar_bits(decl.size) else {
+        return Ok(false);
+    };
+    Ok(size < bytes || off > size - bytes)
 }
 
 /// Load or store (`stored`) `a`'s leaf, whole `float` words, at byte offset `off` of an arena of

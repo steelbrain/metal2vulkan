@@ -10,8 +10,11 @@
 //! - The array is Metal's allocation: a region filling `maxComputeSharedMemorySize` is planned, one
 //!   byte more is refused, and a static arena's array is its own words. An arena filling the limit
 //!   answers every word.
+//! - A load or store at a constant offset outside the arena is a zero load or no store, in either
+//!   form of the arena.
 //!
-//! An access past threadgroup memory is undefined, in Metal as here; no test reads one.
+//! An access past threadgroup memory at a run-time offset is undefined, in Metal as here; no test
+//! reads one.
 //!
 //! `llvm-as` assembles the kernels; without it the tests skip visibly.
 
@@ -574,6 +577,82 @@ fn an_arena_filling_the_limit_answers_every_word_in_range() {
             let got = run_both(&m, &resources_of(&plan, spec, want.len()));
             let first = got.iter().zip(&want).position(|(got, want)| got != want);
             assert_eq!(first, None, "{what}: the first word that differs");
+        }
+    }
+}
+
+/// Thread `t` of 64 stores `t + 100` at word `t` of the static `[64 x float]` global as a `TY`,
+/// stores a `TY` at the global's element 4294967295, a constant offset (`0xFFFFFFFC`, wrapped)
+/// outside the arena, loads it, and loads word `t` back: `out[t]` is the outside load and
+/// `out[64 + t]` word `t`. `TO`, `FROM_Y` and `FROM_Z` convert to and from `TY`.
+const OUTSIDE: &str = r#"  %w = and i32 %t, 63
+  %v = add i32 %w, 100
+  %x = TO
+  %pa = getelementptr inbounds TY, ptr addrspace(3) BASE, i32 %w
+  store TY %x, ptr addrspace(3) %pa, align 4
+  %past = getelementptr inbounds [64 x float], ptr addrspace(3) BASE, i64 0, i64 4294967295
+  store TY %x, ptr addrspace(3) %past, align 4
+  %y = load TY, ptr addrspace(3) %past, align 4
+  %z = load TY, ptr addrspace(3) %pa, align 4
+  %yo = FROM_Y
+  %zo = FROM_Z
+  %o = getelementptr inbounds i32, ptr addrspace(1) %out, i32 %t
+  store i32 %yo, ptr addrspace(1) %o, align 4
+  %t64 = add i32 %t, 64
+  %o2 = getelementptr inbounds i32, ptr addrspace(1) %out, i32 %t64
+  store i32 %zo, ptr addrspace(1) %o2, align 4
+  ret void
+"#;
+
+/// A threadgroup load and store at a constant offset outside the arena ([`OUTSIDE`]) are a zero
+/// load and no store, through `from_queries`, in an arena of `u32` words (`int` accesses) and in
+/// one of `float` words: the module builds and passes L3, the outside load reads 0, and no word
+/// of the arena takes the outside store.
+#[test]
+fn a_constant_threadgroup_offset_outside_the_arena_loads_zero_and_stores_nothing() {
+    let forms = [
+        (
+            "i32",
+            ["add i32 %v, 0", "add i32 %y, 0", "add i32 %z, 0"],
+            TgWords::Composed,
+            "",
+        ),
+        (
+            "float",
+            [
+                "uitofp i32 %v to float",
+                "fptoui float %y to i32",
+                "fptoui float %z to i32",
+            ],
+            TgWords::Floats,
+            ".floats",
+        ),
+    ];
+    let want: Vec<u32> = std::iter::repeat_n(0, 64).chain(100..164).collect();
+    for (ty, [to, from_y, from_z], words, census_suffix) in forms {
+        let body = OUTSIDE
+            .replace("TY", ty)
+            .replace("FROM_Y", from_y)
+            .replace("FROM_Z", from_z)
+            .replace("TO", to);
+        let Some(bc) = assemble("tg_static", &static_of(64, &body)) else {
+            return;
+        };
+        for stem in PROFILES {
+            let prof = queried(stem);
+            let what = format!("{ty} accesses on {stem}");
+            let a = compile(&bc, "tg_static", &prof).unwrap_or_else(|e| panic!("{what}: {e}"));
+            link_and_validate(&a, &prof).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+            let (plan, m) = typed_module(&bc, "tg_static", &prof).expect("module");
+            let tg = plan.families.access.local.tg.as_ref().expect("an arena");
+            assert_eq!(tg.words, words, "{what}");
+            let census = plan.census();
+            for name in ["access.threadgroup.load", "access.threadgroup.store"] {
+                let name = format!("{name}{census_suffix}");
+                assert!(census.contains_key(&name), "{what}: {name} in {census:?}");
+            }
+            let got = run_both(&m, &resources_of(&plan, &[], want.len()));
+            assert_eq!(got, want, "{what}");
         }
     }
 }
