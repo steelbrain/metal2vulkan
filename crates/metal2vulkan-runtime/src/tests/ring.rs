@@ -4,16 +4,21 @@
 //! the block waits for it, or for a chunk given back, counted as a wait for the block-maker
 //! thread; no block is made on a caller's thread; and chunks given back are taken again before
 //! any further block. Where the block-maker thread makes none, a take that makes a block makes it
-//! without the ring's lock, and takes that meet while it is made make one block between them.
+//! without the ring's lock, and takes that meet while it is made make one block between them. An
+//! ask made once the ring has the block-maker thread's answer to the last, before the thread is
+//! done with it, is answered too. Every wait of these tests is bounded: a lost step fails with
+//! its message.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::device::{lock, Core};
     use crate::memory::MakerTest;
     use crate::ring::{Writes, CHUNK, SPARE};
-    use crate::tests::command::on_device::{each_device, each_device_with, Release};
+    use crate::tests::command::on_device::{
+        each_device, each_device_with, within, Release, PATIENCE,
+    };
     use crate::DeviceOptions;
-    use std::sync::{Arc, Barrier};
+    use std::sync::{mpsc, Arc, Barrier};
     use std::thread;
     use std::time::Duration;
 
@@ -36,6 +41,27 @@ mod on_device {
         thread::spawn(move || taken(&core, 1))
     }
 
+    /// What `thread` returned, once it has within the tests' patience.
+    fn joined(what: &str, thread: thread::JoinHandle<Writes>) -> Writes {
+        within(what, || thread.is_finished());
+        thread.join().unwrap_or_else(|_| panic!("{what} panicked"))
+    }
+
+    /// The test's first meeting with the thread parked at `park`, which comes within the tests'
+    /// patience, and the release of that thread. The meeting waits on a thread of its own, so a
+    /// thread that never parks fails the test rather than hanging it.
+    fn met(what: &str, park: &Arc<Barrier>) -> Release {
+        let (done, meeting) = mpsc::channel();
+        let at = Arc::clone(park);
+        thread::spawn(move || {
+            at.wait();
+            let _ = done.send(());
+        });
+        let meeting = meeting.recv_timeout(PATIENCE);
+        meeting.unwrap_or_else(|_| panic!("timed out waiting for {what}"));
+        Release::of(park)
+    }
+
     /// The ring's blocks and free chunks, its lock free.
     fn chunks(core: &Core) -> (usize, usize) {
         core.ring.chunks().expect("the ring's lock is free")
@@ -48,6 +74,14 @@ mod on_device {
     fn settled(core: &Core) -> (usize, usize) {
         core.pool.await_internals();
         chunks(core)
+    }
+
+    /// The options of a device whose block-maker thread makes no internal.
+    fn making_none() -> DeviceOptions {
+        DeviceOptions {
+            maker: MakerTest::Fail,
+            ..DeviceOptions::default()
+        }
     }
 
     #[test]
@@ -66,8 +100,7 @@ mod on_device {
             let park = Arc::new(Barrier::new(2));
             *lock(&ring.park) = Some(Arc::clone(&park));
             let first = taken(core, 1);
-            park.wait();
-            let mut release = Release::of(&park);
+            let mut release = met("the block-maker thread's make", &park);
             *lock(&ring.park) = None;
             assert_eq!(
                 ring.chunks(),
@@ -87,7 +120,7 @@ mod on_device {
             );
             // A give-back on this thread goes on while the block is made, and serves the take.
             spare.give_back(core);
-            let waited = waiter.join().expect("the waiter");
+            let waited = joined("the take served by the give-back", waiter);
             assert_eq!(
                 counters.metrics().maker_waits,
                 waits + 1,
@@ -117,11 +150,7 @@ mod on_device {
 
     #[test]
     fn where_the_block_maker_thread_makes_none_a_take_makes_the_block_off_the_lock() {
-        let options = || DeviceOptions {
-            maker: MakerTest::Fail,
-            ..DeviceOptions::default()
-        };
-        each_device_with("ring_off_the_lock", options, |name, _, device| {
+        each_device_with("ring_off_the_lock", making_none, |name, _, device| {
             let core = device.core();
             let ring = &core.ring;
             if settled(core).1 == 0 {
@@ -136,8 +165,7 @@ mod on_device {
             *lock(&ring.park) = Some(Arc::clone(&park));
             let maker = take_one(core);
             // The take is parked where it makes the block.
-            park.wait();
-            let mut release = Release::of(&park);
+            let mut release = met("the take that makes the block", &park);
             *lock(&ring.park) = None;
             assert_eq!(
                 ring.chunks(),
@@ -148,8 +176,8 @@ mod on_device {
             // A give-back on this thread goes on while the block is made.
             spare.give_back(core);
             release.now();
-            let made = maker.join().expect("the maker");
-            let waited = waiter.join().expect("the waiter");
+            let made = joined("the take that made the block", maker);
+            let waited = joined("the take that met it", waiter);
             assert_eq!(
                 settled(core).0,
                 before + 1,
@@ -160,9 +188,14 @@ mod on_device {
             }
             // A fill past the ring's chunks makes one block; chunks given back are taken again.
             let (blocks, free) = settled(core);
-            let past = taken(core, free + 1);
+            let past = [
+                taken(core, free),
+                joined("a take past the ring's chunks", take_one(core)),
+            ];
             assert_eq!(settled(core).0, blocks + 1, "{name}: one block past");
-            past.give_back(core);
+            for writes in past {
+                writes.give_back(core);
+            }
             let again = taken(core, settled(core).1);
             assert_eq!(
                 settled(core),
@@ -176,6 +209,43 @@ mod on_device {
                 (blocks + 1) as u64,
                 "{name}: each block made on a caller's thread"
             );
+        });
+    }
+
+    #[test]
+    fn an_ask_made_once_the_ring_has_the_block_maker_thread_s_answer_is_answered() {
+        each_device_with("ring_ask_in_answer", making_none, |name, _, device| {
+            let core = device.core();
+            let ring = &core.ring;
+            if settled(core).1 == 0 {
+                taken(core, 1).give_back(core);
+            }
+            let blocks = settled(core).0;
+            assert!(!ring.asked(), "{name}: no ask waits");
+            // The take that leaves fewer than a block's chunks free asks; the block-maker
+            // thread's answer, that it makes none, is parked once the ring has it.
+            let park = Arc::new(Barrier::new(2));
+            *lock(&ring.park) = Some(Arc::clone(&park));
+            let first = taken(core, 1);
+            let mut release = met("the block-maker thread's answer", &park);
+            *lock(&ring.park) = None;
+            // The ring has the answer: the next take asks again, before the thread is done.
+            let second = taken(core, 1);
+            assert!(ring.asked(), "{name}: the second take asked");
+            release.now();
+            let free = settled(core).1;
+            assert!(
+                !ring.asked(),
+                "{name}: the ask made while the block-maker thread answered the last went \
+                 unanswered: a take that finds no chunk free waits for it with nothing coming"
+            );
+            // A take past the ring's chunks makes the block, on its own thread.
+            let rest = taken(core, free);
+            let past = joined("a take past the ring's chunks", take_one(core));
+            assert_eq!(settled(core).0, blocks + 1, "{name}: one block past");
+            for writes in [first, second, rest, past] {
+                writes.give_back(core);
+            }
         });
     }
 }

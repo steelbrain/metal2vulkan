@@ -11,8 +11,10 @@
 //! leaves fewer chunks free than a block holds, so a block's chunks are free ahead of the takes
 //! and the ring holds at most one block more than the most chunks in use at once need. It makes
 //! one block at a time, without the ring's lock: a take or a give-back never waits for the
-//! driver's allocation. A take that finds no chunk free while the block-maker thread makes the
-//! next waits for it, or for a chunk given back, counted in
+//! driver's allocation. It takes an ask up before it makes the block, so a take that asks again
+//! once the ring has that block, before the thread is done with it, asks anew, and the thread
+//! makes the next block after it: no ask goes unanswered. A take that finds no chunk free while
+//! the block-maker thread makes the next waits for it, or for a chunk given back, counted in
 //! [`Metrics::maker_waits`](crate::Metrics::maker_waits). Where it made none (its make failed, or
 //! it had stopped), a take that finds no chunk free makes the block on its own thread, without
 //! the ring's lock, counted in
@@ -67,7 +69,8 @@ pub(crate) struct Ring {
     changed: Condvar,
     /// For the device tests: where set, the making of a block, the block-maker thread's or a
     /// take's, meets the test at the barrier twice before it allocates, once parked and once
-    /// released.
+    /// released; so does the block-maker thread's answer that it makes none
+    /// (`crate::memory::MakerTest::Fail`), once the ring has it.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) park: Mutex<Option<std::sync::Arc<std::sync::Barrier>>>,
 }
@@ -262,6 +265,23 @@ impl Ring {
         (self.state.try_lock().ok()).map(|state| (state.blocks.len(), state.free.len()))
     }
 
+    /// For the device tests: whether the ring's next block waits on an ask of the block-maker
+    /// thread.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn asked(&self) -> bool {
+        lock(&self.state).next == Next::Maker
+    }
+
+    /// For the device tests: meets the test at [`park`](Self::park) twice where it is set.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn meet_park(&self) {
+        let park = lock(&self.park).clone();
+        if let Some(park) = park {
+            park.wait();
+            park.wait();
+        }
+    }
+
     /// Frees every block, returning how many it freed.
     ///
     /// # Safety
@@ -317,13 +337,7 @@ fn waited(core: &Core, since: Option<u64>) {
 /// counted at [`Site::RingBlock`] on a consumer's thread.
 fn make(core: &Core) -> Result<(RingBlock, u64, Mapping), Error> {
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    {
-        let park = lock(&core.ring.park).clone();
-        if let Some(park) = park {
-            park.wait();
-            park.wait();
-        }
-    }
+    core.ring.meet_park();
     let device = &core.device;
     let info = vk::BufferCreateInfo::default()
         .size(BLOCK)

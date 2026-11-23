@@ -804,9 +804,12 @@ struct State {
     /// Per class, when the block-maker thread's last free of an idle allocation of it ended, in
     /// nanoseconds of [`host_time`](crate::host_time); 0 before one.
     freed_at: [u64; 2],
-    /// The internals asked of the block-maker thread and not yet made, by [`Internal::index`]:
-    /// the zero source, the ring's first block and the staging region from the device's making.
+    /// The internals asked of the block-maker thread and not yet taken up, by [`Internal::index`]:
+    /// the zero source, the ring's first block and the staging region from the device's making,
+    /// and each later ring block a take asks for.
     asked: [bool; INTERNALS],
+    /// The internal the block-maker thread took up and is making ([`run`]).
+    making: Option<Internal>,
     stop: bool,
     next_id: u32,
     next_allocation: u32,
@@ -929,6 +932,7 @@ impl Pool {
                 freed_at: [0, 0],
                 // The device's fixed-size internals: the block-maker thread's first work.
                 asked: [true; INTERNALS],
+                making: None,
                 stop: false,
                 next_id: 1,
                 next_allocation: 1,
@@ -1425,15 +1429,16 @@ impl Pool {
         true
     }
 
-    /// Waits while `internal` is asked of the block-maker thread: until it has made it, its make
-    /// failed, or it stopped. A wait is counted in [`Metrics::maker_waits`] and its time in
-    /// [`Metrics::maker_wait_max_nanos`]; where it is not asked, the call returns at once.
+    /// Waits while `internal` is asked of the block-maker thread or being made there: until it has
+    /// made it, its make failed, or it stopped. A wait is counted in [`Metrics::maker_waits`] and
+    /// its time in [`Metrics::maker_wait_max_nanos`]; where it is neither, the call returns at
+    /// once.
     ///
     /// [`Metrics::maker_waits`]: crate::Metrics::maker_waits
     /// [`Metrics::maker_wait_max_nanos`]: crate::Metrics::maker_wait_max_nanos
     pub(crate) fn await_made(&self, internal: Internal) {
         let mut state = self.lock();
-        if !state.asked[internal.index()] {
+        if !state.pending(internal) {
             return;
         }
         let since = crate::host_time();
@@ -1441,7 +1446,7 @@ impl Pool {
         {
             state.waiting += 1;
         }
-        while state.asked[internal.index()] {
+        while state.pending(internal) {
             state = self.wait(state);
         }
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -1466,17 +1471,29 @@ impl Pool {
     }
 
     /// For the device tests: waits until the block-maker thread has made, or failed to make,
-    /// every internal asked of it.
+    /// every internal asked of it; fails where it has not within the tests' patience.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn await_internals(&self) {
+        let patience = crate::tests::command::on_device::PATIENCE;
+        let deadline = std::time::Instant::now() + patience;
         let mut state = self.lock();
-        while state.asked.contains(&true) {
-            state = self.wait(state);
+        while state.asked.contains(&true) || state.making.is_some() {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            assert!(
+                !left.is_zero(),
+                "timed out waiting for the block-maker thread's internals"
+            );
+            state = self.wait_for(state, left);
         }
     }
 }
 
 impl State {
+    /// Whether `internal` is asked of the block-maker thread or being made there.
+    fn pending(&self, internal: Internal) -> bool {
+        self.asked[internal.index()] || self.making == Some(internal)
+    }
+
     /// Whether the class holds a wholly free unit: a unit allocation of [`ALLOCATION_LEN`], not
     /// retiring, that no block holds, so a take of up to a whole unit has a free range with no
     /// Vulkan call. The block-maker thread makes the class's next allocation while it holds none
@@ -1673,13 +1690,14 @@ pub(crate) fn stock(core: &Core) {
 }
 
 /// The block-maker thread, until the device's teardown or a quiesce stops it. Off every caller's
-/// path, in order: it makes each internal asked of it ([`Internal`]), the device's fixed-size
-/// ones first of all; it frees each imported or exported block given back, then runs an import's
-/// release; it makes an allocation of a class that holds no wholly free unit ([`State::whole`]),
-/// having the consumer map it before it joins the pool; and it frees each allocation idle for
-/// [`IDLE_AGE_NANOS`], after the consumer's unmap of it, one at a time. Each of its allocations
-/// and frees starts once the submit calls inside the driver as its previous one returned have
-/// returned ([`maker_call`]), and what it made is handed on as its call returns. It sleeps until
+/// path, in order: it takes up each internal asked of it and makes it ([`Internal`]), the
+/// device's fixed-size ones first of all, so an ask made during a make is made after it; it
+/// frees each imported or exported block given back, then runs an import's release; it makes an
+/// allocation of a class that holds no wholly free unit ([`State::whole`]), having the consumer
+/// map it before it joins the pool; and it frees each allocation idle for [`IDLE_AGE_NANOS`],
+/// after the consumer's unmap of it, one at a time. Each of its allocations and frees starts once
+/// the submit calls inside the driver as its previous one returned have returned
+/// ([`maker_call`]), and what it made is handed on as its call returns. It sleeps until
 /// the next change, or until the oldest idle allocation reaches the idle age. Stopped, it makes
 /// nothing more: what is asked of it and not made, the calls that need it make.
 pub(crate) fn run(core: Arc<Core>) {
@@ -1706,10 +1724,14 @@ pub(crate) fn run(core: Arc<Core>) {
             return;
         }
         if let Some(internal) = (Internal::ALL.into_iter()).find(|i| state.asked[i.index()]) {
+            // Taken up before the make: an ask made while it runs (the ring asks again once it has
+            // this make's block) is a new one, made next.
+            state.asked[internal.index()] = false;
+            state.making = Some(internal);
             drop(state);
             make_internal(&core, internal);
             state = pool.lock();
-            state.asked[internal.index()] = false;
+            state.making = None;
             pool.changed.notify_all();
             continue;
         }
@@ -1860,6 +1882,7 @@ fn make_internal(core: &Arc<Core>, internal: Internal) {
     if let MakerTest::Fail = core.maker_test {
         if internal == Internal::RingBlock {
             core.ring.unasked();
+            core.ring.meet_park();
         }
         return;
     }
