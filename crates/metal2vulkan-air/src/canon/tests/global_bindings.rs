@@ -5,7 +5,7 @@
 use super::*;
 use crate::abi::GlobalBinding;
 use crate::error::Feature;
-use crate::ir::{Type, TypeId};
+use crate::ir::Type;
 
 /// A global as Apple's compiler writes one for a program-scope binding: a constant of the constant
 /// space holding a pointer, externally initialized and `undef`.
@@ -146,7 +146,7 @@ fn bound_buffers_become_buffer_parameters() {
         panic!("the entry's type is not a function");
     };
     assert_eq!(params.len(), 3);
-    assert_eq!(e.module.globals().len(), 0, "{}", body_text(&e));
+    assert_eq!(e.module.parts().globals.len(), 0, "{}", body_text(&e));
     let text = body_text(&e);
     assert!(text.contains("%a1"), "{text}");
     assert!(text.contains("%a2"), "{text}");
