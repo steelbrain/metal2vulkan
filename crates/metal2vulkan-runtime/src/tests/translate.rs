@@ -46,7 +46,7 @@ mod on_device {
         StageInputDescriptor, StageInputLayoutDescriptor,
     };
     use metal2vulkan::Budget;
-    use metal2vulkan_devtools::{engine_dir, llvm_assemble, AssembleError};
+    use metal2vulkan_devtools::{engine_dir, llvm_assemble, llvm_assemble_text, AssembleError};
     use std::path::{Path, PathBuf};
     use std::time::SystemTime;
 
@@ -1860,28 +1860,7 @@ mod on_device {
         };
         const GROUPS: u32 = 2;
         each_device("compute_quads", |name, _, device| {
-            let raw = device.raw();
-            let mut vulkan13 = vk::PhysicalDeviceVulkan13Properties::default();
-            let mut properties = vk::PhysicalDeviceProperties2::default().push_next(&mut vulkan13);
-            // SAFETY: the physical device is the instance's, a Vulkan 1.3 one.
-            unsafe {
-                raw.instance
-                    .get_physical_device_properties2(raw.physical_device, &mut properties)
-            };
-            let mut features13 = vk::PhysicalDeviceVulkan13Features::default();
-            let mut features = vk::PhysicalDeviceFeatures2::default().push_next(&mut features13);
-            // SAFETY: as above.
-            unsafe {
-                raw.instance
-                    .get_physical_device_features2(raw.physical_device, &mut features)
-            };
-            let (min, max) = (vulkan13.min_subgroup_size, vulkan13.max_subgroup_size);
-            let quad_free = vulkan13
-                .required_subgroup_size_stages
-                .contains(vk::ShaderStageFlags::COMPUTE)
-                && features13.subgroup_size_control == vk::TRUE
-                && features13.compute_full_subgroups == vk::TRUE
-                && (4..32).contains(&min);
+            let (min, max, quad_free) = quad_sizes(&device);
             let state = device
                 .new_compute_pipeline_state(&descriptor, crate::tests::no_constexpr_samplers)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -1956,6 +1935,216 @@ mod on_device {
                     "quads at the size the device gives"
                 } else {
                     "the tier its class takes"
+                },
+                interface.required_subgroup_size,
+                interface.multiples,
+            );
+        });
+    }
+
+    /// The compute subgroup sizes of `device`, `minSubgroupSize` and `maxSubgroupSize`, and
+    /// whether a quad-only kernel takes its quads from the subgroup at the size the device gives
+    /// there: compute can take a size (`requiredSubgroupSizeStages`, `subgroupSizeControl`), runs
+    /// full subgroups, and its narrowest size is at least 4 and below 32.
+    fn quad_sizes(device: &Device) -> (u32, u32, bool) {
+        use ash::vk;
+
+        let raw = device.raw();
+        let mut vulkan13 = vk::PhysicalDeviceVulkan13Properties::default();
+        let mut properties = vk::PhysicalDeviceProperties2::default().push_next(&mut vulkan13);
+        // SAFETY: the physical device is the instance's, a Vulkan 1.3 one.
+        unsafe {
+            raw.instance
+                .get_physical_device_properties2(raw.physical_device, &mut properties)
+        };
+        let mut features13 = vk::PhysicalDeviceVulkan13Features::default();
+        let mut features = vk::PhysicalDeviceFeatures2::default().push_next(&mut features13);
+        // SAFETY: as above.
+        unsafe {
+            raw.instance
+                .get_physical_device_features2(raw.physical_device, &mut features)
+        };
+        let (min, max) = (vulkan13.min_subgroup_size, vulkan13.max_subgroup_size);
+        let quad_free = vulkan13
+            .required_subgroup_size_stages
+            .contains(vk::ShaderStageFlags::COMPUTE)
+            && features13.subgroup_size_control == vk::TRUE
+            && features13.compute_full_subgroups == vk::TRUE
+            && (4..32).contains(&min);
+        (min, max, quad_free)
+    }
+
+    /// `quad_edge`, a quad-only kernel: thread `g` of the grid (`thread_position_in_grid`) takes
+    /// `g` from the next thread of its quad (`quad_shuffle`, to quad lane `(t + 1) & 3` of its
+    /// `thread_index_in_threadgroup` `t`) and its quad's ballot of `g % 3 != 0` (`quad_ballot`, bit
+    /// `i` quad lane `i`), and writes the first above the second's 8 bits at `out[g]`.
+    const QUAD_EDGE: &str = r#"target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
+target triple = "air64_v28-apple-macosx26.0.0"
+
+define void @quad_edge(ptr addrspace(1) noundef "air-buffer-no-alias" %out, i32 noundef %g, i32 noundef %t) local_unnamed_addr #0 {
+  %t16 = trunc i32 %t to i16
+  %next = add i16 %t16, 1
+  %lane = and i16 %next, 3
+  %v = tail call i32 @air.quad_shuffle.u.i32(i32 %g, i16 %lane) #1
+  %r = urem i32 %g, 3
+  %p = icmp ne i32 %r, 0
+  %b = tail call i16 @air.quad_ballot(i1 %p) #1
+  %bits = zext i16 %b to i32
+  %high = shl i32 %v, 8
+  %word = or i32 %high, %bits
+  %i = zext i32 %g to i64
+  %at = getelementptr inbounds i32, ptr addrspace(1) %out, i64 %i
+  store i32 %word, ptr addrspace(1) %at, align 4
+  ret void
+}
+
+declare i32 @air.quad_shuffle.u.i32(i32, i16) local_unnamed_addr #0
+declare i16 @air.quad_ballot(i1) local_unnamed_addr #0
+
+attributes #0 = { convergent mustprogress nounwind willreturn }
+attributes #1 = { convergent nounwind willreturn }
+
+!air.kernel = !{!0}
+!0 = !{ptr @quad_edge, !1, !2}
+!1 = !{}
+!2 = !{!3, !4, !5}
+!3 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"out"}
+!4 = !{i32 1, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"g"}
+!5 = !{i32 2, !"air.thread_index_in_threadgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"t"}
+"#;
+
+    /// [`QUAD_EDGE`] over `dispatchThreads` grids that are not whole threadgroups: in threadgroups
+    /// of 64 threads (or of the variant's largest SIMD-group multiple, where that is larger), two
+    /// whole threadgroups and one of 22, whose last quad has two threads, and one threadgroup of
+    /// 61, whose last quad has one. A ragged grid runs the kernel's partial-threadgroups variant
+    /// (`Metrics::partial_variant_ragged_grids`, and no emulated-SIMD-group dispatch), which takes
+    /// its quads from the subgroup at the size the device gives where the plain module does (no
+    /// pinned size, `ALLOW_VARYING_SUBGROUP_SIZE`, whole groups of `maxSubgroupSize`): its
+    /// invocations past the grid return before the body. Every thread's word is Metal's: its
+    /// quad's ballot sets the bits of the quad's threads in the grid whose `g % 3 != 0`, and the
+    /// shuffle reads its quad's next thread where that thread is in the grid (a read of a thread
+    /// past the grid is not promised, MSL 4.1 section 6.10.2, so the word's upper bits are not
+    /// checked there), checked against the CPU's answer; every word past the grid keeps its fill,
+    /// so no invocation past the grid writes. Prints whether the variant ran on quads at the size
+    /// the device gives, and the ragged grids it ran.
+    #[test]
+    fn every_device_runs_a_quad_only_kernels_ragged_grid_on_its_partial_variant() {
+        use crate::pipeline::Which;
+        use ash::vk;
+
+        let bitcode = match llvm_assemble_text(QUAD_EDGE) {
+            Ok(bitcode) => bitcode,
+            Err(AssembleError::Missing(why)) => {
+                eprintln!("SKIPPED: {why}");
+                return;
+            }
+            Err(error) => panic!("quad_edge: {error:?}"),
+        };
+        let library = Library::from_air(&bitcode).expect("the library");
+        let function = library.function("quad_edge").expect("the kernel");
+        let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
+            FunctionDescriptor::new(function),
+        ));
+        const FILL: u32 = 0xEEEE_EEEE;
+        const PAST: u32 = 8;
+        each_device("compute_quad_edge", |name, _, device| {
+            let (min, max, quad_free) = quad_sizes(&device);
+            let state = state(name, &device, &descriptor);
+            let compiled = &state.inner.compiled;
+            let partial = (compiled.variant_kernel(Which::Partial, |_| {
+                panic!("{name}: the partial-threadgroups variant is refused")
+            }))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let interface = &partial.interface;
+            let varying = interface
+                .stage_flags
+                .contains(vk::PipelineShaderStageCreateFlags::ALLOW_VARYING_SUBGROUP_SIZE);
+            assert_eq!(varying, quad_free, "{name}: subgroups {min}..{max}");
+            if quad_free {
+                assert_eq!(
+                    (interface.required_subgroup_size, &interface.multiples[..]),
+                    (None, &[max][..]),
+                    "{name}: the variant's quads at the size the device gives"
+                );
+                assert!(
+                    interface
+                        .stage_flags
+                        .contains(vk::PipelineShaderStageCreateFlags::REQUIRE_FULL_SUBGROUPS),
+                    "{name}"
+                );
+            }
+            let size = interface.multiples.iter().copied().fold(64, u32::max);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let made = device.counters().metrics().translations;
+            let mut ragged = 0;
+            for threads in [2 * size + 22, 61] {
+                assert!(!threads.is_multiple_of(size), "{name}: {threads} in {size}");
+                let mut buffers = Buffers::new(&device, 1 << 16);
+                let out = buffers.buffer(u64::from(threads + PAST) * 4);
+                write(&out, 0, &le_bytes(&vec![FILL; (threads + PAST) as usize]));
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = command_buffer
+                    .compute_command_encoder(DispatchType::Serial)
+                    .expect("an encoder");
+                encoder.set_compute_pipeline_state(&state).expect("a state");
+                encoder.set_buffer(Some(&out), 0, 0).expect("a buffer");
+                let before = device.counters().metrics();
+                encoder
+                    .dispatch_threads([threads, 1, 1], [size, 1, 1])
+                    .unwrap_or_else(|error| panic!("{name}: {threads} threads: {error}"));
+                encoder.end_encoding();
+                command_buffer.commit().expect("a commit");
+                finished(name, &command_buffer);
+                assert_eq!(command_buffer.error(), None, "{name}");
+                let after = device.counters().metrics();
+                assert_eq!(
+                    (
+                        after.partial_variant_ragged_grids - before.partial_variant_ragged_grids,
+                        after.emulated_simdgroup_dispatches - before.emulated_simdgroup_dispatches,
+                    ),
+                    (1, 0),
+                    "{name}: {threads} threads in {size}: on the partial-threadgroups variant"
+                );
+                ragged += 1;
+                let got = words(&out, 0, (threads + PAST) as usize);
+                for (g, &word) in (0..threads).zip(&got) {
+                    let quad = g & !3;
+                    let ballot = (0..4)
+                        .filter(|&lane| quad + lane < threads && (quad + lane) % 3 != 0)
+                        .fold(0, |bits, lane| bits | (1 << lane));
+                    assert_eq!(
+                        word & 0xFF,
+                        ballot,
+                        "{name}: {threads} threads in {size}: thread {g}'s quad ballot"
+                    );
+                    let next = quad | ((g + 1) & 3);
+                    if next < threads {
+                        assert_eq!(
+                            word >> 8,
+                            next,
+                            "{name}: {threads} threads in {size}: thread {g}'s quad shuffle"
+                        );
+                    }
+                }
+                assert_eq!(
+                    &got[threads as usize..],
+                    &[FILL; PAST as usize][..],
+                    "{name}: {threads} threads: the words past the grid"
+                );
+            }
+            assert_eq!(
+                device.counters().metrics().translations,
+                made,
+                "{name}: no translation at a dispatch"
+            );
+            println!(
+                "{name}: quad-only kernel's ragged grids, subgroups {min}..{max}: the \
+                 partial-threadgroups variant ran {}, {:?} pinned, whole groups of {:?}; ragged \
+                 grids on it {ragged}",
+                if varying {
+                    "on quads at the size the device gives"
+                } else {
+                    "at the tier its class takes"
                 },
                 interface.required_subgroup_size,
                 interface.multiples,
