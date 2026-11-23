@@ -22,11 +22,11 @@
 //! diagonal quad only the helper is right of the diagonal, so `quad_any` holds and `quad_all` does
 //! not there, and the other way round in a quad the triangle covers whole.
 //!
-//! The `QUAD_READERS` functions write the other quad operations that count which of their quad's
-//! lanes are active or read the first active one: `quad_ballot`, `quad_active_threads_mask`,
-//! `quad_is_first`, `quad_broadcast_first` and the prefix sums. Each is drawn by that triangle and
-//! by the one across the same edge, which covers one pixel of each diagonal quad and runs its other
-//! three, quad lane 0 among them, as helpers.
+//! The `QUAD_READERS` functions write the other quad operations, which read which of their quad's
+//! lanes are active or read another lane's value: `quad_ballot`, `quad_active_threads_mask`,
+//! `quad_is_first`, `quad_broadcast_first`, the prefix sums, and the shuffles and broadcast by
+//! lane. Each is drawn by that triangle and by the one across the same edge, which covers one pixel
+//! of each diagonal quad and runs its other three, quad lane 0 among them, as helpers.
 //!
 //! `llvm-as` assembles the functions; without it the test skips visibly.
 
@@ -203,6 +203,50 @@ entry:
   ret <4 x i32> %o
 }
 
+define <4 x i32> @quad_reads(<4 x float> %pos) {
+entry:
+  %xy = shufflevector <4 x float> %pos, <4 x float> poison, <2 x i32> <i32 0, i32 1>
+  %p = call <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float> %xy)
+  %x = extractelement <2 x i32> %p, i64 0
+  %y = extractelement <2 x i32> %p, i64 1
+  %x7 = mul i32 %x, 7
+  %y13 = mul i32 %y, 13
+  %s = add i32 %x7, %y13
+  %w = xor i32 %s, 90
+  %xl = and i32 %x, 1
+  %yl = and i32 %y, 1
+  %yl2 = shl i32 %yl, 1
+  %q = or i32 %xl, %yl2
+  %far = xor i32 %q, 3
+  %far16 = trunc i32 %far to i16
+  %sh = call i32 @air.quad_shuffle.u.i32(i32 %w, i16 %far16)
+  %bc = call i32 @air.quad_broadcast.u.i32(i32 %w, i16 1)
+  %o0 = insertelement <4 x i32> <i32 0, i32 0, i32 0, i32 1>, i32 %sh, i64 0
+  %o = insertelement <4 x i32> %o0, i32 %bc, i64 1
+  ret <4 x i32> %o
+}
+
+define <4 x i32> @quad_moves(<4 x float> %pos) {
+entry:
+  %xy = shufflevector <4 x float> %pos, <4 x float> poison, <2 x i32> <i32 0, i32 1>
+  %p = call <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float> %xy)
+  %x = extractelement <2 x i32> %p, i64 0
+  %y = extractelement <2 x i32> %p, i64 1
+  %x7 = mul i32 %x, 7
+  %y13 = mul i32 %y, 13
+  %s = add i32 %x7, %y13
+  %w = xor i32 %s, 90
+  %xr = call i32 @air.quad_shuffle_xor.u.i32(i32 %w, i16 1)
+  %dn = call i32 @air.quad_shuffle_down.u.i32(i32 %w, i16 1)
+  %up = call i32 @air.quad_shuffle_up.u.i32(i32 %w, i16 1)
+  %rd = call i32 @air.quad_shuffle_rotate_down.u.i32(i32 %w, i16 1)
+  %o0 = insertelement <4 x i32> <i32 0, i32 0, i32 0, i32 0>, i32 %xr, i64 0
+  %o1 = insertelement <4 x i32> %o0, i32 %dn, i64 1
+  %o2 = insertelement <4 x i32> %o1, i32 %up, i64 2
+  %o = insertelement <4 x i32> %o2, i32 %rd, i64 3
+  ret <4 x i32> %o
+}
+
 declare <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float>)
 declare i16 @air.quad_ballot(i1)
 declare i16 @air.quad_active_threads_mask()
@@ -210,17 +254,25 @@ declare i1 @air.quad_is_first()
 declare i32 @air.quad_broadcast_first.u.i32(i32)
 declare i32 @air.quad_prefix_exclusive_sum.u.i32(i32)
 declare i32 @air.quad_prefix_inclusive_sum.u.i32(i32)
+declare i32 @air.quad_shuffle.u.i32(i32, i16)
+declare i32 @air.quad_broadcast.u.i32(i32, i16)
+declare i32 @air.quad_shuffle_xor.u.i32(i32, i16)
+declare i32 @air.quad_shuffle_down.u.i32(i32, i16)
+declare i32 @air.quad_shuffle_up.u.i32(i32, i16)
+declare i32 @air.quad_shuffle_rotate_down.u.i32(i32, i16)
 
-!air.fragment = !{!0, !5}
+!air.fragment = !{!0, !5, !6, !7}
 !0 = !{ptr @quad_masks, !1, !3}
 !1 = !{!2}
 !2 = !{!"air.render_target", i32 0, i32 0, !"air.arg_type_name", !"uint4"}
 !3 = !{!4}
 !4 = !{i32 0, !"air.position", !"air.center", !"air.no_perspective", !"air.arg_type_name", !"float4", !"air.arg_name", !"pos"}
 !5 = !{ptr @quad_scans, !1, !3}
+!6 = !{ptr @quad_reads, !1, !3}
+!7 = !{ptr @quad_moves, !1, !3}
 "#;
 
-    /// The functions of `QUAD_READERS`, which count which of their quad's lanes are active or read
+    /// The functions of `QUAD_READERS` that count which of their quad's lanes are active or read
     /// the first active one, or sum over the active lanes below, and the operation each word of
     /// their target holds, in order (a word past them is a constant).
     const MASKS_AND_SCANS: [(&str, &[&str]); 2] = [
@@ -239,6 +291,20 @@ declare i32 @air.quad_prefix_inclusive_sum.u.i32(i32)
         ),
     ];
 
+    /// The functions of `QUAD_READERS` that read another lane of their quad by its index, and the
+    /// operation each word of their target holds.
+    const SHUFFLES: [(&str, &[&str]); 2] = [
+        ("quad_reads", &["quad_shuffle", "quad_broadcast"]),
+        (
+            "quad_moves",
+            &[
+                "quad_shuffle_xor",
+                "quad_shuffle_down",
+                "quad_shuffle_up",
+                "quad_shuffle_rotate_down",
+            ],
+        ),
+    ];
     /// The word `fragment_quad_bitwise` takes of pixel `[x, y]`.
     fn word([x, y]: [u32; 2]) -> u32 {
         (x * 7 + y * 13) ^ 0x5a
@@ -320,12 +386,14 @@ declare i32 @air.quad_prefix_inclusive_sum.u.i32(i32)
 
     /// What a `QUAD_READERS` function writes at pixel `p` when the lanes of `active` (bit `j` quad
     /// lane `j`) take part: Metal's answer where all four do, and where only the covered ones do,
-    /// the answer of a device that leaves the helpers out. Quad lane `j` holds the word of its
+    /// the answer of a device that leaves the helpers out, a read of a lane that takes no part
+    /// reading the calling lane as `lower::simd` reads it. Quad lane `j` holds the word of its
     /// pixel and the predicate "x > y" of it.
     fn quad_answer(function: &str, p: [u32; 2], active: u32) -> [u32; 4] {
         let q = quad_lane(p);
         let on = |j: &u32| (active >> j) & 1 == 1;
         let w = |j: u32| word(mate(p, j));
+        let read = |j: u32| if on(&j) { w(j) } else { w(q) };
         let right = |j: u32| {
             let [x, y] = mate(p, j);
             u32::from(x > y)
@@ -338,11 +406,18 @@ declare i32 @air.quad_prefix_inclusive_sum.u.i32(i32)
                 u32::from(q == first),
                 w(first),
             ],
-            _ => [
+            "quad_scans" => [
                 (0..q).filter(on).map(w).sum(),
                 (0..=q).filter(on).map(w).sum(),
                 0,
                 1,
+            ],
+            "quad_reads" => [read(q ^ 3), read(1), 0, 1],
+            _ => [
+                read(q ^ 1),
+                if q < 3 { read(q + 1) } else { w(q) },
+                if q > 0 { read(q - 1) } else { w(q) },
+                read((q + 1) & 3),
             ],
         }
     }
@@ -713,5 +788,19 @@ declare i32 @air.quad_prefix_inclusive_sum.u.i32(i32)
                 );
             },
         );
+    }
+
+    /// A fragment's quad shuffles and broadcast by lane read the helper of a quad the triangle
+    /// cuts (`quad_readers`), on every device with quad control, and their fragment stages hold no
+    /// ballot: they read their quad through quad instructions, which Vulkan runs over the quad's
+    /// helpers in every entry (section 9.31).
+    #[test]
+    fn every_device_s_quad_shuffles_read_their_quads_helpers() {
+        quad_readers("quad_shuffles", &SHUFFLES, |name, function, ops| {
+            assert!(
+                !ops.contains(&OP_BALLOT),
+                "{name}: {function}'s fragment stage holds a ballot"
+            );
+        });
     }
 }
