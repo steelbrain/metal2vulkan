@@ -1008,9 +1008,9 @@ the Direct3D 11 texture's payload until it is freed.
   than one dma-buf holds, and 37 read-only ones, which it copies on every device (no import is
   read-only, Imported blocks). The writable copies took part in 17,083 commits, compared 1.82 TB,
   and wrote 0.98 GB to the copies and 60.46 GB back to the pages. The copies' syncs took 230.2 s
-  of the consumer's CPU on the committing and completion threads. Under RADV in the same run, on
-  the same card, 1,622 imports were dma-bufs (168 of them over several), 32 were read-only copies,
-  and the copies' syncs took 5.7 ms. On a Radeon 780M (1002:1900) under AMD's Windows driver
+  of the consumer's CPU on the committing and completion threads. In a run of the same benchmark
+  under RADV on the same card, 1,622 imports were dma-bufs (168 of them over several), 32 were
+  read-only copies, and the copies' syncs took 5.7 ms. On a Radeon 780M (1002:1900) under AMD's Windows driver
   (26.11.2, LLPC), in a guest session (not that benchmark run), all 998 of the consumer's
   host-pointer imports took the pages in place, none refused, and its 97 copies were the
   read-only ones.
