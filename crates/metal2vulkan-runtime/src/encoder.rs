@@ -757,7 +757,9 @@ impl ComputeCommandEncoder {
         Ok(())
     }
 
-    /// `setThreadgroupMemoryLength:atIndex:`: a specialization constant of the pipeline.
+    /// `setThreadgroupMemoryLength:atIndex:`: a specialization constant of the pipeline, rounded up
+    /// to a multiple of 16 bytes, as Metal takes the length only in multiples of 16: lengths 17 and
+    /// 32 run one pipeline.
     ///
     /// Err: [`Refusal::BufferIndex`] for an index of 31 or more.
     pub fn set_threadgroup_memory_length(&mut self, length: u32, index: u32) -> Result<(), Error> {
@@ -1151,7 +1153,12 @@ impl ComputeCommandEncoder {
             _ => {
                 let lengths = threadgroup_memory(kernel, set, local, limits.max_shared_memory)?;
                 let variant = inner.dispatch_key(module, local, lengths);
-                kernel.pipeline(core, variant, inner.first_use(variant))?
+                // A variant past the kernel's cells is held by the command buffer from its first
+                // dispatch, so no make evicts it while the command buffer is not retired.
+                let site = inner.first_use(variant);
+                kernel.pipeline(core, variant, site, |listed| {
+                    recording(&mut self.building).hold_variant(listed)
+                })?
             }
         };
         self.last = Some(Last {
@@ -1466,9 +1473,11 @@ pub(crate) fn imageblock_checked([width, height]: [u32; 2]) -> Result<(), Error>
 }
 
 /// What a kernel's `VkPipeline` specializes of its threadgroup memory beside its own: the lengths
-/// of its threadgroup arguments, in the order of `Interface::threadgroups`, held inline (a kernel
-/// takes at most [`BUFFER_SLOTS`], the indices `setThreadgroupMemoryLength:atIndex:` takes, as
-/// its state's make refuses a module with more), and its explicit imageblock's size.
+/// of its threadgroup arguments, each rounded up to a multiple of 16 bytes (Metal takes a length
+/// only in multiples of 16, and a kernel reads none of the bytes past the one it asked for), in
+/// the order of `Interface::threadgroups`, held inline (a kernel takes at most [`BUFFER_SLOTS`],
+/// the indices `setThreadgroupMemoryLength:atIndex:` takes, as its state's make refuses a module
+/// with more), and its explicit imageblock's size.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub(crate) struct Lengths {
     words: [u32; BUFFER_SLOTS as usize],
@@ -1495,7 +1504,8 @@ impl Lengths {
 }
 
 /// The threadgroup memory lengths of `kernel`'s threadgroups, from the encoder's `set` (0 for an
-/// index it set none at), with its imageblock's size where it reaches one, checked at workgroup
+/// index it set none at), each rounded up to a multiple of 16 bytes (`u32::MAX` past the largest,
+/// which no device takes), with its imageblock's size where it reaches one, checked at workgroup
 /// `local` against the device's `max` bytes, the imageblock's cells included.
 pub(crate) fn threadgroup_memory(
     kernel: &Kernel,
@@ -1505,7 +1515,8 @@ pub(crate) fn threadgroup_memory(
 ) -> Result<Lengths, Error> {
     let mut lengths = Lengths::default();
     for (word, &index) in (lengths.words.iter_mut()).zip(&kernel.interface.threadgroups) {
-        *word = threadgroup_length(set.lengths, index);
+        let length = threadgroup_length(set.lengths, index);
+        *word = length.checked_next_multiple_of(16).unwrap_or(u32::MAX);
         lengths.count += 1;
     }
     let imageblock = match kernel.interface.imageblock {

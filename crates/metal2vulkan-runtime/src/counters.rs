@@ -418,6 +418,8 @@ pub(crate) enum Gauge {
     Pipelines,
     /// [`Gauges::kernels`].
     Kernels,
+    /// [`Gauges::kernel_variants`].
+    KernelVariants,
     /// [`Gauges::kernel_entries`].
     KernelEntries,
     /// [`Gauges::render_contents`].
@@ -788,6 +790,7 @@ struct Atomics {
     lod_clamp_variants: AtomicU64,
     pipelines: AtomicU64,
     kernels: AtomicU64,
+    kernel_variants: AtomicU64,
     kernel_entries: AtomicU64,
     render_contents: AtomicU64,
     attachment_views: AtomicU64,
@@ -1580,6 +1583,7 @@ impl Counters {
             Gauge::DescriptorSlots => &a.descriptor_slots,
             Gauge::Pipelines => &a.pipelines,
             Gauge::Kernels => &a.kernels,
+            Gauge::KernelVariants => &a.kernel_variants,
             Gauge::KernelEntries => &a.kernel_entries,
             Gauge::RenderContents => &a.render_contents,
             Gauge::AttachmentViews => &a.attachment_views,
@@ -1921,6 +1925,7 @@ impl Counters {
             lod_clamp_variants: a.lod_clamp_variants.load(Relaxed),
             pipelines: a.pipelines.load(Relaxed),
             kernels: a.kernels.load(Relaxed),
+            kernel_variants: a.kernel_variants.load(Relaxed),
             kernel_entries: a.kernel_entries.load(Relaxed),
             render_contents: a.render_contents.load(Relaxed),
             attachment_views: a.attachment_views.load(Relaxed),
@@ -3017,6 +3022,10 @@ pub struct Gauges {
     /// their `VkPipeline`s, shared by every state of that content. One lives while a state or
     /// the device's map of kernels holds it.
     pub kernels: u64,
+    /// `VkPipeline`s of compiled kernels' modules, each of one workgroup size, threadgroup memory
+    /// lengths, imageblock size and tiles: the 8 each module made first, at most 56 more it keeps
+    /// for later dispatches, and those past them that command buffers not yet retired hold.
+    pub kernel_variants: u64,
     /// Entries of the device's map of compiled contents, compute and render, which holds at most
     /// 1,024 and forgets the least recently used past them.
     pub kernel_entries: u64,

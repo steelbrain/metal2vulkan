@@ -903,6 +903,7 @@ fn named(gauges: rt::Gauges) -> Vec<(&'static str, u64)> {
         ("pipelines", gauges.pipelines),
         ("kernels", gauges.kernels),
         ("kernel_entries", gauges.kernel_entries),
+        ("kernel_variants", gauges.kernel_variants),
         ("command_buffers", gauges.command_buffers),
         ("descriptor_slots", gauges.descriptor_slots),
         ("blocks", gauges.blocks),

@@ -1319,6 +1319,7 @@ field	metal2vulkan-runtime::Gauges.import_bytes	pub import_bytes: u64
 field	metal2vulkan-runtime::Gauges.imports	pub imports: u64
 field	metal2vulkan-runtime::Gauges.indirect_command_buffers	pub indirect_command_buffers: u64
 field	metal2vulkan-runtime::Gauges.kernel_entries	pub kernel_entries: u64
+field	metal2vulkan-runtime::Gauges.kernel_variants	pub kernel_variants: u64
 field	metal2vulkan-runtime::Gauges.kernels	pub kernels: u64
 field	metal2vulkan-runtime::Gauges.lod_clamp_variants	pub lod_clamp_variants: u64
 field	metal2vulkan-runtime::Gauges.managed_spilled_bytes	pub managed_spilled_bytes: u64

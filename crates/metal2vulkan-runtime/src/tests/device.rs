@@ -174,6 +174,7 @@ fn every_device_of_the_cfgs_kind_opens_presents_and_tears_down_to_zero() {
             ("events", gauges.events),
             ("device_samplers", gauges.device_samplers),
             ("lod_clamp_variants", gauges.lod_clamp_variants),
+            ("kernel_variants", gauges.kernel_variants),
         ] {
             println!("M2V-MATRIX gauge device_teardown/{kind}@drop {value}");
         }

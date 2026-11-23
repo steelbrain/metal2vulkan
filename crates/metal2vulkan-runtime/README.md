@@ -2819,8 +2819,9 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   (Kernels past the stage bound, below). A kernel's `VkPipeline` at a threadgroup size,
   threadgroup memory lengths and an explicit imageblock's size only a dispatch gives is made at
   the consumer's `prepare_dispatch` call (below) or at the dispatch: one per module, threadgroup
-  size, threadgroup memory lengths and imageblock size, on the encoding thread that first
-  dispatches any of its states with them, which waits for it. Nothing the runtime records depends on when a compile finishes: there is one recorded
+  size, threadgroup memory lengths (each rounded up to a multiple of 16 bytes) and imageblock
+  size, of which a module keeps 64 (Known gaps of pipeline states, below), on the encoding thread
+  that first dispatches any of its states with them, which waits for it. Nothing the runtime records depends on when a compile finishes: there is one recorded
   form, made after the wait. Each such wait is counted in `Metrics::first_use_waits`, with its
   time in `first_use_wait_nanos` and the longest in `first_use_wait_max_nanos`, and again by where
   it waited, each with its count, time and longest: `first_use_variant_waits` (a kernel's pipeline
@@ -3428,6 +3429,18 @@ cache is answered compile-required on both.
   cold cache it compiles in that call, where Metal changes these with no compile: on a cold play,
   `Metrics::first_use_waits` against `Metrics::made_ahead_variants` reads what the consumer's
   pre-pass left to the encoding threads.
+- A kernel's module keeps 64 `VkPipeline`s of the threadgroup sizes, threadgroup memory lengths,
+  imageblock sizes and tiles its dispatches give: the first 8 it made, and past them the 56
+  dispatched last. A make past them evicts the least recently dispatched ones no command buffer
+  not yet retired dispatched, and none where work holds every one, so a command buffer that
+  dispatches more keys keeps each variant until it retires, and the kernel's next make after that
+  evicts the idle ones past 64. A variant evicted and dispatched again is made again, through the
+  device's pipeline cache, a first-use wait where Metal makes nothing.
+  `Gauges::kernel_variants` counts the live variants. A dispatch's threadgroup memory length is
+  rounded up to a multiple of 16 bytes, the only lengths Metal takes, so lengths within one
+  multiple run one variant; each threadgroup size is a variant of its own, as a `VkPipeline`
+  fixes its workgroup size (30,343 sizes at 1,024 threads), and so is each imageblock size.
+  Tests: `tests::kernel_variants`.
 - A compute kernel with an explicit imageblock runs at the size the compute encoder's
   `set_imageblock_size` (`setImageblockWidth:height:`) set last, 1 by 1 where it set none, as
   Metal's does. The size is a specialization of the kernel's `VkPipeline`, as a threadgroup memory

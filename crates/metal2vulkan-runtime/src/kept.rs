@@ -1,8 +1,10 @@
 //! What a command buffer keeps of the objects its encoders use: each buffer, texture, sampler
-//! state and pipeline state once, as Metal's command buffer retains each object once, until the
-//! command buffer retires. The first use of an object in a recording takes its one reference, of
-//! the object alone ([`Handle::Kept`]): nothing a command buffer keeps counts as a handle of the
-//! device, so the consumer's last handle is the device's last whatever work is in flight.
+//! state and pipeline state once, as Metal's command buffer retains each object once, and each
+//! kernel variant past its kernel's cells that it dispatches (`crate::pipeline::Listed`), until
+//! the command buffer retires. The first use of an object in a recording takes its one
+//! reference, of the object alone ([`Handle::Kept`]): nothing a command buffer keeps counts as a
+//! handle of the device, so the consumer's last handle is the device's last whatever work is in
+//! flight.
 //! Every later use, and every binding slot an encoder fills with it, borrows the object alone
 //! ([`Lent`]), one word as the list keeps it, and changes no count. The lists and their address
 //! sets keep their capacity from one recording of a queue to the next, up to [`KEPT_BOUND`] objects each, so a recording past
@@ -11,7 +13,7 @@
 //! buffers ([`Objects`]), so a command buffer allocates and frees none of it.
 
 use crate::buffer::Buffer;
-use crate::pipeline::ComputePipelineState;
+use crate::pipeline::{ComputePipelineState, Listed};
 use crate::render::RenderPipelineState;
 use crate::sampler::SamplerState;
 use crate::texture::Texture;
@@ -137,9 +139,9 @@ impl<T> Deref for Uncounted<T> {
 /// game streams (at most 128, of textures), and a cap on memory, not a fit to them: a smaller
 /// bound for one kind would make every recording that used one more object of it allocate again.
 ///
-/// At most, then, a queue keeps for each command buffer it holds at once ([`Objects`]) five lists
-/// at the bound, each 128 handles (1 KiB) and an address set of 256 buckets (2.3 KiB): 16.3 KiB,
-/// so 1.0 MiB for a queue of 64 command buffers.
+/// At most, then, a queue keeps for each command buffer it holds at once ([`Objects`]) six lists
+/// at the bound, each 128 handles (1 KiB) and an address set of 256 buckets (2.3 KiB): 19.6 KiB,
+/// so 1.2 MiB for a queue of 64 command buffers.
 pub(crate) const KEPT_BOUND: usize = 128;
 
 /// The objects of one kind a recording keeps, each once, in the order first used.
@@ -245,6 +247,7 @@ pub(crate) struct ByKind {
     pub(crate) samplers: Kept<SamplerState>,
     pub(crate) pipelines: Kept<ComputePipelineState>,
     pub(crate) render_pipelines: Kept<RenderPipelineState>,
+    pub(crate) variants: Kept<Arc<Listed>>,
 }
 
 impl ByKind {
@@ -256,6 +259,7 @@ impl ByKind {
         self.samplers.clear();
         self.pipelines.clear();
         self.render_pipelines.clear();
+        self.variants.clear();
     }
 }
 

@@ -17,7 +17,10 @@
 //! of threadgroups, runs the variant at its own threadgroup size, all but the last unflagged; the
 //! dispatches where the content has no variant or the variant does not take the threadgroup run
 //! the plain module.
-//! Each `VkPipeline` is keyed by its module, threadgroup size and threadgroup memory lengths.
+//! Each `VkPipeline` is keyed by its module, threadgroup size and threadgroup memory lengths. A
+//! module keeps the first 8 it made and at most 56 more, the least recently dispatched one no
+//! command buffer holds evicted past them, and a command buffer holds each of those 56 it
+//! dispatches until it retires ([`Variants`]).
 //!
 //! What a state compiles is its content ([`KernelKey`]), never the state: the translator's key
 //! of its descriptor and its `requiredThreadsPerThreadgroup`. Every state of one content shares
@@ -52,13 +55,13 @@
 //! first-use wait, counted with its time
 //! ([`Metrics::first_use_waits`](crate::Metrics::first_use_waits)). No translation runs after the
 //! make. Each make of a `VkPipeline` is kept in the device's counters as it ends
-//! ([`Counters::variant_makes`]): its key, who started it (a `finish_pipeline` call, the state's
-//! make, a [`ComputePipelineState::prepare_dispatch`] call or a first use) and the first-use
-//! waits that waited for it.
+//! ([`Counters::variant_makes`](crate::Counters::variant_makes)): its key, who started it (a
+//! `finish_pipeline` call, the state's make, a [`ComputePipelineState::prepare_dispatch`] call or
+//! a first use) and the first-use waits that waited for it.
 
 use crate::arrays::BINDINGS;
 use crate::cache;
-use crate::counters::{Counters, FirstUse, Gauge, Metric, VariantMake, VariantStart};
+use crate::counters::{FirstUse, Gauge, Metric, VariantMake, VariantStart};
 use crate::device::{lock, Core};
 use crate::encoder::{
     decide, imageblock_checked, size_checked, threadgroup_memory, Dispatch, Lengths, Module, Sizes,
@@ -436,11 +439,17 @@ enum Code {
 /// The variants of a kernel that each have a cell of their own.
 const VARIANT_CELLS: usize = 8;
 
-/// A kernel's `VkPipeline`s made so far, by their specialization. The first [`VARIANT_CELLS`]
-/// made each fill a cell of their own, which a dispatch reads with no lock; any made past them go
-/// in a list under the lock. A making holds the lock only to enter its variant as pending and to
-/// keep what it made, so makes of different variants run at once and one variant is made once at
-/// a time.
+/// The variants past its cells a kernel keeps for its later dispatches: with the cells, 64.
+const LISTED_VARIANTS: usize = 56;
+
+/// A kernel's `VkPipeline`s, by their specialization. The first [`VARIANT_CELLS`] made each fill
+/// a cell of their own, which a dispatch reads with no lock, and stay while the kernel lives. Any
+/// made past them are listed under the lock, the least recently dispatched first: a make past
+/// [`LISTED_VARIANTS`] of them first evicts the least recently dispatched ones no command buffer
+/// holds ([`Listed`]), to the reaper, until [`LISTED_VARIANTS`] less one remain, and where every
+/// one is held it evicts none, so the kernel keeps 64 and those work not yet retired held at its
+/// last make. A making holds the lock only to enter its variant as pending and to keep what it
+/// made, so makes of different variants run at once and one variant is made once at a time.
 #[derive(Default)]
 struct Variants {
     cells: [OnceLock<(Variant, vk::Pipeline)>; VARIANT_CELLS],
@@ -453,8 +462,8 @@ struct Variants {
 /// What [`Variants`] keeps under its lock.
 #[derive(Default)]
 struct More {
-    /// The variants made past the cells.
-    made: Vec<(Variant, vk::Pipeline)>,
+    /// The variants made past the cells, the least recently dispatched first.
+    made: Vec<Arc<Listed>>,
     /// The variants a thread is making now.
     pending: Vec<Making>,
 }
@@ -467,9 +476,36 @@ struct Making {
     first_wait: u64,
 }
 
+/// A kernel's variant past its cells ([`Variants`]). The kernel's list holds it, and so does
+/// each command buffer not yet retired that dispatched it, from the first such dispatch: a hold is
+/// taken only under the list's lock, so a variant the lock finds with the list's count alone is
+/// idle, and stays idle while the lock is held.
+pub(crate) struct Listed {
+    variant: Variant,
+    pipeline: vk::Pipeline,
+}
+
+impl crate::kept::Handle for Arc<Listed> {
+    /// The variant itself.
+    type Kept = Arc<Listed>;
+
+    fn object(&self) -> &Arc<Listed> {
+        self
+    }
+
+    fn address_of(object: &Arc<Listed>) -> usize {
+        Arc::as_ptr(object) as usize
+    }
+}
+
 impl More {
     fn pending(&self, key: Key<'_>) -> Option<usize> {
         (self.pending.iter()).position(|making| making.variant.key() == key)
+    }
+
+    /// Where the list holds the variant `key`.
+    fn listed(&self, (size, lengths, tiles): Key<'_>) -> Option<usize> {
+        (self.made.iter()).position(|listed| listed.variant.is(size, lengths, tiles))
     }
 }
 
@@ -493,26 +529,64 @@ impl Variants {
 
     /// The pipeline of the variant `key` where it is made, read under the lock `more` is.
     fn made(&self, more: &More, key: Key<'_>) -> Option<vk::Pipeline> {
-        let (size, lengths, tiles) = key;
         match self.in_cells(key) {
             Ok(pipeline) => Some(pipeline),
             Err(false) => None,
-            Err(true) => (more.made.iter())
-                .find(|(variant, _)| variant.is(size, lengths, tiles))
-                .map(|&(_, pipeline)| pipeline),
+            Err(true) => more.listed(key).map(|at| more.made[at].pipeline),
         }
     }
 
-    /// Keeps `pipeline`, of `variant`, under the lock `more` is: in the first empty cell, else in
-    /// `more`.
-    fn keep(&self, more: &mut More, variant: Variant, pipeline: vk::Pipeline) {
-        match self.cells.iter().find(|cell| cell.get().is_none()) {
-            // Only a making fills a cell, under the lock: the empty one stays empty until this.
-            Some(cell) => {
-                let _ = cell.set((variant, pipeline));
+    /// [`made`](Self::made) for a dispatch: a listed variant becomes the most recently
+    /// dispatched, and `hold` takes it for the dispatch's command buffer under the lock.
+    fn dispatched(
+        &self,
+        more: &mut More,
+        key: Key<'_>,
+        hold: &mut impl FnMut(&Arc<Listed>),
+    ) -> Option<vk::Pipeline> {
+        match self.in_cells(key) {
+            Ok(pipeline) => Some(pipeline),
+            Err(false) => None,
+            Err(true) => {
+                let at = more.listed(key)?;
+                more.made[at..].rotate_left(1);
+                let listed = more.made.last()?;
+                hold(listed);
+                Some(listed.pipeline)
             }
-            None => more.made.push((variant, pipeline)),
         }
+    }
+
+    /// Keeps `pipeline`, of `variant`, under the lock `more` is, counted live: in the first empty
+    /// cell, else listed as the most recently dispatched, a list of [`LISTED_VARIANTS`] first
+    /// evicting its least recently dispatched idle ones; the listed variant, for a dispatch's hold.
+    fn keep<'m>(
+        &self,
+        core: &Core,
+        more: &'m mut More,
+        variant: Variant,
+        pipeline: vk::Pipeline,
+    ) -> Option<&'m Arc<Listed>> {
+        core.counters.rise(Gauge::KernelVariants);
+        // Only a making fills a cell, under the lock: the empty one stays empty until this.
+        if let Some(cell) = self.cells.iter().find(|cell| cell.get().is_none()) {
+            let _ = cell.set((variant, pipeline));
+            return None;
+        }
+        let mut excess = (more.made.len() + 1).saturating_sub(LISTED_VARIANTS);
+        let idle = more.made.extract_if(.., |listed| {
+            let evicted = excess > 0 && Arc::strong_count(listed) == 1;
+            excess -= usize::from(evicted);
+            evicted
+        });
+        for listed in idle {
+            // The list's count is the last: no command buffer that dispatched it is left.
+            if let Some(Listed { pipeline, .. }) = Arc::into_inner(listed) {
+                give_back(core, pipeline);
+            }
+        }
+        more.made.push(Arc::new(Listed { variant, pipeline }));
+        more.made.last()
     }
 
     /// Every pipeline, taken out to give back.
@@ -520,36 +594,46 @@ impl Variants {
         let more = self.more.get_mut().unwrap_or_else(PoisonError::into_inner);
         (self.cells.iter_mut())
             .filter_map(|cell| cell.take().map(|(_, pipeline)| pipeline))
-            .chain(more.made.drain(..).map(|(_, pipeline)| pipeline))
+            .chain(more.made.drain(..).map(|listed| listed.pipeline))
     }
 }
 
+/// Gives a kernel's variant's `pipeline` to the reaper, no longer counted live.
+fn give_back(core: &Core, pipeline: vk::Pipeline) {
+    core.counters.fall(Gauge::KernelVariants);
+    core.reaper.give(Job::Free(Free::Pipeline(pipeline)));
+}
+
 /// A variant entered as pending under [`Variants`]'s lock, for the thread that makes it, started
-/// by `start` at `began`: the entry leaves when this ends, made or not, panicking included, the
-/// make is kept in the device's counters ([`Counters::variant_makes`]), and the waiting dispatches
-/// wake.
-struct Pending<'a> {
+/// by `start` at `began`: the entry leaves when this ends, made or not, panicking included, what
+/// it made is kept, and `hold` takes it where it is listed, the make is kept in the device's
+/// counters ([`Counters::variant_makes`](crate::Counters::variant_makes)), and the waiting
+/// dispatches wake.
+struct Pending<'a, H: FnMut(&Arc<Listed>)> {
     variants: &'a Variants,
-    counters: &'a Counters,
+    core: &'a Core,
     variant: DispatchVariant,
     start: VariantStart,
     began: u64,
     made: Option<(Variant, vk::Pipeline)>,
+    hold: &'a mut H,
 }
 
-impl Drop for Pending<'_> {
+impl<H: FnMut(&Arc<Listed>)> Drop for Pending<'_, H> {
     fn drop(&mut self) {
         let mut more = lock(&self.variants.more);
         let at = more.pending(self.variant.key());
         let making = at.map(|at| more.pending.swap_remove(at));
         let made = self.made.is_some();
         if let Some((variant, pipeline)) = self.made.take() {
-            self.variants.keep(&mut more, variant, pipeline);
+            if let Some(listed) = self.variants.keep(self.core, &mut more, variant, pipeline) {
+                (self.hold)(listed);
+            }
         }
         drop(more);
         let ended = host_time();
         let (waits, first_wait) = making.map_or((0, 0), |making| (making.waits, making.first_wait));
-        self.counters.variant_made(|number| VariantMake {
+        self.core.counters.variant_made(|number| VariantMake {
             number,
             variant: self.variant,
             start: self.start,
@@ -871,6 +955,11 @@ impl crate::Device {
     /// memory lengths and an imageblock size only a dispatch gives, are made by a
     /// [`prepare_dispatch`](ComputePipelineState::prepare_dispatch) call or by the first encoding
     /// call of any of its states that needs each ([`ComputePipelineState`]), which waits for it.
+    /// Each module keeps 64 of them: the first 8 it made, and past them the 56 dispatched last,
+    /// each new one past them evicting the least recently dispatched one no command buffer not yet
+    /// retired dispatched ([`Gauges::kernel_variants`](crate::Gauges::kernel_variants)). One
+    /// evicted and dispatched again is made again, through the device's pipeline cache, where
+    /// Metal makes nothing.
     ///
     /// [`DeviceOptions::pipeline_cache_dir`]: crate::DeviceOptions::pipeline_cache_dir
     ///
@@ -1978,9 +2067,10 @@ impl ComputePipelineState {
     /// read from the kernel's first eight variants with no lock, and past them under the short
     /// lock of the kernel's list, which no make holds while the driver compiles. It may answer
     /// false for a key whose make ends after the read, and never answers true for a key not
-    /// made. That bit is no answer of Metal's and moves as makes end: a state's main pipeline
-    /// reads false until its [`finish_pipeline`](Self::finish_pipeline), a `prepare_dispatch`
-    /// call or a dispatch has made it. The key does not move.
+    /// made. That bit is no answer of Metal's and moves as makes end and as a module evicts a
+    /// variant past the 64 it keeps: a state's main pipeline reads false until its
+    /// [`finish_pipeline`](Self::finish_pipeline), a `prepare_dispatch` call or a dispatch has
+    /// made it. The key does not move.
     ///
     /// None where the dispatch would refuse its threadgroup size, its variant or its threadgroup
     /// memory, where the encoder would refuse the imageblock size of a kernel that reaches one, or
@@ -2370,12 +2460,14 @@ impl Kernel {
     /// depends on when a compile finishes. Where another thread is making it, the call waits for
     /// that make, also a first-use wait counted in that make's [`VariantMake::waits`], and makes
     /// it itself where that one failed. One of the kernel's first [`VARIANT_CELLS`] variants is
-    /// found with no lock.
+    /// found with no lock and no hold; one past them `hold` takes for the dispatch's command
+    /// buffer, under the kernel's lock.
     pub(crate) fn pipeline(
         &self,
         core: &Core,
         variant: DispatchVariant,
         site: FirstUse,
+        mut hold: impl FnMut(&Arc<Listed>),
     ) -> Result<vk::Pipeline, Error> {
         let variants = &self.variants;
         let key = variant.key();
@@ -2388,7 +2480,7 @@ impl Kernel {
         let mut more = lock(&variants.more);
         let mut waits = false;
         loop {
-            if let Some(pipeline) = variants.made(&more, key) {
+            if let Some(pipeline) = variants.dispatched(&mut more, key, &mut hold) {
                 if waits {
                     waited(core);
                 }
@@ -2409,7 +2501,7 @@ impl Kernel {
             more = (variants.ended.wait(more)).unwrap_or_else(PoisonError::into_inner);
         }
         let start = VariantStart::FirstUse;
-        let pipeline = self.make_pending(core, more, variant, start, Some(began))?;
+        let pipeline = self.make_pending(core, more, variant, start, Some(began), &mut hold)?;
         waited(core);
         Ok(pipeline)
     }
@@ -2445,14 +2537,14 @@ impl Kernel {
             return Ok(None);
         }
         let began = host_time();
-        self.make_pending(core, more, variant, start, None)?;
+        self.make_pending(core, more, variant, start, None, &mut |_: &Arc<Listed>| {})?;
         Ok(Some(host_time().saturating_sub(began)))
     }
 
     /// Makes `variant`, which `more`, the lock held, shows neither made nor pending, started by
     /// `start`: entered as pending, with the first-use wait that began at `wait` where a dispatch
-    /// makes it, made with the lock released, kept, and kept in the device's counters
-    /// ([`Counters::variant_makes`]).
+    /// makes it, made with the lock released, kept, held by `hold` where it is listed, and kept in
+    /// the device's counters ([`Counters::variant_makes`](crate::Counters::variant_makes)).
     fn make_pending(
         &self,
         core: &Core,
@@ -2460,6 +2552,7 @@ impl Kernel {
         variant: DispatchVariant,
         start: VariantStart,
         wait: Option<u64>,
+        hold: &mut impl FnMut(&Arc<Listed>),
     ) -> Result<vk::Pipeline, Error> {
         more.pending.push(Making {
             variant,
@@ -2469,11 +2562,12 @@ impl Kernel {
         drop(more);
         let mut pending = Pending {
             variants: &self.variants,
-            counters: &core.counters,
+            core,
             variant,
             start,
             began: host_time(),
             made: None,
+            hold,
         };
         let (size, lengths, tiles) = variant.key();
         let made = Variant {
@@ -2566,7 +2660,7 @@ impl Kernel {
     /// reaper.
     fn release(&mut self, core: &Core) {
         for pipeline in self.variants.drain() {
-            core.reaper.give(Job::Free(Free::Pipeline(pipeline)));
+            give_back(core, pipeline);
         }
         if let Code::Module(module) = self.code {
             core.reaper.give(Job::Free(Free::ShaderModule(module)));

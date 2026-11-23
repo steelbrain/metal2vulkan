@@ -110,6 +110,16 @@ pub(crate) mod on_device {
         ComputePipelineState::for_test(device, &kernels::STEP, quiet).expect("the step kernel")
     }
 
+    /// [`step`] taking one threadgroup memory length from the encoder, at index 0, which its words
+    /// do not read: each length the encoder sets, rounded up to 16 bytes, is a variant of its own.
+    pub(crate) fn step_with_length(device: &Device) -> ComputePipelineState {
+        let fields = vec![region(), address(0, Place::Push(32))];
+        let mut with_length = interface(vec![(0, Access::ReadWrite)], fields, 40);
+        with_length.threadgroups = vec![0];
+        ComputePipelineState::for_test(device, &kernels::STEP, with_length)
+            .expect("the step kernel")
+    }
+
     fn write_words(buffer: &Buffer, word: impl Fn(u32) -> u32) {
         let contents = buffer.contents().expect("a Shared buffer").cast::<u32>();
         for index in 0..WORDS {
@@ -123,7 +133,7 @@ pub(crate) mod on_device {
         }
     }
 
-    fn words(buffer: &Buffer) -> Vec<u32> {
+    pub(crate) fn words(buffer: &Buffer) -> Vec<u32> {
         let contents = buffer.contents().expect("a Shared buffer").cast::<u32>();
         // SAFETY: the buffer is alive and 256 bytes long, and its work completed.
         (0..WORDS)

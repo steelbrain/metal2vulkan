@@ -924,6 +924,7 @@ fn named(gauges: rt::Gauges) -> Vec<(&'static str, u64)> {
         ("pipelines", gauges.pipelines),
         ("kernels", gauges.kernels),
         ("kernel_entries", gauges.kernel_entries),
+        ("kernel_variants", gauges.kernel_variants),
         ("render_contents", gauges.render_contents),
         ("attachment_views", gauges.attachment_views),
         ("command_buffers", gauges.command_buffers),

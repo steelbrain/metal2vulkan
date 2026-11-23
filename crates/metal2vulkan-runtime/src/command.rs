@@ -13,7 +13,7 @@ use crate::hazard::{Access, Hazards};
 use crate::kept::{Lent, Objects};
 use crate::memory::Block;
 use crate::over::{self, Overs, Reached};
-use crate::pipeline::ComputePipelineState;
+use crate::pipeline::{ComputePipelineState, Listed};
 use crate::queue::QueueInner;
 use crate::record::{self, Reach, Recorder};
 use crate::render::RenderPipelineState;
@@ -1316,6 +1316,12 @@ impl Building {
         if !blocks.iter().rev().any(|kept| Arc::ptr_eq(kept, block)) {
             blocks.push(Arc::clone(block));
         }
+    }
+
+    /// Keeps `variant`, a kernel's variant past its cells that a dispatch runs, until the command
+    /// buffer retires: one count at the recording's first dispatch of it, none at a later one.
+    pub(crate) fn hold_variant(&mut self, variant: &Arc<Listed>) {
+        self.gpu.kept.variants.hold(variant);
     }
 
     /// Keeps `state` until the command buffer retires, and lends it to the encoder that set it.

@@ -48,6 +48,7 @@ mod indirect;
 mod interpolation;
 mod kept;
 mod kernel_map;
+mod kernel_variants;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod kernels;
 mod large;
