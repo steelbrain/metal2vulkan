@@ -122,51 +122,6 @@ fragment float4 rc_discard(float4 position [[position]], texture2d<float> source
     return rc_tail(source, position.xy, rc_hash(p >> 1u) % 8u, v);
 }
 
-// A callee with an early return inside a selection.
-__attribute__((noinline)) static float rc_pick(device const uint *data, uint h) {
-    uint d = data[h & 255u];
-    if ((d & 3u) == 0u) {
-        return float(d & 63u);
-    }
-    float w = float(data[(h >> 8) & 255u] & 127u);
-    if ((d & 4u) != 0u) {
-        w += float(data[(h >> 16) & 255u] & 63u);
-    }
-    return 128.0f + w;
-}
-
-// After a call that returned early inside a selection.
-fragment float4 rc_return(float4 position [[position]], texture2d<float> source [[texture(0)]],
-                          device const uint *data [[buffer(0)]]) {
-    uint2 p = uint2(position.xy);
-    float v = rc_pick(data, rc_hash(p));
-    return rc_tail(source, position.xy, rc_hash(p >> 1u) % 8u, v);
-}
-
-// After a loop whose iterations a continue from inside a switch ends early.
-fragment float4 rc_continue(float4 position [[position]], texture2d<float> source [[texture(0)]],
-                            device const uint *data [[buffer(0)]]) {
-    uint2 p = uint2(position.xy);
-    uint h = rc_hash(p);
-    uint n = 4u + data[254] % 3u;
-    float v = 0.0f;
-    for (uint i = 0u; i < n; ++i) {
-        switch (data[(h + 29u * i) & 255u] % 3u) {
-        case 0u:
-            v += 1.0f;
-            continue;
-        case 1u:
-            v += float(data[((h >> 8) ^ i) & 255u] & 15u);
-            break;
-        default:
-            v += 2.0f;
-            break;
-        }
-        v += float(data[(h + i) & 255u] & 7u);
-    }
-    return rc_tail(source, position.xy, rc_hash(p >> 1u) % 8u, v);
-}
-
 // Inside selections and a loop whose conditions hold for whole 8 by 8 blocks, so every quad runs
 // them together.
 fragment float4 rc_grid(float4 position [[position]], texture2d<float> source [[texture(0)]],

@@ -3,13 +3,12 @@
 //!
 //! Two owned fixtures, one case each:
 //!
-//! - `reconvergence-constructs` (`reconverge_sample`) draws ten fragment functions, each after or
+//! - `reconvergence-constructs` (`reconverge_sample`) draws eight fragment functions, each after or
 //!   inside one construct: an if/else on data, a loop of the pixel's own trip count, a break to
-//!   the loop's own merge, a switch of one label per case, a discard, a call that returned early
-//!   inside a selection, a continue from inside a switch to the loop around it, selections and a
-//!   loop uniform over 8 by 8 blocks (`rc_grid`), and a uniform loop's second iteration after one
-//!   pixel of each quad ended the first early, by a continue (`rc_continue_quad`) or by an if/else
-//!   at the body's end (`rc_latches`).
+//!   the loop's own merge, a switch of one label per case, a discard, selections and a loop
+//!   uniform over 8 by 8 blocks (`rc_grid`), and a uniform loop's second iteration after one pixel
+//!   of each quad ended the first early, by a continue to the loop's own continue target
+//!   (`rc_continue_quad`) or by an if/else at the body's end (`rc_latches`).
 //! - `reconvergence-handle-choices` (`reconverge_select`) samples inside a selection uniform over
 //!   8 by 8 blocks through a texture a ternary on two handles chooses: per pixel (`rc_select`), per
 //!   4 by 4 block (`rc_select_quad`), and by a constant the whole draw shares (`rc_pick`), the last
@@ -21,11 +20,17 @@
 //! source), at a coordinate whose scale is 2^q texels a pixel for a q uniform over each quad, so
 //! the implicit level of detail is exactly q and the sample reads level q's value. The pair is the
 //! fine derivative of the lane's own value v, and the trilinear sample is at a level of detail of
-//! q + log2(1.5). Each reads the quad's other lanes, which Metal keeps running as helpers after the
-//! construct. MSL does not say a derivative is defined after a callee's early return
-//! (`rc_return`), after a continue from a switch to the loop around it (`rc_continue`), or in the
-//! loop iterations `rc_continue_quad` and `rc_latches` sample in; the case holds Metal's answer
-//! there as everywhere else.
+//! q + log2(1.5). Each reads the quad's other lanes.
+//!
+//! Metal defines every value these draws observe. Each is taken where every lane of the quad
+//! arrives together: after a construct that closed (an if/else, a loop of the pixel's own trip
+//! count, a break to the loop's own merge, a switch, a discard, which Metal runs as a demote so
+//! the discarded lane stays a helper), in the iteration after a loop's own back edge (the
+//! continue to the loop's own continue target, and the if/else whose arms both end the
+//! iteration), or inside control flow uniform over the quad. A construct after which MSL leaves a
+//! derivative undefined (an early return inside a selection, a break or a continue to a
+//! construct around the innermost one, a construct a quad entered diverged) is not here, because
+//! Metal's answer there would be a device's luck rather than a contract.
 //!
 //! Each draw covers a 64 by 64 `RGBA16Float` target cleared to -1, read back through a blit. A
 //! draw's row holds two sites over its texels, each a column of the channels, packed so that the
@@ -113,14 +118,12 @@ impl Draw {
 }
 
 /// `reconverge_sample`'s draws, in order.
-const CONSTRUCTS: [Draw; 10] = [
+const CONSTRUCTS: [Draw; 8] = [
     Draw::covering("rc_cover", "rc_if"),
     Draw::covering("rc_cover", "rc_loop"),
     Draw::covering("rc_cover", "rc_break"),
     Draw::covering("rc_cover", "rc_switch"),
     Draw::covering("rc_cover", "rc_discard"),
-    Draw::covering("rc_cover", "rc_return"),
-    Draw::covering("rc_cover", "rc_continue"),
     Draw::covering("rc_cover", "rc_grid"),
     Draw::covering("rc_cover", "rc_continue_quad"),
     Draw::covering("rc_cover", "rc_latches"),
