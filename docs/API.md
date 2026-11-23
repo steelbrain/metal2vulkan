@@ -1879,9 +1879,11 @@ bound.
 - `metal2vulkan-degrade-half-texel-conversion` (precision). `PrecisionNote::HalfTexelConversion`:
   The module reads, gathers, or samples a texture with a `half` result, the device's `float` texel
   rounded to nearest even on every device: within one `half` ulp of Metal's, but a 32-bit float
-  texel's sample past `±65504`, the infinity where Metal saturates. Recorded outright for every
-  such access, a heap element's and a depth texture's included: the device's `float` texel is its
-  own.
+  texel past `±65504`, which Metal saturates in a sample and takes to the infinity in a read: the
+  infinity of its sign in both, and `±65504` in both on a driver that converts a 2D image's fetched
+  texel against the 16-bit float controls (AMD's open Linux driver, AMDVLK 2025.Q2.1, on a Radeon
+  780M). Recorded outright for every such access, a heap element's and a depth texture's included:
+  the device's `float` texel is its own.
 - `metal2vulkan-degrade-srgb-texel-decode` (precision). `PrecisionNote::SrgbTexelDecode`: The module
   reads, samples, or gathers a texture with a `half` or `float` result through the device's sRGB
   decode, or decodes the device's filter of its codes, where the texture may be bound in an 8-bit

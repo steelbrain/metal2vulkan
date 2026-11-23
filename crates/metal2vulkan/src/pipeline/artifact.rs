@@ -857,9 +857,12 @@ pub enum PrecisionNote {
     /// `float` texel (within [`PrecisionNote::DeviceTexelConversion`]'s bound of Metal's) rounded
     /// to nearest even is within one `half` ulp of Metal's `half` result (Metal rounds a 32-bit
     /// float sample toward zero, a half-float linear sum with ties away from zero, and a normalized
-    /// value onto its grid first), but for a 32-bit float texel's sample past `±65504`, which Metal
-    /// saturates to `±65504` and the rounding takes to the infinity of its sign; a NaN is the
-    /// device's decode ([`PrecisionNote::DeviceNanEncoding`]).
+    /// value onto its grid first), but for a 32-bit float texel past `±65504`, which Metal
+    /// saturates to `±65504` in a sample and takes to the infinity of its sign in a read: the
+    /// rounding takes it to the infinity in both, and a driver that converts a 2D image's fetched
+    /// texel against the 16-bit float controls keeps it at `±65504` in both (AMD's open Linux
+    /// driver, AMDVLK 2025.Q2.1, on a Radeon 780M); a NaN is the device's decode
+    /// ([`PrecisionNote::DeviceNanEncoding`]).
     HalfTexelConversion,
     /// The module reads, samples, or gathers a texture with a `half` or `float` result through
     /// the device's sRGB decode, or decodes the device's filter of its codes, where the texture may
