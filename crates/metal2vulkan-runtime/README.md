@@ -3324,8 +3324,8 @@ cache is answered compile-required on both.
     1D texture ("a bicubic filter of a 1D texture"): the translator test
     `a_bicubic_kernel_reads_each_slots_format_treatment_from_its_pushed_field` asserts each text;
   - an argument buffer's texture of a type the identity arrays hold no element of (a texture
-    buffer, a cube read as an array, level views, a two-plane, extended-range, RGBX or `ulong`
-    form, or a storage texture with a format), one read through another numeric type than its
+    buffer's parts, a cube read as an array, level views, a two-plane, extended-range, RGBX or
+    `ulong` form, or a storage texture with a format), one read through another numeric type than its
     own or as the raw texels of an extended-range member, a read of one that decodes an
     extended-range member, and a handle that reads its table entry beyond its element: no test
     yet;
