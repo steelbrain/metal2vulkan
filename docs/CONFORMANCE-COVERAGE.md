@@ -42,7 +42,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1329 |
 | distinct SDK items the Metal leg reaches, of any status | 812 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 7970 |
+| ledger rows (a case whose gap is recorded) | 7969 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -3295,7 +3295,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `half-texel-nans-rgb9e5f` | The device's own answer (rule 1): a shared-exponent (`RGB9E5Float`) texel's channel below half's normal range through a `half` `read()` of a read-access texture… |
 | `half-texel-nans-rgb9e5f` | The device's own answer (rule 1): a shared-exponent (`RGB9E5Float`) texel's channel below half's normal range through a `half` `read()` of a sample-access textu… |
 | `half-texel-nans-rgb9e5f` | The device's own answer (rule 1): the shader's `float` widening of the `half` this case read, a shared-exponent texel's channel below half's normal range. Metal… |
-| `level-sizes-storage` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
 | `math-frexp-ilogb-half` | The device's own answer (rule 1): `frexp`'s mantissa of the signalling `half` NaN 0x7c01: Metal keeps its bits; the device answers it quieted (0x7e01). Note `na… |
 | `math-frexp-ilogb-half` | The device's own answer (rule 1): `frexp`'s mantissa of the signalling `half` NaN 0x7c01: Metal keeps its bits; the device answers it quieted (0x7e01). Note `na… |
 | `math-frexp-ilogb-half` | The device's own answer (rule 1): `frexp`'s mantissa of the signalling `half` NaN 0x7c01: Metal keeps its bits; the device answers it quieted (0x7e01). Note `na… |
