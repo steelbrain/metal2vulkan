@@ -951,11 +951,13 @@ for `VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT` is `VK_IMAGE_LAYOUT_GENER
 submission whose command buffers or uploads use a plane acquires it from
 `VK_QUEUE_FAMILY_EXTERNAL` in a command buffer of rt's own ahead of everything, and releases it
 to that family in another after everything, both in the general layout: one barrier each, counted
-in `Metrics::external_acquires` and `Metrics::external_releases`, the submission in
+in `Metrics::external_acquires` and `Metrics::external_releases`. The acquire follows a global
+barrier from and to every stage, so an earlier submission's release on rt's one queue happens
+before it (Vulkan 1.4, section 7.7.6). The submission counts in
 `Metrics::d3d11_plane_submissions` and the two command buffers in
 `Metrics::runtime_command_buffers`. The release takes the submission's last signals, so it adds
-no `VkSubmitInfo2`, and no submission or wait is added. Direct3D 11 thus owns the planes' memory
-between rt's submissions, and `Surface::external_writes_done()` and
+no `VkSubmitInfo2`, and no submission or semaphore wait is added. Direct3D 11 thus owns the
+planes' memory between rt's submissions, and `Surface::external_writes_done()` and
 `BlitCommandEncoder::release_surface_to_external(&surface)` record nothing for such a surface. So
 the consumer's precondition is that Direct3D 11's work that accesses a plane has completed before
 the consumer commits the command buffers that use it, and that those command buffers have

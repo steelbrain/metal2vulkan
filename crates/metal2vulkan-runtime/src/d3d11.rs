@@ -94,7 +94,9 @@ impl Device {
     /// releases it to that family in another after everything, in the general layout
     /// (`...-dstQueueFamilyIndex-12331`), which takes the submission's last signals, so it adds
     /// no submit info: Direct3D 11 owns the planes' memory between rt's submissions, each counted
-    /// in [`Metrics::d3d11_plane_submissions`](crate::Metrics::d3d11_plane_submissions).
+    /// in [`Metrics::d3d11_plane_submissions`](crate::Metrics::d3d11_plane_submissions). The
+    /// acquire follows a global barrier from and to every stage, so an earlier submission's
+    /// release on rt's one queue happens before it (Vulkan 1.4, section 7.7.6).
     /// [`Surface::external_writes_done`] and
     /// [`release_surface_to_external`](crate::BlitCommandEncoder::release_surface_to_external)
     /// record nothing for such a surface. No keyed mutex is used, by rt or on the textures: each

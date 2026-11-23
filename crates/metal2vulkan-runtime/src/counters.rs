@@ -2772,9 +2772,11 @@ pub struct Metrics {
     /// member counts once, its first `vkQueueSubmit2` acquiring and its last releasing. Each
     /// acquire and release is one barrier, also counted in
     /// [`external_acquires`](Self::external_acquires),
-    /// [`external_releases`](Self::external_releases) and [`barriers`](Self::barriers), and each
-    /// command buffer in [`runtime_command_buffers`](Self::runtime_command_buffers). No Metal
-    /// counterpart: an IOSurface needs no hand-over between APIs.
+    /// [`external_releases`](Self::external_releases) and [`barriers`](Self::barriers); the
+    /// acquire follows a global barrier from and to every stage, also counted in `barriers`, so
+    /// an earlier submission's release happens before it. Each command buffer counts in
+    /// [`runtime_command_buffers`](Self::runtime_command_buffers). No Metal counterpart: an
+    /// IOSurface needs no hand-over between APIs.
     pub d3d11_plane_submissions: u64,
     /// Surfaces made in place
     /// ([`Device::new_exported_surface`](crate::Device::new_exported_surface),

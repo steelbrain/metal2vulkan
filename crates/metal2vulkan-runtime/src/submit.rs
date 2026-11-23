@@ -441,7 +441,11 @@ impl Upload {
 
     /// A new upload that hands `planes`, Direct3D 11 planes' images, over ([`Image::handed`]) in
     /// one barrier counted in `core`'s counters, its command buffer ended; with the first failed
-    /// call, which loses the device.
+    /// call, which loses the device. An acquire follows a global barrier from and to every stage:
+    /// an acquire's own first synchronization scope does not apply, and the release before it,
+    /// an earlier submission's on the one queue, must happen before it (Vulkan 1.4, section
+    /// 7.7.6: "VK_PIPELINE_STAGE_ALL_COMMANDS_BIT is the only valid stage to wait on or wait for
+    /// these operations").
     fn hand_over(
         core: &Core,
         planes: &[Arc<Image>],
@@ -455,6 +459,10 @@ impl Upload {
             Err(error) => unreachable!("an upload's begin fails only in a Vulkan call: {error}"),
         };
         let device = &core.device;
+        if acquire {
+            record::barrier(device, upload.command, Reach::Commands);
+            core.counters.count(Metric::Barriers);
+        }
         let barriers: Vec<_> = (planes.iter())
             .map(|image| image.handed(core.family, acquire))
             .collect();
