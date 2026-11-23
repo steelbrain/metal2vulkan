@@ -47,6 +47,7 @@ impl Refusal {
             Refusal::IndicesGranted { .. } => RefusalBasis::Ours,
             Refusal::IndicesNotGranted { .. } => RefusalBasis::Ours,
             Refusal::TextureIndex { .. } => RefusalBasis::Ours,
+            Refusal::TextureWithoutIndex { .. } => RefusalBasis::Ours,
             Refusal::TextureZeroExtent => RefusalBasis::MetalMeasured,
             Refusal::TextureExtentForType => RefusalBasis::MetalMeasured,
             Refusal::TextureCubeNotSquare => RefusalBasis::MetalMeasured,

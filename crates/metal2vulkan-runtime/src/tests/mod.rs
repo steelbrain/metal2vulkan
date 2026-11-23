@@ -7,6 +7,7 @@ mod arrays;
 mod barycentrics;
 mod bicubic;
 mod bicubic_draw;
+mod bind_without_index;
 mod blit;
 mod blit_options;
 mod border;

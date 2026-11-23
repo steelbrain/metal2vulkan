@@ -8659,6 +8659,7 @@ variant	metal2vulkan-runtime::Refusal::TextureSwizzleWithWrites	TextureSwizzleWi
 variant	metal2vulkan-runtime::Refusal::TextureViewFormat	TextureViewFormat { texture: PixelFormat, view: PixelFormat }
 variant	metal2vulkan-runtime::Refusal::TextureViewRange	TextureViewRange { level: u32, level_count: u32, slice: u32, slice_count: u32 }
 variant	metal2vulkan-runtime::Refusal::TextureViewSlices	TextureViewSlices { texture_type: TextureType, slice_count: u32 }
+variant	metal2vulkan-runtime::Refusal::TextureWithoutIndex	TextureWithoutIndex { index: u32 }
 variant	metal2vulkan-runtime::Refusal::TextureZeroExtent	TextureZeroExtent
 variant	metal2vulkan-runtime::Refusal::ThreadgroupSize	ThreadgroupSize { size: [u32; 3], max: u32 }
 variant	metal2vulkan-runtime::Refusal::VertexBufferOffset	VertexBufferOffset { index: u32, offset: u64, length: u64 }

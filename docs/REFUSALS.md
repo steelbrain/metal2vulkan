@@ -31,7 +31,7 @@ Columns:
 | Rate maps the compile layer does not compile | 5 | 5 | 0 | 0 | 4 | 1 | 0 |
 | The translation deadline | 1 | 1 | 0 | 0 | 0 | 1 | 0 |
 | Devices below the runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
-| The runtime's `Refusal` | 85 | 85 | 0 | 0 | 0 | 0 | 0 |
+| The runtime's `Refusal` | 86 | 85 | 0 | 0 | 0 | 0 | 0 |
 | The runtime's `Limit` | 18 | 18 | 0 | 0 | 0 | 0 | 0 |
 | The runtime's `Gap` | 31 | 31 | 0 | 0 | 0 | 0 | 0 |
 
@@ -44,7 +44,7 @@ Columns:
 | Rate maps the compile layer does not compile | 0 | 0 | 0 | 0 | 5 | 0 | 0 | 0 |
 | The translation deadline | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 |
 | Devices below the runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
-| The runtime's `Refusal` | 23 | 25 | 0 | 0 | 37 | 0 | 0 | 0 |
+| The runtime's `Refusal` | 23 | 25 | 0 | 0 | 38 | 0 | 0 | 0 |
 | The runtime's `Limit` | 0 | 0 | 0 | 13 | 5 | 0 | 0 | 0 |
 | The runtime's `Gap` | 0 | 0 | 0 | 3 | 28 | 0 | 0 | 0 |
 
@@ -266,6 +266,7 @@ Columns:
 | `IndicesGranted` | A grant of an index already granted (`Device::grant_indices`) | every device (a public call's own check of its arguments) | `ours`: each index has one grant, so each resource ID names one object | 1: `crates/metal2vulkan-runtime/src/arrays.rs (grant)` | `-` |
 | `IndicesNotGranted` | A texture, a sampler state or a pipeline state's constexpr sampler at an index no grant of its class holds (`Device::new_texture`,... | every device (a public call's own check of its arguments) | `ours`: an object takes an index the consumer was granted | 1: `crates/metal2vulkan-runtime/src/arrays.rs (place)` | `-` |
 | `TextureIndex` | A texture shaders reach made without an index, or one they do not reach made with one (`Device::new_texture`) | every device (a public call's own check of its arguments) | `ours`: an index is an element of set 1's texture arrays, which only shaders read | 5: `crates/metal2vulkan-runtime/src/texture.rs (new_drawable_texture)`, `crates/metal2vulkan-runtime/src/texture.rs (surface_texture)` (+3) | `-` |
+| `TextureWithoutIndex` | A texture made without an index bound to a function's texture slot (`ComputeCommandEncoder::set_texture`,... | every device (a public call's own check of its arguments) | `ours`: a slot pushes its texture's index, an element of set 1's texture arrays | 0 | `-` |
 | `TextureZeroExtent` | A texture with a width, height or depth of 0 | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: plain Metal asserts "MTLTextureDescriptor has width of zero", and the same for a height of zero | 2: `crates/metal2vulkan-runtime/src/texture.rs (shape)`, `crates/metal2vulkan-runtime/src/texture.rs (texel_texture)` | `-` |
 | `TextureExtentForType` | A texture with a height other than 1 of a 1D type, or a depth other than 1 of a type that is not 3D | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: plain Metal asserts "the texture type MTLTextureType1D requires that height is 1", and the same for a 2D texture of depth 2 | 2: `crates/metal2vulkan-runtime/src/texture.rs (shape)`, `crates/metal2vulkan-runtime/src/texture.rs (texel_texture)` | `-` |
 | `TextureCubeNotSquare` | A cube texture whose width and height differ | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: plain Metal asserts "MTLTextureDescriptor width must equal height for cube textures" | 1: `crates/metal2vulkan-runtime/src/texture.rs (shape)` | `-` |
