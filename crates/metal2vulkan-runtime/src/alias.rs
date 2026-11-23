@@ -5,11 +5,12 @@
 //! needs the move, as a write through an alias leaves that state the alias's.
 //!
 //! Each resource placed in a heap is a [`Placement`], linked at placement with the others of its heap
-//! whose bytes meet its, both ways and weakly; a release drops its links. A placement keeps its
-//! links to textures apart from its links to buffers: only a texture is ever moved, so a write
-//! makes only its texture links stale, and a buffer whose bytes meet no texture's takes part in
-//! nothing. A heap with no meeting placements holds no links, and its resources' uses pay one
-//! test.
+//! whose bytes meet its, both ways and weakly, but for two buffers: only a texture is ever moved,
+//! so a buffer's bytes matter only where a texture's meet them, and a buffer looks only at its
+//! heap's textures. A placement keeps its links to textures apart from its links to buffers: a
+//! write makes only its texture links stale, and a buffer whose bytes meet no texture's takes part
+//! in nothing. A release drops its links and its own entry in its heap's [`Places`]. A heap with
+//! no meeting placements holds no links, and its resources' uses pay one test.
 //!
 //! A use that writes a placement makes its texture links stale. A stale texture's next use that
 //! writes it moves its whole image from undefined to its home layout first, in a barrier that
@@ -77,8 +78,8 @@ struct Link {
     stale: Arc<AtomicBool>,
 }
 
-/// A placement's links: to textures, which its writes make stale, and to buffers, which only a
-/// texture's checks look at (a read of one before the texture's move).
+/// A placement's links: to textures, which its writes make stale, and a texture's to buffers,
+/// which only its checks look at (a read of one before its move).
 #[derive(Default)]
 struct Links {
     textures: Vec<Link>,
@@ -97,29 +98,58 @@ impl Links {
         self.textures.iter().chain(&self.buffers)
     }
 
-    /// Drops the links to `place`.
-    fn drop_to(&mut self, place: *const Placement) {
+    /// Drops the links to `place`, a texture where `texture`.
+    fn drop_to(&mut self, place: *const Placement, texture: bool) {
         let other = |link: &Link| !std::ptr::eq(link.place.as_ptr(), place);
-        self.textures.retain(other);
-        self.buffers.retain(other);
+        match texture {
+            true => self.textures.retain(other),
+            false => self.buffers.retain(other),
+        }
     }
 
-    /// Whether its placement, a texture where `texture`, takes part: a texture with any link,
-    /// a buffer with a link to a texture.
-    fn take_part(&self, texture: bool) -> bool {
-        !self.textures.is_empty() || (texture && !self.buffers.is_empty())
+    /// Whether its placement takes part: it has a link, which a buffer has only to a texture.
+    fn take_part(&self) -> bool {
+        !self.textures.is_empty() || !self.buffers.is_empty()
+    }
+}
+
+/// A placement in its heap's [`Places`]: its first and past-last byte in the heap's block, and
+/// itself held weakly.
+struct Entry {
+    start: u64,
+    end: u64,
+    place: Weak<Placement>,
+}
+
+type ByAddress = HashMap<usize, Entry, BuildHasherDefault<DefaultHasher>>;
+
+/// A heap's live placements, its textures' apart from its buffers', by address: a placement
+/// removes its own as it is released, so the heap holds its live placements alone.
+#[derive(Default)]
+pub(crate) struct Places {
+    textures: ByAddress,
+    buffers: ByAddress,
+    /// For the device tests: the entries the heap's last placement looked at.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    examined: usize,
+}
+
+impl Places {
+    fn of(&mut self, texture: bool) -> &mut ByAddress {
+        match texture {
+            true => &mut self.textures,
+            false => &mut self.buffers,
+        }
     }
 }
 
 /// A resource's bytes in its heap: a heap texture's or a heap buffer's.
 pub(crate) struct Placement {
     heap: Arc<HeapId>,
-    /// Its first and past-last byte in the heap's block.
-    start: u64,
-    end: u64,
     /// A texture's image; `None` for a buffer.
     moved: Option<Moved>,
-    /// The placements of its heap whose bytes meet its, changed under its heap's lock.
+    /// The placements of its heap whose bytes meet its, a buffer's textures alone, changed under
+    /// its heap's lock.
     links: Mutex<Links>,
     /// It takes part ([`Links::take_part`]): the one test a placement that does not pays, read
     /// without the lock.
@@ -131,8 +161,8 @@ pub(crate) struct Placement {
 
 impl Placement {
     /// A resource placed at bytes `[start, end)` of `heap`'s block, an image where `moved`,
-    /// linked with the placements of the heap whose bytes meet those. A texture with links is
-    /// stale from the start: its bytes may hold another's writes.
+    /// linked with the placements of the heap whose bytes meet those, a buffer with textures
+    /// alone. A texture with links is stale from the start: its bytes may hold another's writes.
     pub(crate) fn new(
         heap: &Arc<HeapId>,
         start: u64,
@@ -141,8 +171,6 @@ impl Placement {
     ) -> Arc<Placement> {
         let place = Arc::new(Placement {
             heap: Arc::clone(heap),
-            start,
-            end,
             moved,
             links: Mutex::new(Links::default()),
             linked: AtomicBool::new(false),
@@ -150,11 +178,17 @@ impl Placement {
         });
         let texture = moved.is_some();
         let mut places = lock(heap.places());
-        places.retain(|other| other.strong_count() > 0);
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        {
+            places.examined =
+                places.textures.len() + if texture { places.buffers.len() } else { 0 };
+        }
+        let buffers = texture.then_some(places.buffers.values());
         // Held until the heap's lock is let go: the last handle of one dropped here would take it.
-        let met: Vec<Arc<Placement>> = (places.iter())
-            .filter_map(Weak::upgrade)
+        let met: Vec<Arc<Placement>> = (places.textures.values())
+            .chain(buffers.into_iter().flatten())
             .filter(|other| other.start < end && start < other.end)
+            .filter_map(|other| other.place.upgrade())
             .collect();
         let mut links = Links::default();
         for other in &met {
@@ -164,7 +198,7 @@ impl Placement {
                 stale: Arc::clone(&place.stale),
             };
             theirs.push(link, texture);
-            if theirs.take_part(other.moved.is_some()) && !other.linked.swap(true, Relaxed) {
+            if !other.linked.swap(true, Relaxed) {
                 heap.linked(true);
             }
             let link = Link {
@@ -175,13 +209,16 @@ impl Placement {
         }
         if !met.is_empty() {
             place.stale.store(texture, Relaxed);
-            if links.take_part(texture) {
-                place.linked.store(true, Relaxed);
-                heap.linked(true);
-            }
+            place.linked.store(true, Relaxed);
+            heap.linked(true);
             *lock(&place.links) = links;
         }
-        places.push(Arc::downgrade(&place));
+        let entry = Entry {
+            start,
+            end,
+            place: Arc::downgrade(&place),
+        };
+        places.of(texture).insert(place.key(), entry);
         drop(places);
         drop(met);
         place
@@ -207,9 +244,9 @@ impl Placement {
 impl Drop for Placement {
     fn drop(&mut self) {
         let me: *const Placement = self;
+        let texture = self.moved.is_some();
         let met: Vec<Arc<Placement>> = {
-            let mut places = lock(self.heap.places());
-            places.retain(|other| other.strong_count() > 0);
+            lock(self.heap.places()).of(texture).remove(&self.key());
             let links = self.links.get_mut().unwrap_or_else(PoisonError::into_inner);
             links
                 .all()
@@ -221,8 +258,8 @@ impl Drop for Placement {
         }
         for other in &met {
             let mut links = lock(&other.links);
-            links.drop_to(me);
-            let linked = links.take_part(other.moved.is_some());
+            links.drop_to(me, texture);
+            let linked = links.take_part();
             if other.linked.swap(linked, Relaxed) && !linked {
                 self.heap.linked(false);
             }
@@ -345,6 +382,20 @@ impl Marks {
 pub(crate) struct Aliased {
     checks: Vec<Arc<Placement>>,
     writes: Vec<Arc<Placement>>,
+}
+
+impl Placement {
+    /// For the device tests: its links.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn links(&self) -> usize {
+        lock(&self.links).all().count()
+    }
+
+    /// For the device tests: the entries its heap's last placement looked at.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn examined(&self) -> usize {
+        lock(self.heap.places()).examined
+    }
 }
 
 impl Aliased {

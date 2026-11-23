@@ -12,8 +12,11 @@
 //! - A draw whose fragment writes P after a dispatch wrote Q: P moves through the pass's
 //!   interruption.
 //! - A heap whose two textures' bytes do not meet: no links, no check and no move.
-//! - Buffers whose bytes meet only buffers' take no part, and no command looks at them; a texture
-//!   placed over their bytes makes them take part, and its release makes them take none again.
+//! - Buffers whose bytes meet only buffers' take no part and hold no link, and no command looks at
+//!   them; a texture placed over their bytes makes them take part, and its release makes them take
+//!   none again.
+//! - A new heap buffer looks at the heap's live textures alone, as many with 10,000 live buffers as
+//!   with 100; a new heap texture at the heap's live placements at most.
 //!
 //! `llvm-as` assembles the kernels' libraries; without it the tests are skipped, visibly.
 
@@ -33,6 +36,7 @@ mod on_device {
         TextureUsage,
     };
     use metal2vulkan_devtools::fixtures_dir;
+    use std::sync::Arc;
 
     /// The first texture index the tests grant.
     const FIRST: u32 = 4600;
@@ -348,14 +352,19 @@ mod on_device {
                     .unwrap_or_else(|error| panic!("{name}: {error}"))
             };
             let [a, b] = [buffer(0), buffer(0)];
-            let part = |x: &Buffer| {
-                (BufferObject::object(x).placement())
-                    .expect("a heap buffer's placement")
-                    .linked()
+            let placement = |x: &Buffer| {
+                let place = BufferObject::object(x).placement();
+                Arc::clone(place.expect("a heap buffer's placement"))
             };
+            let part = |x: &Buffer| placement(x).linked();
             assert!(
                 !part(&a) && !part(&b),
                 "{name}: buffers meeting buffers take no part"
+            );
+            assert_eq!(
+                [placement(&a).links(), placement(&b).links()],
+                [0, 0],
+                "{name}: no link joins two buffers"
             );
             assert_eq!(taking(), was, "{name}: no placement takes part");
             let format = PixelFormat::RGBA16Float;
@@ -363,6 +372,11 @@ mod on_device {
             assert!(
                 part(&a) && part(&b),
                 "{name}: a texture over them makes them take part"
+            );
+            assert_eq!(
+                [placement(&a).links(), placement(&b).links()],
+                [1, 1],
+                "{name}: each buffer linked with the texture alone"
             );
             assert!(taking(), "{name}: placements take part");
             drop(t);
@@ -374,6 +388,62 @@ mod on_device {
             drop((a, b));
             (device.release_block(block)).unwrap_or_else(|error| panic!("{name}: {error}"));
             println!("heap checks: {name}: buffers meeting only buffers take no part");
+        });
+    }
+
+    /// The entries a new heap placement looks at: a buffer's are the heap's live textures, as many
+    /// with 10,000 live buffers as with 100 (and as with none); a texture's are the heap's live
+    /// placements at most. The buffers' bytes and the textures' are apart.
+    #[test]
+    fn every_device_looks_at_a_heap_s_textures_alone_to_place_a_buffer() {
+        each_device("alias_examined", |name, _, device| {
+            let _grant = (device.grant_indices(IndexClass::Texture, FIRST, 6))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let (block, heap) = heap(name, &device);
+            let format = PixelFormat::RGBA16Float;
+            let tail = heap.len / 4 * 3;
+            let texture = |t: u32| {
+                let at = (heap, tail + u64::from(t) * (1 << 20));
+                place_at(name, &device, at, (t, format, 64, 64), FIRST + 2 * t)
+            };
+            let stride = device.heap_buffer_size_and_align(256, 0).align.max(256);
+            let buffer = |n: usize| {
+                let at = u64::try_from(n).expect("a count") * stride;
+                assert!(at + 256 <= tail, "{name}: buffer {n} before the textures");
+                (device.new_heap_buffer(heap, at, 256))
+                    .unwrap_or_else(|error| panic!("{name}: buffer {n}: {error}"))
+            };
+            let examined = |x: &Buffer| {
+                let place = BufferObject::object(x).placement();
+                place.expect("a heap buffer's placement").examined()
+            };
+            let _textures = [texture(0), texture(1)];
+            let first = buffer(0);
+            let textures = examined(&first);
+            assert!(textures <= 2, "{name}: the two textures at most");
+            let mut buffers = vec![first];
+            for live in [100, 10_000] {
+                while buffers.len() < live {
+                    buffers.push(buffer(buffers.len()));
+                }
+                let probe = buffer(live);
+                assert_eq!(
+                    examined(&probe),
+                    textures,
+                    "{name}: with {live} live buffers, a new buffer looks at the textures alone"
+                );
+            }
+            let t = texture(2);
+            let place = (t.texture.object().placement()).expect("a heap texture's placement");
+            assert!(
+                place.examined() <= buffers.len() + 3,
+                "{name}: a new texture looks at {} entries, past the heap's placements",
+                place.examined()
+            );
+            drop(t);
+            drop(buffers);
+            (device.release_block(block)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            println!("heap checks: {name}: a new buffer looks at {textures} textures alone");
         });
     }
 }
