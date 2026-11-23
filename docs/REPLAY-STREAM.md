@@ -1178,6 +1178,13 @@ An NVIDIA time row is GPU ms a present over presents whose covering clock sample
 state on both arms, the state named, at least 30 presents an arm; otherwise 'not comparable by
 time' with the counts.
 
+A recording is a timing source only on a card of its own memory class. A guest on a device with
+unified memory builds its work on Shared storage; played on a discrete card, its kernels read and
+write that storage across the bus, which no guest on a discrete card asks for. One GPU compute
+benchmark recorded on an Intel integrated card took about 378 s of an RTX 3090's GPU time in two
+of its frames (m3-max-71535 and 71553), where the same benchmark's guest on that card took 37.1 s
+for all its workloads.
+
 Stale reads bar no verdict: Metal leaves those bytes undefined and every play takes them by one
 rule. Where the digests differ, they are the first suspect. The exit status is 0 where the
 frame `--frame` names has a verdict (or none is named), 1 where it has none and 2 for a bad
