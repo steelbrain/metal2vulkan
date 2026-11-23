@@ -18,7 +18,7 @@
 use super::super::args::{arg, data, index, list, metal, refuse, uint, Fields};
 use super::super::translator::{self, attachment_keys, LINKED_KEYS, PASS_KEYS};
 use super::encoders::first;
-use super::{failed, makes, unaddressed, NewRuntime, Object, Skips};
+use super::{failed, makes, states, unaddressed, NewRuntime, Object, Skips};
 use crate::replay::player::{Made, PlayError};
 use crate::replay::stream::Call;
 use crate::replay::value::Value;
@@ -290,12 +290,33 @@ impl NewRuntime {
                 function.descriptor.with_linked(linked),
             )))
         })?;
+        // Where the makes are pooled or a key list passes it over (`with_states`), the state is
+        // not made here and plays as a skipped object: a states-only play binds no state.
+        let (key, what) = states::render_line(&self.device, &descriptor, call.result, self.at.1);
+        if !self.states.selects(Some(&key), &what) {
+            return unaddressed(Object::Skipped);
+        }
+        if self.states.pooled() {
+            let device = self.device.clone();
+            self.states.give(what, move |numbering, step| {
+                let state = device.new_render_pipeline_state(&descriptor, |s| numbering.ids(s))?;
+                step.modules();
+                state.finish_pipeline()?;
+                Ok(states::Kept::Render(state))
+            });
+            return unaddressed(Object::Skipped);
+        }
         let mark = makes::Mark::new(&self.device, self.prepass.as_ref());
         // Its main pipelines finished, as a consumer finishes them once it has answered.
-        let made = self.numbered(|device, ids| {
-            device.new_render_pipeline_state(&descriptor, |samplers| ids(samplers))
+        let inline = self.states.inline();
+        let made = inline.run(&what, |step| {
+            let state = self.numbered(|device, ids| {
+                device.new_render_pipeline_state(&descriptor, |samplers| ids(samplers))
+            })?;
+            step.modules();
+            state.finish_pipeline()?;
+            Ok(state)
         });
-        let made = made.and_then(|state| state.finish_pipeline().map(|()| state));
         match made {
             Ok(state) => {
                 let (device, prepass) = (&self.device, self.prepass.as_ref());

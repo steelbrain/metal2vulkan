@@ -3,7 +3,8 @@
 //!
 //! `command-replay play --stream FILE --out DIR --device-type cpu|gpu --shader-cache DIR
 //! [--blobs DIR] [--managed one-copy|two-copy]
-//! [--until-frame F] [--past-range yes|no] [--states-only yes|no] [--gpu-wait-timeout SECONDS]
+//! [--until-frame F] [--past-range yes|no] [--states-only yes|no] [--state-log FILE]
+//! [--state-threads N] [--state-keys KEY,...] [--gpu-wait-timeout SECONDS]
 //! [--video-handle dma-buf|opaque-fd|opaque-win32] [--check-presents F,...]` plays the stream
 //! whose first segment is `FILE` through the runtime (with `--states-only yes`, its device,
 //! library, function and pipeline state records and its presents alone, every other call passed
@@ -49,6 +50,25 @@
 //! a harness failure (a bad command line, no device, an unreadable stream or sidecar) and 3 for
 //! `ids`.
 //!
+//! With `--state-log FILE`, each pipeline state's make is written as it happens, for a driver that
+//! ends the process inside one: `M2V-STATE begin SEQ THREAD WHAT` before its first driver call,
+//! `M2V-STATE modules SEQ THREAD` once its shader modules are made and before its `VkPipeline` is,
+//! and `M2V-STATE end SEQ THREAD made in MS ms|refused ERROR|failed ERROR` after, each line
+//! flushed to the standard output and to `FILE` as it is written, so the last `begin` with no
+//! `end` names the make a crash ended and its `modules` line, or none, which of the two calls. A
+//! render state's `WHAT` is `render #OBJECT call POSITION key KEY colors [F, ...] depth F stencil F
+//! samples N fragment true|false`: `KEY` is the hex of the translator's key of its descriptor, the
+//! name of its content's record under `renders/` in the cache directory, and `F` are raw
+//! `MTLPixelFormat` values, 0 for none; a compute state's is `compute #OBJECT call POSITION`. In a
+//! states-only play, `--state-threads N` (0 unless it says otherwise) has `N` threads of the
+//! player's own make the states, at once, through the device's one pipeline cache, as a
+//! consumer's compile threads do (their lines go to the standard output where no `--state-log`
+//! names a file), and `--state-keys KEY,...` makes only the render states of those contents and
+//! passes over every other state, each named on a `M2V-STATE pass WHAT` line. The report's
+//! `states` line counts the makes begun and how they ended, and the states passed over; pooled or
+//! passed over, a state plays as a skipped object, which a states-only play binds nowhere, so its
+//! `render states made` count leaves them out.
+//!
 //! With `--dump-command-buffers FIRST..LAST --dump-dir DIR`, the play also writes into `DIR`, once
 //! each command buffer whose stream id lies in `FIRST..=LAST` completed, every buffer its encoders
 //! named, with the ranges of it the cover rule held covered then (`docs/REPLAY-STREAM.md`, section
@@ -89,7 +109,7 @@ use metal2vulkan_validation::replay::{
     RecordingRange, StreamError, StreamReader, Value, VideoHandle, FLAG_COMPLETION_BYTES_RECORDED,
     RECORDED_RANGES,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::io::Write as _;
 use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
@@ -97,7 +117,8 @@ use std::path::{Path, PathBuf};
 const USAGE: &str = "usage: command-replay play --stream FILE --out DIR --device-type cpu|gpu \
                      --shader-cache DIR [--blobs DIR] \
                      [--managed one-copy|two-copy] [--until-frame F] [--past-range yes|no] \
-                     [--states-only yes|no] [--gpu-wait-timeout SECONDS] [--video-handle dma-buf|opaque-fd|opaque-win32] \
+                     [--states-only yes|no] [--state-log FILE] [--state-threads N] \
+                     [--state-keys KEY,...] [--gpu-wait-timeout SECONDS] [--video-handle dma-buf|opaque-fd|opaque-win32] \
                      [--check-presents F,...] [--read-device-copies yes|no] [--prepass-width N] \
                      [--dump-command-buffers FIRST..LAST --dump-dir DIR]\n       \
                      command-replay compare-dumps --a DIR --b DIR\n       \
@@ -409,6 +430,13 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
         }
     };
     report.line(mode_line(states_only));
+    let (state_log, state_threads, state_keys) = match state_options(options, states_only) {
+        Ok(states) => states,
+        Err(why) => {
+            report.line(&format!("error {why}"));
+            return 2;
+        }
+    };
     let mut reader = match reader(options) {
         Ok(reader) => reader,
         Err(error) => {
@@ -582,6 +610,22 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
                 None => backend,
             };
             let backend = backend.with_video_handle(video);
+            if state_log.is_some() || state_threads > 0 || state_keys.is_some() {
+                report.line(&format!(
+                    "state makes on {}, {}",
+                    match state_threads {
+                        0 => "the play's thread".to_owned(),
+                        n => format!("{n} threads"),
+                    },
+                    state_keys
+                        .as_ref()
+                        .map_or("every state made".to_owned(), |keys| format!(
+                            "only the render states of {} listed keys made",
+                            keys.len()
+                        )),
+                ));
+            }
+            let backend = backend.with_states(state_log, state_threads, state_keys);
             let backend = backend.with_prepass(prepass.unwrap_or(4));
             report.line(&format!("prepass width {}", backend.prepass_width()));
             match display {
@@ -617,6 +661,42 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
             code.max(1)
         }
     }
+}
+
+/// The play's state options: the state log `--state-log` names, made; the threads of
+/// `--state-threads`, 0 where it names none; and the keys of `--state-keys`, each 64 hex digits.
+/// The threads and the keys need a states-only play, which binds no state.
+fn state_options(
+    options: &BTreeMap<String, String>,
+    states_only: bool,
+) -> Result<(Option<std::fs::File>, usize, Option<HashSet<String>>), String> {
+    let threads = match options.get("state-threads").map(|n| n.parse::<usize>()) {
+        None => 0,
+        Some(Ok(threads)) => threads,
+        Some(Err(_)) => return Err("state-threads: not a count of threads".to_owned()),
+    };
+    let keys = match options.get("state-keys") {
+        None => None,
+        Some(listed) => {
+            let keys: HashSet<String> = (listed.split(',')).map(str::to_ascii_lowercase).collect();
+            let hex = |key: &String| key.len() == 64 && key.bytes().all(|b| b.is_ascii_hexdigit());
+            if let Some(bad) = keys.iter().find(|key| !hex(key)) {
+                return Err(format!("state-keys: {bad} is no key of 64 hex digits"));
+            }
+            Some(keys)
+        }
+    };
+    if (threads > 0 || keys.is_some()) && !states_only {
+        return Err("state-threads and state-keys: they need --states-only yes".to_owned());
+    }
+    let log = match options.get("state-log") {
+        None => None,
+        Some(path) => match std::fs::File::create(path) {
+            Ok(file) => Some(file),
+            Err(error) => return Err(format!("state-log: {path}: {error}")),
+        },
+    };
+    Ok((log, threads, keys))
 }
 
 /// The runtime's backend on the first physical device of `device_type` that opens (a GPU:

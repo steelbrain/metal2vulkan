@@ -99,6 +99,11 @@
 //!   `newTiledTextureWithDescriptor:offset:bytesPerRow:`) takes the buffer's bytes into its first
 //!   level and makes its second from them at its first use: blits of both levels read the
 //!   expected texels, and the take is counted once.
+//! - A states-only play writes each pipeline state's make as it happens (`with_states`): on two
+//!   threads of the backend's own, each of three render states' makes writes its begin line, then
+//!   its modules line, then its end line, made, and each begin's key is the name of the record
+//!   its content wrote under `renders/`; with one of those keys listed, only that state is made,
+//!   on the play's thread, and the other two are passed over, each on a pass line.
 //!
 //! The runtime's device is opened behind the hang tripwire, as every device open in this crate
 //! is (`gpu.rs`), its kernels kept in a cache the test owns ([`ScratchCache`]).
@@ -111,6 +116,7 @@ use crate::replay::{
 use crate::ScratchDir;
 use metal2vulkan_devtools::metallib::{metallib, wrap, MtlbFunction};
 use sha2::{Digest, Sha256};
+use std::collections::{BTreeSet, HashSet};
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
@@ -3410,4 +3416,132 @@ fn a_video_surface_is_waited_for_at_its_ready_point_once() {
     // A wait counts only in place; the copy form's returns at once.
     assert_eq!(executed["surface_waits"], in_place, "{executed:?}");
     eprintln!("REPLAY video-ready in place {in_place}");
+}
+
+/// A stream of three render states of the render fixture's functions (#6, #7 and #8), colour 0 of
+/// each another pixel format: RGBA8Unorm, BGRA8Unorm and RGBA16Float.
+fn three_render_states(dir: &ScratchDir) -> PathBuf {
+    written(dir, |w| {
+        let library = w.blob(&render_library(dir))?;
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        let library = [Value::Blob(library)];
+        w.call("newLibraryWithData:error:", 1, 3, &library, &[])?;
+        let vertex = [Value::Str("colored_vertex".into())];
+        w.call("newFunctionWithName:", 3, 4, &vertex, &[])?;
+        let fragment = [Value::Str("colored_fragment".into())];
+        w.call("newFunctionWithName:", 3, 5, &fragment, &[])?;
+        for (object, format) in [(6, 70), (7, 80), (8, 115)] {
+            let pipeline = Value::Map(vec![
+                ("vertex".into(), Value::Object(4)),
+                ("fragment".into(), Value::Object(5)),
+                ("color0PixelFormat".into(), Value::Uint(format)),
+            ]);
+            let made = "newRenderPipelineStateWithDescriptor:error:";
+            w.call(made, 1, object, &[pipeline], &[])?;
+        }
+        Ok(())
+    })
+}
+
+/// `path` played states-only on a device of an empty cache directory, its makes written as
+/// `with_states(log, threads, keys)` writes them: the state log's lines, the backend's lines, and
+/// the names of the records the runtime wrote under `renders/` by the device's end.
+fn states_play(
+    test: &str,
+    path: &Path,
+    threads: usize,
+    keys: Option<HashSet<String>>,
+) -> (Vec<String>, Vec<String>, BTreeSet<String>) {
+    let dir = ScratchDir::new(&format!("rt-replay-{test}-log")).unwrap();
+    let log = dir.path().join("states.log");
+    let cache = ScratchCache::new().unwrap();
+    let backend = NewRuntime::new(rt_device(cache.path()), gpu::TEST_DEVICE).unwrap();
+    let mut backend = backend.with_states(Some(File::create(&log).unwrap()), threads, keys);
+    let mut reader = StreamReader::open(&[path.to_path_buf()], None).unwrap();
+    let (report, ended) = Player::new(&mut backend).states_only().play(&mut reader);
+    let lines = backend.lines();
+    for line in report.lines().iter().chain(&lines) {
+        eprintln!("REPLAY {test} {line}");
+    }
+    ended.unwrap();
+    backend.end().result().unwrap();
+    let logged: Vec<String> = (std::fs::read_to_string(&log).unwrap().lines())
+        .map(str::to_owned)
+        .collect();
+    let mut records = BTreeSet::new();
+    for generation in std::fs::read_dir(cache.path()).unwrap() {
+        let renders = generation.unwrap().path().join("renders");
+        for record in std::fs::read_dir(&renders).into_iter().flatten() {
+            records.insert(record.unwrap().file_name().to_string_lossy().into_owned());
+        }
+    }
+    (logged, lines, records)
+}
+
+/// The log's lines of `kind` (`begin`, `pass`, ...).
+fn logged<'a>(lines: &'a [String], kind: &str) -> Vec<&'a String> {
+    let prefix = format!("M2V-STATE {kind} ");
+    lines.iter().filter(|l| l.starts_with(&prefix)).collect()
+}
+
+/// The content key a begin or pass line names.
+fn key_of(line: &str) -> String {
+    let after = line.split(" key ").nth(1).expect("a key");
+    after.split(' ').next().unwrap().to_owned()
+}
+
+#[test]
+fn a_states_only_play_on_its_threads_writes_each_make_between_its_lines() {
+    let dir = ScratchDir::new("rt-replay-states-pool").unwrap();
+    let path = three_render_states(&dir);
+    let (lines, backend, records) = states_play("states-pool", &path, 2, None);
+    let begins = logged(&lines, "begin");
+    assert_eq!(begins.len(), 3, "{lines:?}");
+    for begin in &begins {
+        // `M2V-STATE begin SEQ THREAD ...`: the make's sequence number and its pool thread.
+        let made: Vec<&str> = begin.split(' ').skip(2).take(2).collect();
+        let made = made.join(" ");
+        assert!(made.contains(" m2v-state-"), "{begin}");
+        let at = |prefix: &str| lines.iter().position(|l| l.starts_with(prefix));
+        let begun = at(begin).unwrap();
+        let modules = at(&format!("M2V-STATE modules {made}")).expect("its modules line");
+        let ended = at(&format!("M2V-STATE end {made} made in ")).expect("its end, made");
+        assert!(begun < modules && modules < ended, "{lines:?}");
+    }
+    let keys: BTreeSet<String> = begins.iter().map(|l| key_of(l)).collect();
+    assert_eq!(keys.len(), 3, "{lines:?}");
+    assert_eq!(keys, records, "each begin's key names its content's record");
+    let states = "states begun 3 made 3 refused 0 failed 0 passed over 0 on 2 threads";
+    assert!(backend.iter().any(|l| l == states), "{backend:?}");
+}
+
+#[test]
+fn a_states_only_play_of_listed_keys_makes_those_states_alone() {
+    let dir = ScratchDir::new("rt-replay-states-keys").unwrap();
+    let path = three_render_states(&dir);
+    let (all, ..) = states_play("states-keys-all", &path, 0, None);
+    let begins = logged(&all, "begin");
+    assert_eq!(begins.len(), 3, "{all:?}");
+    assert!(
+        begins.iter().all(|l| l.split(' ').nth(3) == Some("play")),
+        "{all:?}"
+    );
+    // The BGRA8Unorm state's content, #7.
+    let listed = (begins.iter()).find(|l| l.contains(" render #7 ")).unwrap();
+    let key = key_of(listed);
+    let (lines, backend, records) = states_play(
+        "states-keys-one",
+        &path,
+        0,
+        Some(HashSet::from([key.clone()])),
+    );
+    let made = logged(&lines, "begin");
+    assert_eq!(made.len(), 1, "{lines:?}");
+    assert_eq!(key_of(made[0]), key);
+    let passed = logged(&lines, "pass");
+    assert_eq!(passed.len(), 2, "{lines:?}");
+    assert!(passed.iter().all(|l| !l.contains(&key)), "{lines:?}");
+    assert_eq!(records, BTreeSet::from([key]));
+    let states = "states begun 1 made 1 refused 0 failed 0 passed over 2 on the play's thread";
+    assert!(backend.iter().any(|l| l == states), "{backend:?}");
 }

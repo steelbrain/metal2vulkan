@@ -21,6 +21,7 @@ pub(super) mod places;
 mod prepass;
 mod render;
 pub(super) mod second;
+mod states;
 mod surfaces;
 #[cfg(test)]
 mod tests;
@@ -630,6 +631,8 @@ pub struct NewRuntime {
     /// The runtime's stage histograms as each frame ended, read as the next frame's first call
     /// is located (`Backend::locate`): the report's `stages` lines.
     frame_stages: Vec<Stages>,
+    /// The pipeline state makes' lines, their pool and the keys made alone (`with_states`).
+    states: states::States,
     /// The device's `minImportedHostPointerAlignment`, where it imports host memory: the
     /// alignment of the host pages a no-copy buffer's memory is imported from (`imports`).
     host_alignment: Option<u64>,
@@ -968,6 +971,7 @@ impl Drop for NewRuntime {
     /// runtime thread runs on into the process's `exit()`, where the driver tears itself down
     /// beside it. After [`NewRuntime::end`]'s quiesce, this one answers at once.
     fn drop(&mut self) {
+        self.states.finish();
         self.prepass = None;
         self.device.quiesce(QUIESCE);
     }
@@ -1032,7 +1036,26 @@ impl NewRuntime {
             kernels: HashSet::new(),
             makes: makes::Makes::default(),
             frame_stages: Vec::new(),
+            states: states::States::default(),
         })
+    }
+
+    /// The backend whose pipeline state makes are written as they happen (`states`): a begin
+    /// line before each make's first driver call, a modules line before its `VkPipeline`'s, and
+    /// an end line, each flushed to the standard output and to `log`. With `threads` above 0, a
+    /// states-only play's makes go to that many threads of the backend's own, which make them at
+    /// once through the device's one pipeline cache; with 0 each is made on the play's thread.
+    /// With `keys`, only the render states whose content's key (the hex of the translator's key of
+    /// the descriptor, its record's name in the cache directory) is listed are made, and every
+    /// other state is passed over, each named on a pass line.
+    pub fn with_states(
+        mut self,
+        log: Option<std::fs::File>,
+        threads: usize,
+        keys: Option<HashSet<String>>,
+    ) -> Self {
+        self.states = states::States::new(log, threads, keys);
+        self
     }
 
     /// The backend told how the stream's recording device kept Managed buffers.
@@ -1104,6 +1127,7 @@ impl NewRuntime {
     /// on an event no played record signals ends unrun), drops every handle the backend holds, the
     /// device's last among them, and reads the gauges once it is torn down ([`Ended`]).
     pub fn end(mut self) -> Ended {
+        self.states.finish();
         self.prepass = None;
         let counters = self.device.counters();
         let idle = self.device.quiesce(QUIESCE);
@@ -1722,14 +1746,16 @@ impl NewRuntime {
 
     /// A compute pipeline state of `kernel`, its numbered constexpr samplers at indices of their
     /// own, the same words at one index, its main pipeline then finished, as a consumer finishes
-    /// it once it has answered.
+    /// it once it has answered; `step` marks the shader modules made before the pipeline.
     fn compute_pipeline_state(
         &mut self,
         descriptor: &rt::ComputePipelineDescriptor,
+        step: &states::Step,
     ) -> Result<rt::ComputePipelineState, rt::Error> {
         let state = self.numbered(|device, ids| {
             device.new_compute_pipeline_state(descriptor, |samplers| ids(samplers))
         })?;
+        step.modules();
         state.finish_pipeline()?;
         Ok(state)
     }
@@ -1794,15 +1820,33 @@ impl NewRuntime {
 
     /// A compute pipeline state of `descriptor`, of `kernel`'s, timed and counted (`creations`);
     /// skipped and counted where the runtime answers a typed gap or the translator refuses it
-    /// (`compute_states`), so that the play goes on and its dispatches are skipped.
+    /// (`compute_states`), so that the play goes on and its dispatches are skipped. Where the
+    /// makes are pooled or a key list passes it over (`with_states`), it is not made here and
+    /// plays as a skipped object: a states-only play binds no state.
     fn timed_state(
         &mut self,
         call: &Call,
         descriptor: &rt::ComputePipelineDescriptor,
         kernel: Kernel,
     ) -> Result<Option<(Object, Made)>, PlayError> {
+        let what = format!("compute #{} call {}", call.result, self.at.1);
+        if !self.states.selects(None, &what) {
+            return unaddressed(Object::Skipped);
+        }
+        if self.states.pooled() {
+            let (device, descriptor) = (self.device.clone(), descriptor.clone());
+            self.states.give(what, move |numbering, step| {
+                let state = device.new_compute_pipeline_state(&descriptor, |s| numbering.ids(s))?;
+                step.modules();
+                state.finish_pipeline()?;
+                Ok(states::Kept::Compute(state))
+            });
+            return unaddressed(Object::Skipped);
+        }
         let mark = makes::Mark::new(&self.device, self.prepass.as_ref());
-        let state = match self.compute_pipeline_state(descriptor) {
+        let inline = self.states.inline();
+        let made = inline.run(&what, |step| self.compute_pipeline_state(descriptor, step));
+        let state = match made {
             Ok(state) => {
                 self.skips.states_made[1] += 1;
                 state
@@ -3239,13 +3283,16 @@ impl Backend for NewRuntime {
     }
 
     /// A `pipeline I wall_nanos=N kernel=new|again` line for each compute pipeline state made, in
-    /// order: its making's wall time, and whether its kernel was new to the play.
+    /// order: its making's wall time, and whether its kernel was new to the play. Where the makes
+    /// were written or pooled (`with_states`), the `states` line after the pool made every state
+    /// queued.
     fn lines(&self) -> Vec<String> {
         let lines = self.creations.iter().enumerate().map(|(at, made)| {
             let kernel = if made.new_kernel { "new" } else { "again" };
             format!("pipeline {at} wall_nanos={} kernel={kernel}", made.nanos)
         });
         let mut lines: Vec<String> = lines.collect();
+        lines.extend(self.states.line());
         // A maximum since the device was made: it does not sum, so it is not a frame's counter.
         let metrics = self.device.counters().metrics();
         let longest = metrics.commit_lock_wait_max_nanos;
