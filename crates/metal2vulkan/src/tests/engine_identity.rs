@@ -20,6 +20,12 @@
 //! - A kernel's partial-threadgroups variant (`partial`, generated) dispatched at its whole
 //!   threadgroup size over a ragged grid, its pushed region flagged `NONUNIFORM`, answers each
 //!   edge threadgroup's own size, and its invocations past the grid store nothing.
+//! - A kernel's `[[stage_in]]` attribute on its partial-threadgroups variant
+//!   (`engine/kernel_stage_in`'s `stage_in_fetch`, and `engine/kernel_stage_in_groups`'
+//!   `stage_in_neighbour`, whose barrier the variant walks predicated), over one partial
+//!   threadgroup of 25 threads of 1,024, a stage-in region that clamps nothing and a source buffer
+//!   that ends at the last thread's element: on the CPU interpreter no invocation fetches past the
+//!   buffer or stores past the output, and each kernel stores Metal's answers.
 //! - The partial-threadgroups variant of a kernel that does not observe its threadgroup partition
 //!   (`edge`, generated) runs its grid in tiles (`RuntimeFact::GridTiles`), its module holds
 //!   no division by a value the driver does not know, and over grids ragged along every axis,
@@ -3142,6 +3148,176 @@ fn a_partial_threadgroups_variant_answers_the_edge_threadgroups_of_a_ragged_grid
         };
         let got = run(&module, &cfg, res).unwrap_or_else(|e| panic!("{stem}: {e}"));
         assert_eq!(got.buffers[0], want, "{stem}");
+    }
+}
+
+/// A kernel's `[[stage_in]]` attribute, fetched by thread position, on its partial-threadgroups
+/// variant: 25 threads in one threadgroup of 1,024 invocations, the region flagged `NONUNIFORM`,
+/// the stage-in region at origin 7 and 1,024 elements long, so it clamps nothing, and the source
+/// buffer ending at the last thread's element, 7 + 24. A fetch past the grid's threads would read
+/// past the buffer, which its check sends to the zero range the test leaves unmapped, so the
+/// interpreter traps; and the output ends at the last thread's words, so a store past them traps
+/// too. `engine/kernel_stage_in`'s `stage_in_fetch`, which does not observe its partition, returns
+/// its invocations past the grid before the fetch; `engine/kernel_stage_in_groups`'
+/// `stage_in_neighbour`, whose threadgroup barrier the variant walks predicated, fetches in every
+/// invocation, each at a position inside the grid. Each stores Metal's answers.
+#[test]
+fn a_stage_in_kernels_partial_threadgroup_fetches_inside_its_buffer() {
+    use crate::metal::{AttributeFormat, StepFunction};
+    use crate::pipeline::{
+        StageInputAttributeDescriptor, StageInputDescriptor, StageInputLayoutDescriptor,
+    };
+    let (Some(fetch), Some(groups)) = (
+        assemble("kernel_stage_in"),
+        assemble("kernel_stage_in_groups"),
+    ) else {
+        return;
+    };
+    const THREADS: u32 = 25;
+    const ORIGIN: u32 = 7;
+    const SRC: u64 = 0x2_0000_1000;
+    // A descriptor of `attributes` (format, offset) in the layout at index 1, `stride` bytes an
+    // element, stepping by the thread's position along x.
+    let descriptor = |attributes: &[(AttributeFormat, u32)], stride: u32| {
+        let mut d = StageInputDescriptor::new();
+        let mut layout = StageInputLayoutDescriptor::new(Some(stride));
+        layout.step_function = StepFunction::ThreadPositionInGridX;
+        d.layouts.insert(1, layout);
+        for (index, &(format, offset)) in (0..).zip(attributes) {
+            let attribute = StageInputAttributeDescriptor::new(format, offset, 1);
+            d.attributes.insert(index, attribute);
+        }
+        d
+    };
+    // `stage_in_fetch`'s element `e`: a `float4`, a `uint4`, an `int` and a `half2`, all normal.
+    let element = |e: u32| -> [u32; 10] {
+        let f = [0, 1, 2, 3].map(|k| 0x4000_0000 + 4 * e + k);
+        let u = [e, 2 * e, e + 100, 0xdead_0000 | e];
+        [
+            f[0],
+            f[1],
+            f[2],
+            f[3],
+            u[0],
+            u[1],
+            u[2],
+            u[3],
+            !e,
+            (0x3c00 + e) | (0x4000 + e) << 16,
+        ]
+    };
+    let word = |e: u32| 0x5150_0000 + 3 * e;
+    let words = |v: Vec<u32>| -> Vec<u8> { v.into_iter().flat_map(u32::to_le_bytes).collect() };
+    let elements = 0..ORIGIN + THREADS;
+    let fetched = words(elements.clone().flat_map(element).collect());
+    let neighbours = words(elements.map(word).collect());
+    let fetch_answer = words(
+        (0..THREADS)
+            .flat_map(|x| {
+                let [front @ .., i, h] = element(ORIGIN + x);
+                front.into_iter().chain([i, h & 0xffff, h >> 16, x])
+            })
+            .collect(),
+    );
+    let neighbour_answer = words(
+        (0..THREADS)
+            .flat_map(|x| [word(ORIGIN + (x + 1) % THREADS), THREADS, x, x])
+            .collect(),
+    );
+    let fetch_attributes = [
+        (AttributeFormat::Float4, 0),
+        (AttributeFormat::UInt4, 16),
+        (AttributeFormat::Int, 32),
+        (AttributeFormat::Half2, 36),
+    ];
+    let kernels = [
+        (
+            "stage_in_fetch",
+            &fetch,
+            descriptor(&fetch_attributes, 40),
+            &fetched,
+            &fetch_answer,
+        ),
+        (
+            "stage_in_neighbour",
+            &groups,
+            descriptor(&[(AttributeFormat::UInt, 0)], 4),
+            &neighbours,
+            &neighbour_answer,
+        ),
+    ];
+    let mut region_in = Vec::new();
+    for word in [ORIGIN, 0, 0, 0, 1024, 1, 1, 0] {
+        region_in.extend_from_slice(&word.to_le_bytes());
+    }
+    let mut region = region_bytes([0; 3], [THREADS, 1, 1], [1024, 1, 1]).expect("packs");
+    region[28..32].copy_from_slice(&NONUNIFORM.to_le_bytes());
+    for (entry, bc, d, source, want) in kernels {
+        let mut inputs = LowerInputs::new();
+        inputs.partial_threadgroups = true;
+        inputs.stage_input = Some(d);
+        for stem in PROFILES {
+            let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
+            let a = compile_with(bc, entry, &p, &inputs)
+                .unwrap_or_else(|e| panic!("{stem} {entry}: {e}"));
+            link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem} {entry}: L3: {e}"));
+            let (plan, module) = typed_module_with(bc, entry, &p, &inputs)
+                .unwrap_or_else(|e| panic!("{stem} {entry}: {e}"));
+            assert!(
+                plan.facts.contains(&RuntimeFact::PartialThreadgroups),
+                "{stem} {entry}: {:?}",
+                plan.facts
+            );
+            let mut push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
+            for f in &plan.push.fields {
+                let PushLoc::Push { offset } = f.loc else {
+                    panic!("{stem} {entry}: {f:?} spilled");
+                };
+                let o = offset as usize;
+                // The output at slot 0, the source at slot 1: each slot's address and length.
+                let at = |s: SlotRef| match s.index {
+                    0 => (OUT, want.len()),
+                    _ => (SRC, source.len()),
+                };
+                match f.field {
+                    PushField::SlotGuestBase(s) => {
+                        push[o..o + 8].copy_from_slice(&slot_word(at(s).0).to_le_bytes())
+                    }
+                    PushField::SlotBounds(s) => {
+                        push[o..o + 8].copy_from_slice(&bounds_word(at(s).1, 0))
+                    }
+                    PushField::SlotBindOffset(_) => push[o..o + 4].fill(0),
+                    PushField::ZeroAddress => {
+                        push[o..o + 8].copy_from_slice(&ZERO_UNMAPPED.to_le_bytes())
+                    }
+                    PushField::DispatchRegion => push[o..o + 32].copy_from_slice(&region),
+                    PushField::StageInRegion => push[o..o + 32].copy_from_slice(&region_in),
+                    _ => panic!("{stem} {entry}: unexpected push field {f:?}"),
+                }
+            }
+            let res = Resources {
+                buffers: vec![
+                    Buffer {
+                        slot: None,
+                        address: Some(OUT),
+                        bytes: vec![0xEE; want.len()],
+                    },
+                    Buffer {
+                        slot: None,
+                        address: Some(SRC),
+                        bytes: source.clone(),
+                    },
+                ],
+                push,
+                spec: local_size(1024),
+            };
+            let cfg = Config {
+                barriers: BarrierRule::Vulkan,
+                ..Config::default()
+            };
+            let got = run(&module, &cfg, res).unwrap_or_else(|e| panic!("{stem} {entry}: {e}"));
+            assert_eq!(&got.buffers[0], want, "{stem} {entry}");
+        }
     }
 }
 

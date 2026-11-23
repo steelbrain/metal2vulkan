@@ -14,7 +14,8 @@
 //! An access through a buffer argument at 2 GiB and past lands there, on every device that can
 //! allocate the buffer. A kernel that reads the stage-in region stores the region each dispatch
 //! was encoded under, and is refused where the encoder set none; a kernel's `[[stage_in]]`
-//! attributes are fetched from the element each step function names in that region. A read of a texture the kernel's function constants removed takes zero,
+//! attributes are fetched from the element each step function names in that region, in a ragged
+//! grid's partial threadgroup too, whose invocations past the grid write nothing. A read of a texture the kernel's function constants removed takes zero,
 //! and a read through a buffer argument bound to nothing reads the nil buffer's zeros.
 //! An observer whose partial-threadgroups variant's vote word takes its threadgroup memory past
 //! the device's limit runs its whole grids, threadgroup dispatches and indirect ones on its plain
@@ -3570,6 +3571,119 @@ define void @nil_read_kernel(ptr addrspace(1) %in, ptr addrspace(1) %out, i32 %t
             );
             encoder.end_encoding();
             println!("{name}: each unbuilt stage-in form was refused by its kind");
+        });
+    }
+
+    /// A `dispatchThreads` grid of 25 threads in threadgroups of 1,024, one partial threadgroup of
+    /// 25, of each kernel that fetches a `[[stage_in]]` attribute by thread position, under a
+    /// stage-in region at origin 7 and 1,024 elements long, over a source buffer that ends at the
+    /// last thread's element, 7 + 24: `engine/kernel_stage_in`'s `stage_in_fetch` under
+    /// [`stage_in_fetch`]'s descriptor, which does not observe its threadgroup partition and so
+    /// runs its grid in tiles, and `engine/kernel_stage_in_groups`' `stage_in_neighbour` (one
+    /// `uint` at index 1, 4 bytes an element), which observes it and holds a threadgroup barrier,
+    /// so its partial threadgroup walks the body predicated and adds one to
+    /// `Metrics::partial_variant_ragged_grids`. Each of the 25 threads reports what Metal's does
+    /// (`stage_in_neighbour`: its threadgroup's next thread's word, 25 threads, its position and
+    /// index), and every word past the grid keeps its fill, so no invocation past the threadgroup
+    /// writes. A fetch past the grid would read past the buffer, which the fetch's check reads as
+    /// zero and no output shows: the translator's interpreter test of the same layout traps on it.
+    /// Before the partial-threadgroups variant took a stage-input region, each dispatch was
+    /// `Gap::PartialThreadgroups` at the translator's site.
+    #[test]
+    fn every_device_runs_a_stage_in_kernels_partial_threadgroup() {
+        let (Some(plain), Some(walked)) = (
+            descriptor_of("kernel_stage_in", "stage_in_fetch"),
+            descriptor_of("kernel_stage_in_groups", "stage_in_neighbour"),
+        ) else {
+            return;
+        };
+        const THREADS: u32 = 25;
+        const ORIGIN: u32 = 7;
+        const FILL: u32 = 0xEEEE_EEEE;
+        let tiled = stage_in_fetch(&plain, Some(40), StepFunction::ThreadPositionInGridX, 1);
+        let mut walked = walked;
+        let mut input = StageInputDescriptor::new();
+        let mut layout = StageInputLayoutDescriptor::new(Some(4));
+        layout.step_function = StepFunction::ThreadPositionInGridX;
+        input.layouts.insert(1, layout);
+        let attribute = StageInputAttributeDescriptor::new(AttributeFormat::UInt, 0, 1);
+        input.attributes.insert(0, attribute);
+        walked.stage_input = Some(input);
+        let word = |e: u32| 0x5150_0000 + 3 * e;
+        // Elements 0 to 7 + 24, the last thread's.
+        let elements = 0..ORIGIN + THREADS;
+        let fetched: Vec<u32> = elements.clone().flat_map(stage_in_element).collect();
+        let fetched = le_bytes(&fetched);
+        let neighbours = le_bytes(&elements.map(word).collect::<Vec<u32>>());
+        // Thread `x`'s words: `stage_in_fetch`'s twelve, `stage_in_neighbour`'s four.
+        let fetch_words = |x: u32| -> Vec<u32> {
+            let [front @ .., i, h] = stage_in_element(ORIGIN + x);
+            front
+                .into_iter()
+                .chain([i, h & 0xffff, h >> 16, x])
+                .collect()
+        };
+        let neighbour_words = |x: u32| vec![word(ORIGIN + (x + 1) % THREADS), THREADS, x, x];
+        type Words<'a> = &'a dyn Fn(u32) -> Vec<u32>;
+        // Each kernel, its descriptor, its source's bytes, its words a thread, and thread `x`'s.
+        let kernels: [(&str, &ComputePipelineDescriptor, &[u8], usize, Words<'_>); 2] = [
+            ("stage_in_fetch", &tiled, &fetched, 12, &fetch_words),
+            (
+                "stage_in_neighbour",
+                &walked,
+                &neighbours,
+                4,
+                &neighbour_words,
+            ),
+        ];
+        each_device("compute_stage_in_partial_threadgroup", |name, _, device| {
+            let queue = device.new_command_queue(4).expect("a queue");
+            let mut buffers = Buffers::new(&device, 1 << 17);
+            let mut failed = Vec::new();
+            for (kernel, descriptor, bytes, per, expected) in kernels {
+                let label = format!("{name}: {kernel}");
+                let state = state(&label, &device, descriptor);
+                let source = buffers.buffer(bytes.len() as u64);
+                write(&source, 0, bytes);
+                // A thread's words for every invocation of the threadgroup, and one past it.
+                let count = per * 1025;
+                let out = buffers.buffer(4 * count as u64);
+                write(&out, 0, &le_bytes(&vec![FILL; count]));
+                let before = device.counters().metrics();
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = command_buffer
+                    .compute_command_encoder(DispatchType::Serial)
+                    .expect("an encoder");
+                encoder.set_compute_pipeline_state(&state).expect("a state");
+                encoder.set_buffer(Some(&out), 0, 0).expect("a buffer");
+                encoder.set_buffer(Some(&source), 0, 1).expect("a buffer");
+                encoder.set_stage_in_region(Region {
+                    origin: [ORIGIN, 0, 0],
+                    size: [1024, 1, 1],
+                });
+                let dispatched = encoder.dispatch_threads([THREADS, 1, 1], [1024, 1, 1]);
+                encoder.end_encoding();
+                if let Err(error) = dispatched {
+                    println!("{label}: the dispatch: {error:?}");
+                    failed.push(label);
+                    continue;
+                }
+                command_buffer.commit().expect("a commit");
+                finished(&label, &command_buffer);
+                assert_eq!(command_buffer.error(), None, "{label}");
+                let mut want: Vec<u32> = (0..THREADS).flat_map(expected).collect();
+                want.resize(count, FILL);
+                assert_eq!(words(&out, 0, count), want, "{label}: the words written");
+                let ragged = device.counters().metrics().partial_variant_ragged_grids
+                    - before.partial_variant_ragged_grids;
+                assert_eq!(
+                    ragged,
+                    u64::from(kernel == "stage_in_neighbour"),
+                    "{label}: ragged grids on the partial-threadgroups variant"
+                );
+                println!("{label}: 25 threads of a threadgroup of 1,024 answered Metal's words");
+            }
+            assert!(failed.is_empty(), "refused: {failed:?}");
         });
     }
 
