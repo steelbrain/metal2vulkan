@@ -1865,9 +1865,6 @@ fn identity_admits(plan: &Plan) -> Result<(), Error> {
     }
 }
 
-/// [`identity_refusal`]'s form for a bicubic sample at pixel coordinates.
-pub(crate) const BICUBIC_PIXEL_FORM: &str = "a bicubic filter at pixel coordinates";
-
 /// [`identity_refusal`]'s form for a 1D texture's bicubic sample.
 pub(crate) const BICUBIC_LINE_FORM: &str = "a bicubic filter of a 1D texture";
 
@@ -1969,12 +1966,11 @@ fn identity_refusal(plan: &Plan) -> Option<String> {
     // slot or a constexpr sampler (`sampler::IdentitySampling`, `SamplerPlan::heap_identity`), of
     // an argument buffer's texture through an argument buffer's sampler (its resource ID the
     // handle, `access::handle::emit_identity_sampler`), a runtime sampler's word read from its
-    // resource ID, and a 2D texture slot's bicubic sample at normalized coordinates, the bound
-    // format's treatment read from its push field (`PushField::BicubicTexels`): no bicubic sample
-    // at pixel coordinates, bicubic sample of a 1D texture (`Routine::Line`), or specialization of
-    // a slot's state. Constexpr samplers a lane chooses among beside an argument buffer's texture
-    // read the set-1 sampler array at the chosen candidate's pushed index
-    // (`SamplerPlan::heap_array_identity`) or are a switch over them.
+    // resource ID, and a 2D texture slot's bicubic sample, the bound format's treatment read from
+    // its push field (`PushField::BicubicTexels`): no bicubic sample of a 1D texture
+    // (`Routine::Line`), and no specialization of a slot's state. Constexpr samplers a lane
+    // chooses among beside an argument buffer's texture read the set-1 sampler array at the chosen
+    // candidate's pushed index (`SamplerPlan::heap_array_identity`) or are a switch over them.
     use crate::lower::sampler::bicubic::routines::Routine;
     let sampled = &plan.families.sampler;
     let refused = [
@@ -1983,7 +1979,6 @@ fn identity_refusal(plan: &Plan) -> Option<String> {
                 || !sampled.decls.is_empty(),
             "a texture argument sampled through a sampler the identity sampling does not take",
         ),
-        (sampled.bicubic_pixel, BICUBIC_PIXEL_FORM),
         (
             sampled.bicubic_routines.contains(&Routine::Line),
             BICUBIC_LINE_FORM,

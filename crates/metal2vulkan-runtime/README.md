@@ -1778,20 +1778,20 @@ made, with no lock, and never rewritten for layouts.
   own descriptor takes a swizzle only without shader-write and render-target usage
   (`Refusal::TextureSwizzleWithWrites`), so this reaches views alone.
 - A kernel, a vertex function or a fragment function samples a 2D texture slot through a bicubic
-  constexpr sampler at normalized coordinates by the arm its slot's pushed word selects, which the
-  runtime writes from the bound texture's format and swizzle
+  constexpr sampler, at normalized or at pixel coordinates, by the arm its slot's pushed word
+  selects, which the runtime writes from the bound texture's format and swizzle
   (`metal2vulkan::metal::format::bicubic_texels_word`), the same word for a dispatch and for a draw.
   A dispatch or a draw whose slot holds a texture of a format with no such word (a compressed, YUV,
   stencil, integer or extended-range format, or one of 8-bit sRGB codes such as `RGBA8Unorm_sRGB`,
   whose taps Metal filters decoded) is `Gap::BicubicTexels`, naming the slot and the format, found
   when the pipeline state or a binding changes: each such format's arm is built when a guest binds
-  one. A bicubic sample at pixel coordinates or of a 1D texture is refused at creation in every
-  stage (the identity domains' forms, below). Only a render state whose functions sample through a
-  bicubic sampler lists a slot to check and fill; a draw of any other state does neither. Basis:
-  this is NOT documented Metal. The MSL spec lists only nearest and linear filters, and 'bicubic'
-  appears nowhere in the spec or the feature-set tables. It is built because a guest already uses
-  the bicubic constexpr sampler in kernels, which is why the kernel half exists. Filling the field
-  for a draw completes that one form and adds none.
+  one. A bicubic sample of a 1D texture is refused at creation in every stage (the identity domains'
+  form, below). Only a render state whose functions sample through a bicubic sampler lists a slot to
+  check and fill; a draw of any other state does neither. Basis: this is NOT documented Metal. The
+  MSL spec lists only nearest and linear filters, and 'bicubic' appears nowhere in the spec or the
+  feature-set tables. It is built because a guest already uses the bicubic constexpr sampler in
+  kernels, which is why the kernel half exists. Filling the field for a draw completes that one form
+  and adds none.
 - An opaque-black border sampled through a view whose component mapping is not the identity (a
   swizzle, or the mapping a pixel format takes: `A8Unorm` is held in `R8_UNORM` read through
   `(0, 0, 0, r)` on every device, as rt uses Vulkan 1.3 and takes no format of
@@ -3332,9 +3332,8 @@ cache is answered compile-required on both.
   - with no symbol, a storage texture access without a format that the device's
     `shaderStorageImageReadWithoutFormat` or `shaderStorageImageWriteWithoutFormat` does not take
     and the formats' own bits do not grant: no test yet;
-  - a bicubic sample at pixel coordinates ("a bicubic filter at pixel coordinates") and one of a
-    1D texture ("a bicubic filter of a 1D texture"): the translator test
-    `a_bicubic_kernel_reads_each_slots_format_treatment_from_its_pushed_field` asserts each text;
+  - a bicubic sample of a 1D texture ("a bicubic filter of a 1D texture"): the translator test
+    `a_bicubic_kernel_reads_each_slots_format_treatment_from_its_pushed_field` asserts the text;
   - an argument buffer's texture of a type the identity arrays hold no element of (a texture
     buffer's parts, a cube read as an array, level views, a two-plane, extended-range, RGBX or
     `ulong` form, or a storage texture with a format), one read through another numeric type than its

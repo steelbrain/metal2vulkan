@@ -201,9 +201,9 @@ and so do the command line, the compile worker and every validation tool. It hol
   sampler `CombinedSampler::constexpr_sampler` describes, normalized: the shader scales a pixel
   sampler's coordinate. An integer write to a storage slot without a format saturates to the channel
   widths the consumer pushes (`PushField::TextureIntegerChannels`). A sample of a 2D texture
-  slot through a bicubic constexpr sampler at normalized coordinates reads how Metal's bicubic
-  filter treats the bound texture's texels (its inner taps, its clamp and its border texels) from
-  the word the consumer pushes for that slot (`PushField::BicubicTexels`:
+  slot through a bicubic constexpr sampler, at normalized or pixel coordinates, reads how Metal's
+  bicubic filter treats the bound texture's texels (its inner taps, its clamp and its border
+  texels) from the word the consumer pushes for that slot (`PushField::BicubicTexels`:
   `metal::format::bicubic_texels_word` of the bound texture's format and swizzle,
   `metal::format::BICUBIC_TEXELS_UNBOUND` for a slot bound to nothing), the bits the resident-table
   domains specialize `SpecKey::BicubicTexels` to. `bicubic_texels_word` has no word for a
@@ -254,7 +254,7 @@ and so do the command line, the compile worker and every validation tool. It hol
   function is refused as `Unsupported{IdentityDomains}`, whose symbol names the first such form
   the function holds: one that samples through an argument buffer's sampler or samples an
   argument buffer's texture, emulates a sampler's anisotropy, samples a 1D
-  texture or at pixel coordinates through a bicubic filter, uses a texture buffer's parts or rows
+  texture through a bicubic filter, uses a texture buffer's parts or rows
   form, a slot's levels or swizzle, a two-plane, extended-range or sRGB-twin form, reads an
   argument buffer's texture
   through another numeric type or as raw texels, or uses any other state of a texture or sampler

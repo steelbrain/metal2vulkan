@@ -1217,8 +1217,6 @@ pub struct SamplerPlan {
     /// The texture slots a bicubic sample reads, each with its `BicubicTexels` specialization,
     /// or under the identity domains its `PushField::BicubicTexels` field.
     pub bicubic: BTreeSet<u32>,
-    /// A bicubic sample reads pixel coordinates.
-    pub bicubic_pixel: bool,
     /// The bicubic routines the samples call, by dimension, an extended-range sample's among them.
     pub bicubic_routines: BTreeSet<bicubic::routines::Routine>,
     /// A sample, gather or comparison goes to the device's sampler: the module requires

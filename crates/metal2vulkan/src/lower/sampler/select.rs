@@ -2138,7 +2138,6 @@ fn select_one(
     }
     if let SampleOp::Bicubic(b) = &op {
         cx.families.sampler.bicubic.insert(b.texture);
-        cx.families.sampler.bicubic_pixel |= b.pixel;
         // A 2D sample's level below four texels on an axis takes the linear 2D routines.
         let routines: &[_] = if shape.dim == ImageDim::D1 {
             &[super::bicubic::routines::Routine::Line]
