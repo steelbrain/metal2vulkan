@@ -47,7 +47,7 @@ use crate::executor_contract::out_of_bounds::{self, OutOfBoundsRun, TargetRun};
 use crate::gpu::wait::wait_timeout;
 use crate::gpu::DeviceType;
 use crate::hash::sha256_bytes;
-use crate::library_module::ResolvedLinkedFunctions;
+use crate::library_module::{ResolvedFunctionTable, ResolvedLinkedFunctions};
 use crate::literal::{LiteralDepthStencil, LiteralResources, LiteralTexture};
 use crate::metal::ORACLE_ABI;
 use crate::observation::{
@@ -230,12 +230,13 @@ impl RunAttempt {
 
 /// Map `case` onto what this executor runs, or name what it does not implement yet. The families of
 /// the shared vocabulary that stop this executor for a kernel case
-/// (`executor_contract::case_requirements`: among them function tables, acceleration structures and
+/// (`executor_contract::case_requirements`: among them acceleration structures and
 /// intersection-function tables, imageblocks, stage inputs, rate maps, sparse textures and texture
 /// buffers, the runtime's limits, and every indirect command buffer and pipeline state an argument
 /// buffer holds) are `NotSupported::Requirements`; it runs buffers, device buffer arrays,
 /// argument-buffer buffers and textures, textures, texture arrays, samplers and threadgroup
-/// lengths, and a case whose literals do not map onto them is
+/// lengths, and visible-function tables (the run makes them, [`RuntimeKernel::tables`]), and a
+/// case whose literals do not map onto them is
 /// `NotSupported::NotImplemented` (graphics stages are `candidate::engine::graphics`). A case has no
 /// indirect dispatch to map: its dispatch is a `dispatchThreads` grid, and indirect work is
 /// authored only as indirect command buffers.
@@ -406,8 +407,9 @@ pub fn compute_case(case: &AuthoredCase) -> Result<ComputeCase, NotSupported> {
 
 /// Refuse the families of `case`'s own literals that stop this executor
 /// (`executor_contract::case_requirements`): argument-buffer intersection-function tables, linked
-/// intersection functions, the runtime's limits (function tables, acceleration structures and
-/// intersection-function tables, imageblocks, stage inputs, rate maps, sparse textures, texture
+/// intersection functions, the runtime's limits (a render stage's function tables, acceleration
+/// structures and intersection-function tables, imageblocks, stage inputs, rate maps, sparse
+/// textures, texture
 /// buffers and dynamic vertex strides among them), and the render executor's own (device buffer
 /// arrays, a vertex case's depth/stencil attachment, a rasterization-disabled vertex case's render
 /// targets; it draws a tessellation case's patches). The checker computed them with the source's
@@ -566,6 +568,7 @@ fn run_on_runtime(prepared: &PreparedCase, compute: &ComputeCase) -> RunAttempt 
         RuntimeKernel {
             bitcode: &kernel,
             linked: &prepared.linked,
+            tables: &primary.linked_functions.visible,
             buffers: &buffers,
             texture_usages: &texture_usages,
             member_usages: &member_usages,
@@ -642,11 +645,13 @@ fn runtime_texture_usages(
 /// row's AIR, the modules it links, its buffers' bytes by Metal index (each bound buffer padded to
 /// its declared size, as the oracle makes it), the usage of each texture slot it binds
 /// (`runtime_texture_usages`) and of each argument-buffer texture by its field
-/// (`runtime_member_usages`), and the float reductions it executes
-/// (`check::interface::float_reductions`).
+/// (`runtime_member_usages`), the float reductions it executes
+/// (`check::interface::float_reductions`), and the visible-function tables it binds, each entry
+/// naming a function of `linked`.
 pub struct RuntimeKernel<'a> {
     pub bitcode: &'a [u8],
     pub linked: &'a [LinkedModule],
+    pub tables: &'a [ResolvedFunctionTable],
     pub buffers: &'a BTreeMap<u32, Vec<u8>>,
     pub texture_usages: &'a BTreeMap<u32, metal2vulkan::metal::TextureUsage>,
     pub member_usages: &'a BTreeMap<argument_buffers::FieldKey, metal2vulkan::metal::TextureUsage>,

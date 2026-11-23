@@ -10,12 +10,12 @@ Every public item of the macOS 27.2 SDK (Xcode 27.2, 27B52)'s Metal headers, by 
 
 | Status | Items | Of which deprecated |
 |---|---|---|
-| implemented | 623 | 29 |
-| missing | 1088 | 34 |
+| implemented | 636 | 29 |
+| missing | 1075 | 34 |
 | out of scope | 424 | 5 |
 | all | 2135 | 68 |
 
-Implemented by the runtime: 267; by the translator's values: 356. Missing by size: S 181, M 204, L 327, XL 376.
+Implemented by the runtime: 280; by the translator's values: 356. Missing by size: S 182, M 204, L 313, XL 376.
 
 ## Missing, in build order
 
@@ -28,7 +28,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | command queue descriptor | S | 3 | `MTLCommandQueueDescriptor`, `MTLCommandQueueDescriptor.maxCommandBufferCount`, `MTLDevice.newCommandQueueWithDescriptor:` |
 | compute, blit and resource-state pass descriptors | S | 10 | `MTLBlitPassDescriptor`, `MTLBlitPassDescriptor.blitPassDescriptor`, `MTLCommandBuffer.computeCommandEncoderWithDescriptor:`, ... |
 | libraries from a file path or URL | S | 2 | `MTLDevice.newLibraryWithFile:error:`, `MTLDevice.newLibraryWithURL:error:` |
-| device, state and resource queries | S | 72 | `MTLAllocation.allocatedSize`, `MTLBuffer.sparseBufferTier`, `MTLCommandBuffer.device`, ... |
+| device, state and resource queries | S | 71 | `MTLAllocation.allocatedSize`, `MTLBuffer.sparseBufferTier`, `MTLCommandBuffer.device`, ... |
 | plain-value constructors (`MTLOriginMake` and the rest) | S | 7 | `MTLOriginMake`, `MTLSizeMake`, `MTLRegionMake1D`, ... |
 | a buffer made with bytes | S | 1 | `MTLDevice.newBufferWithBytes:length:options:` |
 | pipeline creation forms (from a function, with a completion handler) | S | 6 | `MTLDevice.newRenderPipelineStateWithDescriptor:options:completionHandler:`, `MTLDevice.newComputePipelineStateWithFunction:error:`, `MTLDevice.newComputePipelineStateWithFunction:options:reflection:error:`, ... |
@@ -36,7 +36,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | encoder calls (stride setters, indirect draws, store action options, a render encoder's heap uses) | S/M/L | 24 | `MTLBlitCommandEncoder.synchronizeTexture:slice:level:`, `MTLBlitCommandEncoder.copyFromTexture:sourceSlice:sourceLevel:toTexture:destinationSlice:destinationLevel:sliceCount:levelCount:`, `MTLBlitCommandEncoder.copyFromTexture:toTexture:`, ... |
 | `textureBarrier` and queue-stage barriers | S/M | 2 | `MTLCommandEncoder.barrierAfterQueueStages:beforeStages:`, `MTLRenderCommandEncoder.textureBarrier` |
 | a pipeline state's reflection after creation | S | 2 | `MTLComputePipelineState.reflection`, `MTLRenderPipelineState.reflection` |
-| function handles by name, and a handle's type and ID | S | 4 | `MTLComputePipelineState.functionHandleWithName:`, `MTLFunctionHandle.functionType`, `MTLFunctionHandle.gpuResourceID`, ... |
+| function handles by name, and a handle's type and ID | S | 6 | `MTLComputePipelineState.functionHandleWithName:`, `MTLFunctionHandle.functionType`, `MTLFunctionHandle.name`, ... |
 | a specialized function's name | S | 1 | `MTLFunctionDescriptor.specializedName` |
 | more binary archive entries | S | 3 | `MTLBinaryArchive.addLibraryWithDescriptor:error:`, `MTLBinaryArchive.addFunctionWithDescriptor:library:error:`, `MTLFunctionDescriptor.binaryArchives` |
 | the shared event listener | S | 3 | `MTLSharedEventListener`, `MTLSharedEventListener.init`, `MTLSharedEventListener.sharedListener` |
@@ -53,7 +53,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | argument encoders | M | 24 | `MTLArgumentEncoder`, `MTLArgumentEncoder.device`, `MTLArgumentEncoder.encodedLength`, ... |
 | the resource state encoder | M | 8 | `MTLCommandBuffer.resourceStateCommandEncoder`, `MTLResourceStateCommandEncoder`, `MTLResourceStateCommandEncoder.updateTextureMappings:mode:regions:mipLevels:slices:numRegions:`, ... |
 | indirect command buffers | L | 56 | `MTLArgumentEncoder.setIndirectCommandBuffer:atIndex:`, `MTLArgumentEncoder.setIndirectCommandBuffers:withRange:`, `MTLBlitCommandEncoder.copyIndirectCommandBuffer:sourceRange:destination:destinationIndex:`, ... |
-| function tables, function handles and dynamic libraries | L | 38 | `MTLComputeCommandEncoder.setVisibleFunctionTable:atBufferIndex:`, `MTLComputeCommandEncoder.setVisibleFunctionTables:withBufferRange:`, `MTLComputePipelineState.functionHandleWithBinaryFunction:`, ... |
+| function tables, function handles and dynamic libraries | L | 24 | `MTLComputePipelineState.functionHandleWithBinaryFunction:`, `MTLComputePipelineState.newComputePipelineStateWithBinaryFunctions:error:`, `MTLComputePipelineState.newComputePipelineStateWithAdditionalBinaryFunctions:error:`, ... |
 | rasterization rate maps | L | 12 | `MTLDevice.supportsRasterizationRateMapWithLayerCount:`, `MTLDevice.newRasterizationRateMapWithDescriptor:`, `MTLRasterizationRateMap`, ... |
 | mesh render pipelines and their encoder calls | L | 33 | `MTLDevice.newRenderPipelineStateWithMeshDescriptor:options:reflection:error:`, `MTLDevice.newRenderPipelineStateWithMeshDescriptor:options:completionHandler:`, `MTLRenderCommandEncoder.setObjectBytes:length:atIndex:`, ... |
 | tile render pipelines and their encoder calls | L | 26 | `MTLDevice.newRenderPipelineStateWithTileDescriptor:options:reflection:error:`, `MTLDevice.newRenderPipelineStateWithTileDescriptor:options:completionHandler:`, `MTLDevice.sparseTileSizeWithTextureType:pixelFormat:sampleCount:`, ... |
@@ -1231,8 +1231,8 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLComputeCommandEncoder.setBuffers:offsets:attributeStrides:withRange:` | method | missing | M: a bind with a per-bind stride, which stage-in and vertex fetch read |
 | `MTLComputeCommandEncoder.setBufferOffset:attributeStride:atIndex:` | method | missing | M: a bind with a per-bind stride, which stage-in and vertex fetch read |
 | `MTLComputeCommandEncoder.setBytes:length:attributeStride:atIndex:` | method | missing | M: a bind with a per-bind stride, which stage-in and vertex fetch read |
-| `MTLComputeCommandEncoder.setVisibleFunctionTable:atBufferIndex:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
-| `MTLComputeCommandEncoder.setVisibleFunctionTables:withBufferRange:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLComputeCommandEncoder.setVisibleFunctionTable:atBufferIndex:` | method | implemented | `ComputeCommandEncoder::set_visible_function_table` (runtime) |
+| `MTLComputeCommandEncoder.setVisibleFunctionTables:withBufferRange:` | method | implemented | `ComputeCommandEncoder::set_visible_function_table` (runtime): a loop of it |
 | `MTLComputeCommandEncoder.setIntersectionFunctionTable:atBufferIndex:` | method | out of scope | ray tracing |
 | `MTLComputeCommandEncoder.setIntersectionFunctionTables:withBufferRange:` | method | out of scope | ray tracing |
 | `MTLComputeCommandEncoder.setAccelerationStructure:atBufferIndex:` | method | out of scope | ray tracing |
@@ -1308,8 +1308,8 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLComputePipelineState.label` | property | out of scope | the consumer's (metal2vulkan-runtime's README, What the consumer implements) |
 | `MTLComputePipelineState.reflection` | property | missing | S: the state's reflection after creation (macOS 26), nil for a state a device made, set only by Metal 4's compiler |
 | `MTLComputePipelineState.functionHandleWithName:` | method | missing | S: a handle by function name |
-| `MTLComputePipelineState.functionHandleWithBinaryFunction:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
-| `MTLComputePipelineState.newComputePipelineStateWithBinaryFunctions:error:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLComputePipelineState.functionHandleWithBinaryFunction:` | method | missing | L: function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`) |
+| `MTLComputePipelineState.newComputePipelineStateWithBinaryFunctions:error:` | method | missing | L: function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`) |
 | `MTLComputePipelineState.device` | property | missing | S: a query or call metal2vulkan-runtime does not answer |
 | `MTLComputePipelineState.maxTotalThreadsPerThreadgroup` | property | implemented | `ComputePipelineState::max_total_threads_per_threadgroup` (runtime) |
 | `MTLComputePipelineState.threadExecutionWidth` | property | implemented | `ComputePipelineState::thread_execution_width` (runtime) |
@@ -1317,9 +1317,9 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLComputePipelineState.imageblockMemoryLengthForDimensions:` | method | implemented | `ComputePipelineState::imageblock_memory_length_for_dimensions` (runtime) |
 | `MTLComputePipelineState.supportIndirectCommandBuffers` | property | implemented | `ComputePipelineState::support_indirect_command_buffers` (runtime) |
 | `MTLComputePipelineState.gpuResourceID` | property | missing | S: a query or call metal2vulkan-runtime does not answer |
-| `MTLComputePipelineState.functionHandleWithFunction:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
-| `MTLComputePipelineState.newComputePipelineStateWithAdditionalBinaryFunctions:error:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
-| `MTLComputePipelineState.newVisibleFunctionTableWithDescriptor:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLComputePipelineState.functionHandleWithFunction:` | method | implemented | `ComputePipelineState::function_handle` (runtime) |
+| `MTLComputePipelineState.newComputePipelineStateWithAdditionalBinaryFunctions:error:` | method | missing | L: function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`) |
+| `MTLComputePipelineState.newVisibleFunctionTableWithDescriptor:` | method | implemented | `ComputePipelineState::new_visible_function_table` (runtime) |
 | `MTLComputePipelineState.newIntersectionFunctionTableWithDescriptor:` | method | out of scope | ray tracing |
 | `MTLComputePipelineState.shaderValidation` | property | missing | L: shader validation (not scheduled) |
 | `MTLComputePipelineState.requiredThreadsPerThreadgroup` | property | implemented | `ComputePipelineState::required_threads_per_threadgroup` (runtime) |
@@ -1486,8 +1486,8 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLDevice.supportsVertexAmplificationCount:` | method | missing | S: a query or call metal2vulkan-runtime does not answer |
 | `MTLDevice.supportsDynamicLibraries` | property | missing | S: capability query |
 | `MTLDevice.supportsRenderDynamicLibraries` | property | missing | S: capability query |
-| `MTLDevice.newDynamicLibrary:error:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
-| `MTLDevice.newDynamicLibraryWithURL:error:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLDevice.newDynamicLibrary:error:` | method | missing | L: function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`) |
+| `MTLDevice.newDynamicLibraryWithURL:error:` | method | missing | L: function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`) |
 | `MTLDevice.newBinaryArchiveWithDescriptor:error:` | method | out of scope | the consumer's (metal2vulkan-runtime's README, What the consumer implements) |
 | `MTLDevice.supportsPlacementSparse` | property | missing | S: capability query; the runtime makes no placement-sparse buffers, so NO |
 | `MTLDevice.supportsRaytracing` | property | missing | S: capability query: the runtime builds no ray tracing, so NO is its answer (the query, not ray tracing) |
@@ -1496,7 +1496,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLDevice.newAccelerationStructureWithDescriptor:` | method | out of scope | ray tracing |
 | `MTLDevice.heapAccelerationStructureSizeAndAlignWithSize:` | method | out of scope | ray tracing |
 | `MTLDevice.heapAccelerationStructureSizeAndAlignWithDescriptor:` | method | out of scope | ray tracing |
-| `MTLDevice.supportsFunctionPointers` | property | missing | S: capability query |
+| `MTLDevice.supportsFunctionPointers` | property | implemented | `Device::supports_function_pointers` (runtime) |
 | `MTLDevice.supportsFunctionPointersFromRender` | property | missing | S: capability query |
 | `MTLDevice.supportsRaytracingFromRender` | property | missing | S: capability query: NO (as `supportsRaytracing`) |
 | `MTLDevice.supportsPrimitiveMotionBlur` | property | missing | S: capability query: NO (as `supportsRaytracing`) |
@@ -1551,11 +1551,11 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTLDynamicLibrary` | protocol | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLDynamicLibrary` | protocol | missing | L: function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`) |
 | `MTLDynamicLibrary.label` | property | out of scope | the consumer's (metal2vulkan-runtime's README, What the consumer implements) |
-| `MTLDynamicLibrary.device` | property | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
-| `MTLDynamicLibrary.installName` | property | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
-| `MTLDynamicLibrary.serializeToURL:error:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLDynamicLibrary.device` | property | missing | L: function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`) |
+| `MTLDynamicLibrary.installName` | property | missing | L: function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`) |
+| `MTLDynamicLibrary.serializeToURL:error:` | method | missing | L: function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`) |
 
 ### MTLEvent.h
 
@@ -1612,10 +1612,10 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTLFunctionHandle` | protocol | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLFunctionHandle` | protocol | implemented | `FunctionHandle` (runtime) |
 | `MTLFunctionHandle.functionType` | property | missing | S: a handle's function type (the runtime's `FunctionHandle` names its function) |
-| `MTLFunctionHandle.name` | property | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
-| `MTLFunctionHandle.device` | property | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLFunctionHandle.name` | property | missing | S: the runtime's `FunctionHandle` is the word a table entry holds; the consumer keeps the function it asked of |
+| `MTLFunctionHandle.device` | property | missing | S: the runtime's `FunctionHandle` is the word a table entry holds; the consumer keeps the function it asked of |
 | `MTLFunctionHandle.gpuResourceID` | property | missing | S: a handle's resource ID |
 
 ### MTLFunctionLog.h
@@ -2020,8 +2020,8 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLRenderCommandEncoder.setVertexSamplerStates:withRange:` | method | implemented | `RenderCommandEncoder::set_vertex_sampler_state` (runtime): a loop of it |
 | `MTLRenderCommandEncoder.setVertexSamplerState:lodMinClamp:lodMaxClamp:atIndex:` | method | implemented | `RenderCommandEncoder::set_vertex_sampler_state_with_lod_clamps` (runtime) |
 | `MTLRenderCommandEncoder.setVertexSamplerStates:lodMinClamps:lodMaxClamps:withRange:` | method | implemented | `RenderCommandEncoder::set_vertex_sampler_state_with_lod_clamps` (runtime): a loop of it |
-| `MTLRenderCommandEncoder.setVertexVisibleFunctionTable:atBufferIndex:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
-| `MTLRenderCommandEncoder.setVertexVisibleFunctionTables:withBufferRange:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLRenderCommandEncoder.setVertexVisibleFunctionTable:atBufferIndex:` | method | missing | L: function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`) |
+| `MTLRenderCommandEncoder.setVertexVisibleFunctionTables:withBufferRange:` | method | missing | L: function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`) |
 | `MTLRenderCommandEncoder.setVertexIntersectionFunctionTable:atBufferIndex:` | method | out of scope | ray tracing |
 | `MTLRenderCommandEncoder.setVertexIntersectionFunctionTables:withBufferRange:` | method | out of scope | ray tracing |
 | `MTLRenderCommandEncoder.setVertexAccelerationStructure:atBufferIndex:` | method | out of scope | ray tracing |
@@ -2046,8 +2046,8 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLRenderCommandEncoder.setFragmentSamplerStates:withRange:` | method | implemented | `RenderCommandEncoder::set_fragment_sampler_state` (runtime): a loop of it |
 | `MTLRenderCommandEncoder.setFragmentSamplerState:lodMinClamp:lodMaxClamp:atIndex:` | method | implemented | `RenderCommandEncoder::set_fragment_sampler_state_with_lod_clamps` (runtime) |
 | `MTLRenderCommandEncoder.setFragmentSamplerStates:lodMinClamps:lodMaxClamps:withRange:` | method | implemented | `RenderCommandEncoder::set_fragment_sampler_state_with_lod_clamps` (runtime): a loop of it |
-| `MTLRenderCommandEncoder.setFragmentVisibleFunctionTable:atBufferIndex:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
-| `MTLRenderCommandEncoder.setFragmentVisibleFunctionTables:withBufferRange:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLRenderCommandEncoder.setFragmentVisibleFunctionTable:atBufferIndex:` | method | missing | L: function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`) |
+| `MTLRenderCommandEncoder.setFragmentVisibleFunctionTables:withBufferRange:` | method | missing | L: function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`) |
 | `MTLRenderCommandEncoder.setFragmentIntersectionFunctionTable:atBufferIndex:` | method | out of scope | ray tracing |
 | `MTLRenderCommandEncoder.setFragmentIntersectionFunctionTables:withBufferRange:` | method | out of scope | ray tracing |
 | `MTLRenderCommandEncoder.setFragmentAccelerationStructure:atBufferIndex:` | method | out of scope | ray tracing |
@@ -2115,8 +2115,8 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLRenderCommandEncoder.setTileSamplerStates:withRange:` | method | missing | L: tile render pipelines; metal2vulkan-runtime makes none |
 | `MTLRenderCommandEncoder.setTileSamplerState:lodMinClamp:lodMaxClamp:atIndex:` | method | missing | L: tile render pipelines; metal2vulkan-runtime makes none |
 | `MTLRenderCommandEncoder.setTileSamplerStates:lodMinClamps:lodMaxClamps:withRange:` | method | missing | L: tile render pipelines; metal2vulkan-runtime makes none |
-| `MTLRenderCommandEncoder.setTileVisibleFunctionTable:atBufferIndex:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
-| `MTLRenderCommandEncoder.setTileVisibleFunctionTables:withBufferRange:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLRenderCommandEncoder.setTileVisibleFunctionTable:atBufferIndex:` | method | missing | L: function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`) |
+| `MTLRenderCommandEncoder.setTileVisibleFunctionTables:withBufferRange:` | method | missing | L: function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`) |
 | `MTLRenderCommandEncoder.setTileIntersectionFunctionTable:atBufferIndex:` | method | out of scope | ray tracing |
 | `MTLRenderCommandEncoder.setTileIntersectionFunctionTables:withBufferRange:` | method | out of scope | ray tracing |
 | `MTLRenderCommandEncoder.setTileAccelerationStructure:atBufferIndex:` | method | out of scope | ray tracing |
@@ -2258,17 +2258,17 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLRenderPipelineDescriptor.maxFragmentCallStackDepth` | property | implemented | `RenderPipelineDescriptor.max_fragment_call_stack_depth` (translator) |
 | `MTLRenderPipelineDescriptor.reset` | method | implemented | `RenderPipelineDescriptor::new` (translator): a plain value: assign a new one |
 | `MTLRenderPipelineDescriptor.shaderValidation` | property | missing | L: shader validation (not scheduled) |
-| `MTLRenderPipelineFunctionsDescriptor` | class | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
-| `MTLRenderPipelineFunctionsDescriptor.vertexAdditionalBinaryFunctions` | property | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
-| `MTLRenderPipelineFunctionsDescriptor.fragmentAdditionalBinaryFunctions` | property | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
-| `MTLRenderPipelineFunctionsDescriptor.tileAdditionalBinaryFunctions` | property | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLRenderPipelineFunctionsDescriptor` | class | missing | L: function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`) |
+| `MTLRenderPipelineFunctionsDescriptor.vertexAdditionalBinaryFunctions` | property | missing | L: function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`) |
+| `MTLRenderPipelineFunctionsDescriptor.fragmentAdditionalBinaryFunctions` | property | missing | L: function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`) |
+| `MTLRenderPipelineFunctionsDescriptor.tileAdditionalBinaryFunctions` | property | missing | L: function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`) |
 | `MTLRenderPipelineState` | protocol | implemented | `RenderPipelineState` (runtime) |
 | `MTLRenderPipelineState.label` | property | out of scope | the consumer's (metal2vulkan-runtime's README, What the consumer implements) |
 | `MTLRenderPipelineState.device` | property | missing | S: a query or call metal2vulkan-runtime does not answer |
 | `MTLRenderPipelineState.reflection` | property | missing | S: the state's reflection after creation (macOS 26), nil for a state a device made, set only by Metal 4's compiler |
 | `MTLRenderPipelineState.functionHandleWithName:stage:` | method | missing | S: a handle by function name |
-| `MTLRenderPipelineState.functionHandleWithBinaryFunction:stage:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
-| `MTLRenderPipelineState.newRenderPipelineStateWithBinaryFunctions:error:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLRenderPipelineState.functionHandleWithBinaryFunction:stage:` | method | missing | L: function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`) |
+| `MTLRenderPipelineState.newRenderPipelineStateWithBinaryFunctions:error:` | method | missing | L: function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`) |
 | `MTLRenderPipelineState.newRenderPipelineDescriptorForSpecialization` | method | missing | M: pipeline specialization (macOS 26): a descriptor to finish an unspecialized state |
 | `MTLRenderPipelineState.maxTotalThreadsPerThreadgroup` | property | missing | L: tile render pipelines; metal2vulkan-runtime makes none |
 | `MTLRenderPipelineState.threadgroupSizeMatchesTileSize` | property | missing | L: tile render pipelines; metal2vulkan-runtime makes none |
@@ -2281,10 +2281,10 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLRenderPipelineState.meshThreadExecutionWidth` | property | missing | L: mesh render pipelines; metal2vulkan-runtime makes none |
 | `MTLRenderPipelineState.maxTotalThreadgroupsPerMeshGrid` | property | missing | L: mesh render pipelines; metal2vulkan-runtime makes none |
 | `MTLRenderPipelineState.gpuResourceID` | property | missing | S: a query or call metal2vulkan-runtime does not answer |
-| `MTLRenderPipelineState.functionHandleWithFunction:stage:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
-| `MTLRenderPipelineState.newVisibleFunctionTableWithDescriptor:stage:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLRenderPipelineState.functionHandleWithFunction:stage:` | method | missing | L: function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`) |
+| `MTLRenderPipelineState.newVisibleFunctionTableWithDescriptor:stage:` | method | missing | L: function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`) |
 | `MTLRenderPipelineState.newIntersectionFunctionTableWithDescriptor:stage:` | method | out of scope | ray tracing |
-| `MTLRenderPipelineState.newRenderPipelineStateWithAdditionalBinaryFunctions:error:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLRenderPipelineState.newRenderPipelineStateWithAdditionalBinaryFunctions:error:` | method | missing | L: function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`) |
 | `MTLRenderPipelineState.shaderValidation` | property | missing | L: shader validation (not scheduled) |
 | `MTLRenderPipelineState.requiredThreadsPerTileThreadgroup` | property | missing | L: tile render pipelines; metal2vulkan-runtime makes none |
 | `MTLRenderPipelineState.requiredThreadsPerObjectThreadgroup` | property | missing | L: mesh render pipelines; metal2vulkan-runtime makes none |
@@ -2658,11 +2658,11 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTLVisibleFunctionTableDescriptor` | class | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
-| `MTLVisibleFunctionTableDescriptor.visibleFunctionTableDescriptor` | class method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
-| `MTLVisibleFunctionTableDescriptor.functionCount` | property | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
-| `MTLVisibleFunctionTable` | protocol | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
-| `MTLVisibleFunctionTable.gpuResourceID` | property | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
-| `MTLVisibleFunctionTable.setFunction:atIndex:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
-| `MTLVisibleFunctionTable.setFunctions:withRange:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLVisibleFunctionTableDescriptor` | class | implemented | `VisibleFunctionTableDescriptor` (runtime) |
+| `MTLVisibleFunctionTableDescriptor.visibleFunctionTableDescriptor` | class method | implemented | `VisibleFunctionTableDescriptor::default` (runtime) |
+| `MTLVisibleFunctionTableDescriptor.functionCount` | property | implemented | `VisibleFunctionTableDescriptor.function_count` (runtime) |
+| `MTLVisibleFunctionTable` | protocol | implemented | `VisibleFunctionTable` (runtime) |
+| `MTLVisibleFunctionTable.gpuResourceID` | property | implemented | `VisibleFunctionTable::gpu_resource_id` (runtime) |
+| `MTLVisibleFunctionTable.setFunction:atIndex:` | method | implemented | `VisibleFunctionTable::set_function` (runtime) |
+| `MTLVisibleFunctionTable.setFunctions:withRange:` | method | implemented | `VisibleFunctionTable::set_functions` (runtime) |
 

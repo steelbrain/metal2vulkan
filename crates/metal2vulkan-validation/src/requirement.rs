@@ -200,13 +200,6 @@ pub enum ToolingRequirement {
     /// structure, so no census row carries it. The Metal oracle draws it, so a case of it stays
     /// Metal-qualified ([`Self::qualifies_on_metal`]).
     SeparateDepthStencil,
-    /// A visible function table bound to a compute kernel (`executor_contract::case_requirements`;
-    /// a render function's is [`Self::RenderFunctionTable`]). The runtime's compute encoder has no
-    /// `setVisibleFunctionTable:atBufferIndex:`, and its make of a pipeline state that reads a
-    /// table is `metal2vulkan_runtime::Gap::KernelInput` of `KernelInputKind::Slot`, a known gap
-    /// its README states, held on lavapipe by the runtime's device test
-    /// `tests::kernel_input::a_visible_function_table_kernel_is_refused_as_a_slot`.
-    KernelFunctionTable,
     /// A compute kernel's explicit imageblock (`executor_contract::case_requirements`), a tile
     /// pass's tile size included. The runtime's compute encoder has no
     /// `setImageblockWidth:height:`: it makes the pipeline state of a kernel that reaches an
@@ -295,7 +288,7 @@ const AUTHORING: &[Executor] = &Executor::ALL;
 const ENGINE: &[Executor] = &[Executor::EngineCandidate];
 
 impl ToolingRequirement {
-    pub const ALL: [Self; 42] = [
+    pub const ALL: [Self; 41] = [
         Self::FunctionConstantLiteral,
         Self::VertexAttributeLiteral,
         Self::TessellationAttributeLiteral,
@@ -324,7 +317,6 @@ impl ToolingRequirement {
         Self::IndexBufferPastEnd,
         Self::UlongTextureAtomic,
         Self::SeparateDepthStencil,
-        Self::KernelFunctionTable,
         Self::KernelImageblock,
         Self::FragmentImageblock,
         Self::SparseTexture,
@@ -372,7 +364,6 @@ impl ToolingRequirement {
             Self::IndexBufferPastEnd => "index_buffer_past_end",
             Self::UlongTextureAtomic => "ulong_texture_atomic",
             Self::SeparateDepthStencil => "separate_depth_stencil",
-            Self::KernelFunctionTable => "kernel_function_table",
             Self::KernelImageblock => "kernel_imageblock",
             Self::FragmentImageblock => "fragment_imageblock",
             Self::SparseTexture => "sparse_texture",
@@ -442,7 +433,6 @@ impl ToolingRequirement {
             | Self::IndexBufferPastEnd
             | Self::UlongTextureAtomic
             | Self::SeparateDepthStencil
-            | Self::KernelFunctionTable
             | Self::KernelImageblock
             | Self::FragmentImageblock
             | Self::SparseTexture
@@ -473,9 +463,9 @@ impl ToolingRequirement {
     /// for, and [`ToolingRequirement::SeqCstFence`], [`ToolingRequirement::DepthOutsideUnitRange`],
     /// [`ToolingRequirement::MeshRenderPipeline`], [`ToolingRequirement::RenderFunctionTable`],
     /// [`ToolingRequirement::IndexBufferPastEnd`], [`ToolingRequirement::UlongTextureAtomic`],
-    /// [`ToolingRequirement::SeparateDepthStencil`], [`ToolingRequirement::KernelFunctionTable`],
-    /// [`ToolingRequirement::KernelImageblock`], [`ToolingRequirement::FragmentImageblock`],
-    /// [`ToolingRequirement::SparseTexture`], [`ToolingRequirement::KernelAccelerationStructure`],
+    /// [`ToolingRequirement::SeparateDepthStencil`], [`ToolingRequirement::KernelImageblock`],
+    /// [`ToolingRequirement::FragmentImageblock`], [`ToolingRequirement::SparseTexture`],
+    /// [`ToolingRequirement::KernelAccelerationStructure`],
     /// [`ToolingRequirement::KernelStageInput`], [`ToolingRequirement::RasterizationRateMap`],
     /// [`ToolingRequirement::DynamicVertexStride`], [`ToolingRequirement::IndirectComputeCommands`],
     /// [`ToolingRequirement::IndirectDrawTypes`], [`ToolingRequirement::IndirectCommandInheritance`],
@@ -492,7 +482,6 @@ impl ToolingRequirement {
             | Self::IndexBufferPastEnd
             | Self::UlongTextureAtomic
             | Self::SeparateDepthStencil
-            | Self::KernelFunctionTable
             | Self::KernelImageblock
             | Self::FragmentImageblock
             | Self::SparseTexture
@@ -731,10 +720,6 @@ mod tests {
     #[test]
     fn what_the_runtime_does_not_build_stops_only_the_candidate() {
         for (requirement, name) in [
-            (
-                ToolingRequirement::KernelFunctionTable,
-                "kernel_function_table",
-            ),
             (ToolingRequirement::KernelImageblock, "kernel_imageblock"),
             (
                 ToolingRequirement::FragmentImageblock,
@@ -831,7 +816,6 @@ mod tests {
                 ToolingRequirement::IndexBufferPastEnd,
                 ToolingRequirement::UlongTextureAtomic,
                 ToolingRequirement::SeparateDepthStencil,
-                ToolingRequirement::KernelFunctionTable,
                 ToolingRequirement::KernelImageblock,
                 ToolingRequirement::FragmentImageblock,
                 ToolingRequirement::SparseTexture,

@@ -1069,11 +1069,13 @@ pub enum Gap {
         kind: IndirectCommandsKind,
     },
     /// A kernel that reads something the compute encoder does not supply yet, `kind` naming what:
-    /// a function table, an explicit imageblock, a parameter the runtime does not fill, or a
-    /// specialization the runtime does not set, among others. Buffers, `setBytes` data, textures
-    /// and sampler states by their resource IDs, constexpr samplers by their indices, an integer
-    /// write's channel widths, threadgroup memory lengths, the dispatch's grid, the stage-in region,
-    /// `[[stage_in]]` attributes of a fixed layout stride and a pinned subgroup size are supplied.
+    /// an intersection-function table, a visible-function table an argument buffer holds, an
+    /// explicit imageblock, a parameter the runtime does not fill, or a specialization the runtime
+    /// does not set, among others. Buffers, `setBytes` data, textures and sampler states by their
+    /// resource IDs, visible-function tables at buffer indices, constexpr samplers by their
+    /// indices, an integer write's channel widths, threadgroup memory lengths, the dispatch's grid,
+    /// the stage-in region, `[[stage_in]]` attributes of a fixed layout stride and a pinned
+    /// subgroup size are supplied.
     /// Metal's counterpart is the compute pipeline state's make
     /// (`newComputePipelineStateWithDescriptor:options:reflection:error:` and its siblings), which
     /// makes each. An explicit imageblock's extent is refused at the dispatch instead

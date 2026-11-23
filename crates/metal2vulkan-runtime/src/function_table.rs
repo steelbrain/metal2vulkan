@@ -9,8 +9,8 @@
 //! ([`ComputePipelineState::function_handle`]), and a call through it calls the function that has
 //! that word among the linked functions of the state the dispatch runs (the translator's switch
 //! over them); a null entry, or a word none of them has, calls nothing and yields zero. A table or
-//! a handle of another state than the dispatch's, which Metal's validation refuses, so calls
-//! whichever function has the word there, or nothing.
+//! a handle another state answered calls whichever function has its word among the dispatch's
+//! state's, or nothing.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -47,8 +47,8 @@ impl VisibleFunctionTableDescriptor {
 /// ([`ComputeCommandEncoder::set_visible_function_table`](crate::ComputeCommandEncoder::set_visible_function_table)).
 /// A cheap handle: clones share one table, and a command buffer that binds it keeps its words
 /// until it retires. Its words are a buffer of the runtime's own, counted among the device's
-/// buffers ([`Gauges::buffers`](crate::Gauges::buffers)), in a Shared block of its own: 64 KiB at
-/// the least, where Metal's table takes 256 bytes.
+/// buffers ([`Gauges::buffers`](crate::Gauges::buffers)), in a Shared block of its own, 64 KiB at
+/// the least (the runtime's smallest block).
 #[derive(Clone)]
 pub struct VisibleFunctionTable {
     pub(crate) words: Arc<BufferInner>,
@@ -68,7 +68,7 @@ impl ComputePipelineState {
     }
 
     /// `newVisibleFunctionTableWithDescriptor:`: a table of `descriptor.function_count` null
-    /// entries, whatever the kernel links (Metal makes one for a kernel without a table too).
+    /// entries, whatever the kernel links.
     ///
     /// Err: [`Refusal::BufferTooLong`] for a table whose words pass
     /// [`MAX_BUFFER_LENGTH`](crate::MAX_BUFFER_LENGTH); [`Error::Quiesced`]; what taking the
@@ -157,8 +157,7 @@ impl VisibleFunctionTable {
     fn write(&self, offset: u64, word: u32) {
         // SAFETY: `offset` is a multiple of 4 inside the table's words, which lie at the start of
         // its block's mapping, aligned past 4, for the table's life; every write to them is atomic,
-        // and a dispatch reading a word as it is written reads the old or the new one, as the
-        // program's race on Metal does.
+        // and a dispatch reading a word as it is written reads the old or the new one.
         let at = unsafe { mapping_word(self.mapping, offset) };
         at.store(word.to_le(), Ordering::Relaxed);
     }

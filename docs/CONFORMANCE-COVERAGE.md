@@ -19,7 +19,7 @@ Its limits, measured rather than asserted:
 - **4 call sites send a selector by hand that `objc2-metal` binds no name for**, which is why they are sent with `msg_send!` rather than called. The crate names no container for such a selector, so no receiver typing can reach one and no item here is credited: `detachBacking`, `fillTexture:level:slice:region:bytes:length:`, `setFramebufferOnly:`, `setRotation:`. None of them is an implemented row of the coverage map — the generator fails rather than writing this document if one is, because that would be an item the suite exercises and nothing counts.
 - **9 call sites resolve to no item although some Metal type binds the selector**: an instance send whose receiver this could not type, a message to a class that does not bind the name sent to it, or a selector sent by hand to a receiver whose Rust type is a **supertype** of the one that binds it — which is often why it is sent by hand, since `objc2` casts between two protocol objects nowhere. Each sent its selector to exactly one receiver, so each exercised one item; which one is what the typing could not say. **Every one of their selectors is bound by at least one item some other call site credits**, so none of these sites proves an item is missing from the count. That is not a proof that the count is complete: such a site may have sent its selector to a type other than the credited one, and this cannot tell. To rule it out, spell the receiver's type at the call site — a `let` with a type, rather than a `let` with none — and this re-derives with the item credited to the case that calls it. A pattern binding is not one of the shapes that costs a site: a tuple, a `for`, a `match` arm and a closure parameter are each typed from what made them.
 - **0 call sites typed to a receiver that does not bind the selector sent to it.** The generator fails rather than writing this document if any does, which is what keeps the typing from quietly counting the wrong item.
-- **79 of the map's implemented rows are a container's own**: the `class`, `protocol` and `category` rows, whose name is the container's and not a selector's. No call site can resolve to one, because `objc2-metal` binds no selector by that name, so these are credited by the suite **messaging** the type instead — a call whose receiver is the container or a subtype of it — under the same gate and the same family attribution as the selector it sends.
+- **82 of the map's implemented rows are a container's own**: the `class`, `protocol` and `category` rows, whose name is the container's and not a selector's. No call site can resolve to one, because `objc2-metal` binds no selector by that name, so these are credited by the suite **messaging** the type instead — a call whose receiver is the container or a subtype of it — under the same gate and the same family attribution as the selector it sends.
 - **4 are the header's free functions**, which no container declares. `objc2-metal` binds these as Rust functions, so the receiver typing never sees one; the leg calls such a function by its own C name and the walk reads it as an edge of the call graph.
 - **1 implemented items `objc2-metal` binds no name for at all**, so no case can call them whatever it is authored to do. They are counted apart from the gap below rather than folded into it, because a gap is work and these are not:
   - `MTLFunctionReflection`'s `userAnnotation`
@@ -30,17 +30,17 @@ Its limits, measured rather than asserted:
 
 | | |
 |---|---|
-| implemented Metal items | 622 |
+| implemented Metal items | 635 |
 | of those, unreachable: `objc2-metal` binds no name for them | 1 |
-| so reachable by some case | 621 |
-| of the reachable, exercised by the suite's Metal leg | 546 |
-| of the reachable, not exercised | 75 |
+| so reachable by some case | 634 |
+| of the reachable, exercised by the suite's Metal leg | 557 |
+| of the reachable, not exercised | 77 |
 | share of the reachable exercised | 88% |
-| of those exercised, no case reaching it loosens anything | 326 |
+| of those exercised, no case reaching it loosens anything | 337 |
 | of those exercised, a case reaching it loosens some site | 220 |
 | case modules | 182 |
 | committed recordings | 1325 |
-| distinct SDK items the Metal leg reaches, of any status | 808 |
+| distinct SDK items the Metal leg reaches, of any status | 811 |
 | of those, reached only where this cannot name the family | 5 |
 | ledger rows (a case whose gap is recorded) | 7990 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
@@ -365,13 +365,13 @@ Every container with an implemented item, by how much of it the suite reaches. *
 | `MTLRasterizationRateLayerDescriptor` | 9 | 0 | 2 | 7 | `rate_map_degenerate_forms`, `rate_map_sweeps`, `rate_maps` |
 | `MTLRenderCommandEncoder` | 64 | 0 | 58 | 6 | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`… |
 | the header's free functions | 4 | 0 | 0 | 4 |  |
-| `MTLDevice` | 25 | 0 | 22 | 3 | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`… |
+| `MTLDevice` | 26 | 0 | 22 | 4 | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`… |
+| `MTLComputeCommandEncoder` | 28 | 0 | 25 | 3 | `argument_encoders`, `astc_textures`, `attribute_formats`, `attribute_strides`… |
 | `MTLFunctionConstantValues` | 5 | 0 | 2 | 3 | `function_constants_half3`, `function_facts`, `library_facts` |
 | `MTLLibrary` | 10 | 0 | 7 | 3 | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`… |
 | `MTLRasterizationRateSampleArray` | 3 | 0 | 0 | 3 |  |
 | `MTLRenderPipelineReflection` | 9 | 0 | 6 | 3 | `fragment_imageblock_reflection`, `mesh_pipeline_reflection`, `pipeline_options`, `texture_accesses`… |
 | `MTLBuffer` | 6 | 0 | 4 | 2 | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`… |
-| `MTLComputeCommandEncoder` | 26 | 0 | 24 | 2 | `argument_encoders`, `astc_textures`, `attribute_formats`, `attribute_strides`… |
 | `MTLFunctionReflection` | 3 | 1 | 0 | 2 |  |
 | `MTLRasterizationRateMapDescriptor` | 10 | 0 | 8 | 2 | `rate_map_degenerate_forms`, `rate_map_sweeps`, `rate_maps` |
 | `MTLAttributeDescriptorArray` | 3 | 0 | 2 | 1 | `attribute_formats`, `attribute_strides`, `blit_indirect_commands`, `indirect_command_depth`… |
@@ -379,7 +379,7 @@ Every container with an implemented item, by how much of it the suite reaches. *
 | `MTLCommandBuffer` | 19 | 0 | 18 | 1 | `alpha_coverage_pairs`, `argument_encoders`, `astc_textures`, `attribute_formats`… |
 | `MTLCommandQueue` | 4 | 0 | 3 | 1 | `alpha_coverage_pairs`, `argument_encoders`, `astc_textures`, `attribute_formats`… |
 | `MTLComputePipelineReflection` | 3 | 0 | 2 | 1 | `function_bindings`, `pipeline_option_reflection`, `pipeline_options` |
-| `MTLComputePipelineState` | 7 | 0 | 6 | 1 | `compute_threadgroups`, `pipeline_facts`, `pipeline_handlers`, `pipeline_limits`… |
+| `MTLComputePipelineState` | 9 | 0 | 8 | 1 | `compute_threadgroups`, `pipeline_facts`, `pipeline_handlers`, `pipeline_limits`… |
 | `MTLDepthStencilState` | 1 | 0 | 0 | 1 |  |
 | `MTLFence` | 1 | 0 | 0 | 1 |  |
 | `MTLPipelineBufferDescriptorArray` | 3 | 0 | 2 | 1 | `compute_pipeline_descriptors`, `pipeline_descriptors`, `tile_pipeline_descriptors` |
@@ -408,6 +408,7 @@ Every container with an implemented item, by how much of it the suite reaches. *
 | `MTLFunction` | 8 | 0 | 8 | 0 | `argument_encoder_crossings`, `argument_encoders`, `compute_pipeline_descriptors`, `function_facts`… |
 | `MTLFunctionConstant` | 5 | 0 | 5 | 0 | `function_facts`, `library_facts` |
 | `MTLFunctionDescriptor` | 4 | 0 | 4 | 0 | `library_facts` |
+| `MTLFunctionHandle` | 1 | 0 | 1 | 0 | `visible_tables` |
 | `MTLHeap` | 2 | 0 | 2 | 0 | `compressed_moves`, `compute_heap_residency`, `heap_facts`, `resource_facts`… |
 | `MTLIndirectCommandBuffer` | 3 | 0 | 3 | 0 | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `indirect_ranges`… |
 | `MTLIndirectCommandBufferDescriptor` | 7 | 0 | 7 | 0 | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `indirect_ranges`… |
@@ -442,6 +443,8 @@ Every container with an implemented item, by how much of it the suite reaches. *
 | `MTLVertexAttribute` | 7 | 0 | 7 | 0 | `function_facts`, `library_facts` |
 | `MTLVertexAttributeDescriptor` | 4 | 0 | 4 | 0 | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `color_write_masks`… |
 | `MTLVertexBufferLayoutDescriptor` | 4 | 0 | 4 | 0 | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `color_write_masks`… |
+| `MTLVisibleFunctionTable` | 4 | 0 | 4 | 0 | `visible_tables` |
+| `MTLVisibleFunctionTableDescriptor` | 3 | 0 | 3 | 0 | `visible_tables` |
 
 ## By header, which is the family of behaviour
 
@@ -451,16 +454,16 @@ A container is one Objective-C type; the SDK header it sits in is the family of 
 |---|---|---|---|
 | `MTLArgument.h` | 77 | 59 | 18 |
 | `MTLRasterizationRate.h` | 25 | 12 | 13 |
+| `MTLDevice.h` | 36 | 30 | 6 |
 | `MTLRenderCommandEncoder.h` | 64 | 58 | 6 |
-| `MTLDevice.h` | 35 | 30 | 5 |
 | `MTLLibrary.h` | 40 | 35 | 5 |
 | `MTLRenderPipeline.h` | 102 | 97 | 5 |
+| `MTLComputeCommandEncoder.h` | 28 | 25 | 3 |
 | `MTLFunctionConstantValues.h` | 5 | 2 | 3 |
 | `MTLStageInputOutputDescriptor.h` | 21 | 18 | 3 |
 | `MTLVertexDescriptor.h` | 19 | 16 | 3 |
 | `MTLBuffer.h` | 6 | 4 | 2 |
-| `MTLComputeCommandEncoder.h` | 26 | 24 | 2 |
-| `MTLComputePipeline.h` | 24 | 22 | 2 |
+| `MTLComputePipeline.h` | 26 | 24 | 2 |
 | `MTLCommandBuffer.h` | 19 | 18 | 1 |
 | `MTLCommandQueue.h` | 4 | 3 | 1 |
 | `MTLDepthStencil.h` | 13 | 12 | 1 |
@@ -473,13 +476,15 @@ A container is one Objective-C type; the SDK header it sits in is the family of 
 | `MTLBlitCommandEncoder.h` | 14 | 14 | 0 |
 | `MTLCommandEncoder.h` | 2 | 2 | 0 |
 | `MTLFunctionDescriptor.h` | 4 | 4 | 0 |
+| `MTLFunctionHandle.h` | 1 | 1 | 0 |
 | `MTLHeap.h` | 2 | 2 | 0 |
 | `MTLIndirectCommandBuffer.h` | 10 | 10 | 0 |
 | `MTLLinkedFunctions.h` | 6 | 6 | 0 |
 | `MTLResource.h` | 2 | 2 | 0 |
 | `MTLSampler.h` | 18 | 18 | 0 |
+| `MTLVisibleFunctionTable.h` | 7 | 7 | 0 |
 
-1 of 29 headers have no exercised item at all, 1 implemented items between them: `MTLFence.h`.
+1 of 31 headers have no exercised item at all, 1 implemented items between them: `MTLFence.h`.
 
 ## Containers with no case at all
 
@@ -706,7 +711,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `vertex_step_rate` | 1 | 1 | every field | 104 |
 | `viewport_cuts` | 2 | 2 | every field | 120 |
 | `visibility` | 16 | 16 | 1 tolerance(s): `AcceptedDifference` | 130 |
-| `visible_tables` | 18 | 18 | every field | 38 |
+| `visible_tables` | 18 | 18 | every field | 49 |
 | `wide_int_attributes` | 2 | 2 | every field | 104 |
 | `wide_points` | 1 | 1 | every field | 118 |
 | `ycbcr_gathers` | 4 | 4 | every field | 50 |
@@ -930,6 +935,8 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 | `setBuffer:offset:atIndex:` | yes | `argument_encoders`, `astc_textures`, `attribute_formats`, `attribute_strides`, `bicubic_texel_classes`, `blit_indirect_commands`, `border_swizzles`, `buffer_bind_off_alignment`, `buffer_depth_samples`, `buffer_tails`, `chroma_pairs`, `compressed_decode`, `compute_encoder_commands`, `compute_heap_residency`, `compute_render_chains`, `compute_threadgroups`, `denormal_word_fetches`, `depth_texel_reads`, `etc_textures`, `extended_range_blends`, `extended_range_planes`, `extended_range_targets`, `extended_range_two_planes`, `extended_swizzles`, `frame_chains`, `function_constants_half3`, `half_read_nans`, `half_storage_writes`, `half_texel_nans`, `half_write_nans`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `indirect_ranges`, `level_sizes`, `math_routines`, `nan_integer_conversions`, `nearest_positions`, `norm_storage_writes`, `pass_bytes`, `pixel_downscales`, `pixel_samplers`, `read_through`, `read_write_tiers`, `resolve_then_load`, `rgb10a2_srgb`, `sampler_crossings`, `sampler_filtering`, `shared_exponent_storage`, `signed_remainders`, `simdgroup_lockstep`, `stage_in_regions`, `stage_in_unread`, `swizzled_storage`, `texel_swizzles`, `texture_buffer_tails`, `texture_view_casts`, `threadgroup_start`, `two_plane_samples`, `vector_word_phases`, `visible_tables`, `ycbcr_gathers`, `ycbcr_minify`, `ycbcr_textures` | 399 |
 | `setBufferOffset:atIndex:` | yes | `compute_encoder_commands`, `compute_heap_residency` | 9 |
 | `setBuffers:offsets:withRange:` | yes | `compute_encoder_commands`, `compute_heap_residency` | 9 |
+| `setVisibleFunctionTable:atBufferIndex:` | yes | `visible_tables` | 18 |
+| `setVisibleFunctionTables:withBufferRange:` | no | — | — |
 | `setTexture:atIndex:` | yes | `argument_encoders`, `astc_textures`, `attribute_formats`, `bicubic_texel_classes`, `blit_indirect_commands`, `border_swizzles`, `buffer_depth_samples`, `buffer_tails`, `chroma_pairs`, `compressed_decode`, `compute_encoder_commands`, `compute_heap_residency`, `compute_render_chains`, `compute_threadgroups`, `denormal_word_fetches`, `depth_texel_reads`, `etc_textures`, `extended_range_blends`, `extended_range_planes`, `extended_range_targets`, `extended_range_two_planes`, `extended_swizzles`, `frame_chains`, `function_constants_half3`, `half_read_nans`, `half_storage_writes`, `half_texel_nans`, `half_write_nans`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `level_sizes`, `math_routines`, `nan_integer_conversions`, `nearest_positions`, `norm_storage_writes`, `pass_bytes`, `pixel_downscales`, `pixel_samplers`, `read_through`, `read_write_tiers`, `resolve_then_load`, `rgb10a2_srgb`, `sampler_crossings`, `sampler_filtering`, `shared_exponent_storage`, `signed_remainders`, `simdgroup_lockstep`, `stage_in_regions`, `stage_in_unread`, `swizzled_storage`, `texel_swizzles`, `texture_buffer_tails`, `texture_view_casts`, `two_plane_samples`, `ycbcr_gathers`, `ycbcr_minify`, `ycbcr_textures` | 368 |
 | `setTextures:withRange:` | yes | `compute_encoder_commands`, `compute_heap_residency` | 9 |
 | `setSamplerState:atIndex:` | yes | `argument_encoders`, `astc_textures`, `attribute_formats`, `bicubic_texel_classes`, `border_swizzles`, `buffer_tails`, `chroma_pairs`, `compressed_decode`, `compute_encoder_commands`, `compute_heap_residency`, `compute_threadgroups`, `denormal_word_fetches`, `depth_texel_reads`, `etc_textures`, `extended_range_blends`, `extended_range_planes`, `extended_range_two_planes`, `extended_swizzles`, `function_constants_half3`, `half_read_nans`, `half_storage_writes`, `half_texel_nans`, `half_write_nans`, `level_sizes`, `math_routines`, `nan_integer_conversions`, `nearest_positions`, `norm_storage_writes`, `pass_bytes`, `pixel_downscales`, `pixel_samplers`, `read_through`, `read_write_tiers`, `rgb10a2_srgb`, `sampler_crossings`, `sampler_filtering`, `shared_exponent_storage`, `signed_remainders`, `simdgroup_lockstep`, `stage_in_regions`, `stage_in_unread`, `swizzled_storage`, `texel_swizzles`, `texture_buffer_tails`, `two_plane_samples`, `ycbcr_gathers`, `ycbcr_minify`, `ycbcr_textures` | 309 |
@@ -988,6 +995,8 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 | `staticThreadgroupMemoryLength` | yes | `compute_threadgroups`, `pipeline_facts`, `pipeline_handlers` | 34 |
 | `imageblockMemoryLengthForDimensions:` | yes | `pipeline_facts`, `pipeline_handlers` | 33 |
 | `supportIndirectCommandBuffers` | yes | `pipeline_facts`, `pipeline_handlers` | 33 |
+| `functionHandleWithFunction:` | yes | `visible_tables` | 18 |
+| `newVisibleFunctionTableWithDescriptor:` | yes | `visible_tables` | 18 |
 | `requiredThreadsPerThreadgroup` | yes | `pipeline_facts`, `pipeline_handlers` | 33 |
 
 ### `MTLDepthStencilDescriptor`
@@ -1035,6 +1044,7 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 | `newIndirectCommandBufferWithDescriptor:maxCommandCount:options:` | yes | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `indirect_ranges`, `mesh_commands` | 23 |
 | `newEvent` | yes | `event_orders` | 5 |
 | `newSharedEvent` | yes | `event_orders`, `fence_orders`, `shared_events` | 13 |
+| `supportsFunctionPointers` | no | — | — |
 
 ### `MTLEvent`
 
@@ -1090,6 +1100,12 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 | `functionDescriptor` | yes | `library_facts` | 9 |
 | `name` | yes | `library_facts` | 9 |
 | `constantValues` | yes | `library_facts` | 9 |
+
+### `MTLFunctionHandle`
+
+| item | exercised | families | cases Metal ran |
+|---|---|---|---|
+| `MTLFunctionHandle` | yes | `visible_tables` | 18 |
 
 ### `MTLFunctionReflection`
 
@@ -1744,6 +1760,23 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 | `attributes` | yes | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `pipeline_descriptors`, `pipeline_facts`, `pipeline_handlers`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_residency`, `render_state`, `resolve_then_load`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `viewport_cuts`, `visibility`, `wide_int_attributes`, `wide_points` | 388 |
 | `reset` | no | — | — |
 
+### `MTLVisibleFunctionTable`
+
+| item | exercised | families | cases Metal ran |
+|---|---|---|---|
+| `MTLVisibleFunctionTable` | yes | `visible_tables` | 18 |
+| `gpuResourceID` | yes | `visible_tables` | 18 |
+| `setFunction:atIndex:` | yes | `visible_tables` | 18 |
+| `setFunctions:withRange:` | yes | `visible_tables` | 18 |
+
+### `MTLVisibleFunctionTableDescriptor`
+
+| item | exercised | families | cases Metal ran |
+|---|---|---|---|
+| `MTLVisibleFunctionTableDescriptor` | yes | `visible_tables` | 18 |
+| `visibleFunctionTableDescriptor` | yes | `visible_tables` | 18 |
+| `functionCount` | yes | `visible_tables` | 18 |
+
 ## Exercised, but not ours
 
 An item the suite's Metal leg calls whose coverage-map status is not implemented. Read each one before concluding anything: a call the leg makes to **set its own Metal up** is not a behaviour under test, and our side need not have it. A call the case's answer depends on is the other thing, and would be a case that can only be exact by accident.
@@ -1800,13 +1833,10 @@ An item the suite's Metal leg calls whose coverage-map status is not implemented
 | `MTLComputeCommandEncoder` `setBufferOffset:attributeStride:atIndex:` | missing | a bind with a per-bind stride, which stage-in and vertex fetch read | `attribute_strides`, `compute_heap_residency` |
 | `MTLComputeCommandEncoder` `setBuffers:offsets:attributeStrides:withRange:` | missing | a bind with a per-bind stride, which stage-in and vertex fetch read | `attribute_strides`, `compute_heap_residency` |
 | `MTLComputeCommandEncoder` `setBytes:length:attributeStride:atIndex:` | missing | a bind with a per-bind stride, which stage-in and vertex fetch read | `attribute_strides`, `compute_heap_residency` |
-| `MTLComputeCommandEncoder` `setVisibleFunctionTable:atBufferIndex:` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `visible_tables` |
 | `MTLComputePipelineDescriptor` `binaryArchives` | out of scope | the consumer's (metal2vulkan-runtime's README, What the consumer implements) | `binary_archives`, `compute_pipeline_descriptors` |
 | `MTLComputePipelineDescriptor` `label` | out of scope | the consumer's (metal2vulkan-runtime's README, What the consumer implements) | `compute_pipeline_descriptors`, `pipeline_facts`, `pipeline_handlers` |
 | `MTLComputePipelineState` `device` | missing | a query or call metal2vulkan-runtime does not answer | `pipeline_facts`, `pipeline_handlers` |
-| `MTLComputePipelineState` `functionHandleWithFunction:` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `visible_tables` |
 | `MTLComputePipelineState` `label` | out of scope | the consumer's (metal2vulkan-runtime's README, What the consumer implements) | `pipeline_facts`, `pipeline_handlers` |
-| `MTLComputePipelineState` `newVisibleFunctionTableWithDescriptor:` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `visible_tables` |
 | `MTLDevice` `convertSparsePixelRegions:toTileRegions:withTileSize:alignmentMode:numRegions:` | missing | tile render pipelines; metal2vulkan-runtime makes none | `device_queries` |
 | `MTLDevice` `convertSparseTileRegions:toPixelRegions:withTileSize:numRegions:` | missing | tile render pipelines; metal2vulkan-runtime makes none | `device_queries` |
 | `MTLDevice` `newArgumentEncoderWithArguments:` | missing | argument encoders | `argument_encoder_crossings`, `argument_encoders` |
@@ -1817,8 +1847,8 @@ An item the suite's Metal leg calls whose coverage-map status is not implemented
 | `MTLDevice` `newComputePipelineStateWithFunction:error:` | missing | a pipeline creation form metal2vulkan-runtime does not take | `argument_encoders`, `astc_textures`, `bicubic_texel_classes`, `blit_encoder_commands`, `border_swizzles`, `buffer_bind_off_alignment`, `buffer_blits`, `buffer_depth_samples`, `buffer_tails`, `buffer_texture_blits`, `buffer_textures`, `chroma_pairs`, `compressed_blits`, `compressed_decode`, `compressed_moves`, `compressed_views`, `compute_encoder_commands`, `compute_heap_residency`, `compute_render_chains`, `compute_threadgroups`, `copy_out_strides`, `denormal_word_fetches`, `depth_texel_reads`, `etc_textures`, `extended_range_blends`, `extended_range_planes`, `extended_range_targets`, `extended_range_two_planes`, `extended_swizzles`, `format_copies`, `frame_chains`, `fresh_contents`, `function_constants_half3`, `half_read_nans`, `half_storage_writes`, `half_texel_nans`, `half_write_nans`, `host_page_writes`, `indirect_ranges`, `level_sizes`, `math_routines`, `nan_integer_conversions`, `nearest_positions`, `norm_storage_writes`, `pass_bytes`, `pipeline_handlers`, `pixel_downscales`, `pixel_samplers`, `pvrtc_cpu_order`, `pvrtc_rows`, `read_through`, `read_write_tiers`, `resolve_then_load`, `rgb10a2_srgb`, `sampler_crossings`, `sampler_filtering`, `shared_exponent_storage`, `signed_remainders`, `simdgroup_lockstep`, `swizzled_storage`, `texel_swizzles`, `texture_buffer_tails`, `texture_fills`, `texture_view_casts`, `threadgroup_start`, `two_plane_copies`, `two_plane_heap_blits`, `two_plane_samples`, `vector_word_phases`, `ycbcr_gathers`, `ycbcr_minify`, `ycbcr_textures` |
 | `MTLDevice` `newComputePipelineStateWithFunction:options:completionHandler:` | missing | a pipeline creation form metal2vulkan-runtime does not take | `pipeline_handlers` |
 | `MTLDevice` `newComputePipelineStateWithFunction:options:reflection:error:` | missing | a pipeline creation form metal2vulkan-runtime does not take | `function_bindings`, `pipeline_handlers`, `pipeline_option_reflection`, `pipeline_options` |
-| `MTLDevice` `newDynamicLibrary:error:` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `dynamic_libraries` |
-| `MTLDevice` `newDynamicLibraryWithURL:error:` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `dynamic_libraries` |
+| `MTLDevice` `newDynamicLibrary:error:` | missing | function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`) | `dynamic_libraries` |
+| `MTLDevice` `newDynamicLibraryWithURL:error:` | missing | function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`) | `dynamic_libraries` |
 | `MTLDevice` `newHeapWithDescriptor:` | out of scope | the consumer's (metal2vulkan-runtime's README, What the consumer implements) | `blit_encoder_commands`, `buffer_blits`, `buffer_depth_samples`, `buffer_tails`, `buffer_texture_blits`, `buffer_textures`, `chroma_pairs`, `compressed_blits`, `compressed_moves`, `compressed_views`, `compute_heap_residency`, `copy_out_strides`, `format_copies`, `fresh_contents`, `heap_facts`, `pvrtc_cpu_order`, `pvrtc_rows`, `render_residency`, `resource_facts`, `sparse_heaps`, `sparse_mappings`, `texture_buffer_tails`, `texture_descriptor_pairs`, `texture_fills`, `two_plane_copies`, `two_plane_heap_blits` |
 | `MTLDevice` `newLibraryWithURL:error:` | missing | a metallib read from a file URL | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`, `attribute_formats`, `attribute_strides`, `bicubic_texel_classes`, `binary_archives`, `blend_interactions`, `blend_sweeps`, `blit_encoder_commands`, `blit_indirect_commands`, `border_swizzles`, `buffer_bind_off_alignment`, `buffer_blits`, `buffer_depth_samples`, `buffer_tails`, `buffer_texture_blits`, `buffer_textures`, `chroma_pairs`, `color_write_masks`, `compressed_blits`, `compressed_decode`, `compressed_moves`, `compressed_views`, `compute_encoder_commands`, `compute_heap_residency`, `compute_pipeline_descriptors`, `compute_render_chains`, `compute_threadgroups`, `copy_out_strides`, `denormal_word_fetches`, `depth_resolve_pairs`, `depth_stencil_space`, `depth_texel_reads`, `discard_hoist`, `draw_state_changes`, `dynamic_libraries`, `etc_textures`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_planes`, `extended_range_targets`, `extended_range_two_planes`, `extended_swizzles`, `fetch_ordered`, `format_copies`, `fragment_imageblock_reflection`, `frame_chains`, `fresh_contents`, `function_bindings`, `function_constants_half3`, `function_facts`, `half_output_blends`, `half_read_nans`, `half_storage_writes`, `half_texel_nans`, `half_write_nans`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `indirect_ranges`, `int_attributes`, `layered_targets`, `level_sizes`, `library_facts`, `math_routines`, `mesh_barriers`, `mesh_commands`, `mesh_draws`, `mesh_partial_barriers`, `mesh_pipeline_descriptors`, `mesh_pipeline_reflection`, `nan_integer_conversions`, `nearest_positions`, `norm_storage_writes`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_bytes`, `pass_sequence_actions`, `pass_start_reads`, `pipeline_descriptors`, `pipeline_facts`, `pipeline_functions`, `pipeline_handlers`, `pipeline_limits`, `pipeline_option_reflection`, `pipeline_options`, `pixel_downscales`, `pixel_samplers`, `pvrtc_cpu_order`, `pvrtc_rows`, `read_through`, `read_write_tiers`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_residency`, `render_state`, `resolve_then_load`, `rgb10a2_srgb`, `rotated_planes`, `rotated_targets`, `sample_positions`, `sampler_crossings`, `sampler_filtering`, `shader_stencil`, `shared_exponent_storage`, `signed_remainders`, `simdgroup_lockstep`, `snorm_tile_store`, `srgb_fetch`, `stage_in_regions`, `stage_in_unread`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `swizzled_storage`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texel_swizzles`, `texture_accesses`, `texture_buffer_tails`, `texture_fills`, `texture_view_casts`, `threadgroup_start`, `tile_pipeline_descriptors`, `tile_pipeline_reflection`, `tile_threadgroups`, `topology_classes`, `two_plane_copies`, `two_plane_heap_blits`, `two_plane_samples`, `vector_word_phases`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `viewport_cuts`, `visibility`, `visible_tables`, `wide_int_attributes`, `wide_points`, `ycbcr_gathers`, `ycbcr_minify`, `ycbcr_textures` |
 | `MTLDevice` `newRasterizationRateMapWithDescriptor:` | missing | rasterization rate maps; the render pass descriptor has no field for one | `rate_map_degenerate_forms`, `rate_map_sweeps`, `rate_maps` |
@@ -1838,17 +1868,17 @@ An item the suite's Metal leg calls whose coverage-map status is not implemented
 | `MTLDevice` `sparseTileSizeWithTextureType:pixelFormat:sampleCount:sparsePageSize:` | missing | tile render pipelines; metal2vulkan-runtime makes none | `sparse_mappings`, `sparse_tiles` |
 | `MTLDevice` `supportsRasterizationRateMapWithLayerCount:` | missing | rasterization rate maps; the render pass descriptor has no field for one | `device_queries` |
 | `MTLDevice` `supportsVertexAmplificationCount:` | missing | a query or call metal2vulkan-runtime does not answer | `device_queries` |
-| `MTLDynamicLibrary` `device` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `dynamic_libraries` |
-| `MTLDynamicLibrary` `installName` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `dynamic_libraries` |
+| `MTLDynamicLibrary` `device` | missing | function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`) | `dynamic_libraries` |
+| `MTLDynamicLibrary` `installName` | missing | function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`) | `dynamic_libraries` |
 | `MTLDynamicLibrary` `label` | out of scope | the consumer's (metal2vulkan-runtime's README, What the consumer implements) | `dynamic_libraries` |
-| `MTLDynamicLibrary` `serializeToURL:error:` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `dynamic_libraries` |
+| `MTLDynamicLibrary` `serializeToURL:error:` | missing | function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`) | `dynamic_libraries` |
 | `MTLEvent` `label` | out of scope | the consumer's (metal2vulkan-runtime's README, What the consumer implements) | `shared_events` |
 | `MTLFunction` `device` | out of scope | the consumer's (metal2vulkan-runtime's README, What the consumer implements) | `function_facts`, `library_facts` |
 | `MTLFunction` `newArgumentEncoderWithBufferIndex:` | missing | argument encoders | `argument_encoder_crossings`, `argument_encoders` |
 | `MTLFunction` `options` | missing | a function's options (`MTLFunctionOptions`) | `function_facts`, `library_facts` |
 | `MTLFunctionDescriptor` `options` | missing | a function's options (`MTLFunctionOptions`) | `library_facts` |
-| `MTLFunctionHandle` `device` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `visible_tables` |
-| `MTLFunctionHandle` `name` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `visible_tables` |
+| `MTLFunctionHandle` `device` | missing | the runtime's `FunctionHandle` is the word a table entry holds; the consumer keeps the function it asked of | `visible_tables` |
+| `MTLFunctionHandle` `name` | missing | the runtime's `FunctionHandle` is the word a table entry holds; the consumer keeps the function it asked of | `visible_tables` |
 | `MTLHeap` `cpuCacheMode` | out of scope | the consumer's (metal2vulkan-runtime's README, What the consumer implements) | `heap_facts`, `resource_facts`, `texture_descriptor_pairs` |
 | `MTLHeap` `currentAllocatedSize` | out of scope | the consumer's (metal2vulkan-runtime's README, What the consumer implements) | `heap_facts`, `resource_facts`, `texture_descriptor_pairs` |
 | `MTLHeap` `device` | out of scope | the consumer's (metal2vulkan-runtime's README, What the consumer implements) | `heap_facts`, `resource_facts`, `texture_descriptor_pairs` |
@@ -1951,18 +1981,18 @@ An item the suite's Metal leg calls whose coverage-map status is not implemented
 | `MTLRenderPassDescriptor` `tileWidth` | missing | tile render pipelines; metal2vulkan-runtime makes none | `render_pass_descriptors`, `tile_threadgroups` |
 | `MTLRenderPipelineDescriptor` `binaryArchives` | out of scope | the consumer's (metal2vulkan-runtime's README, What the consumer implements) | `binary_archives`, `pipeline_descriptors` |
 | `MTLRenderPipelineDescriptor` `label` | out of scope | the consumer's (metal2vulkan-runtime's README, What the consumer implements) | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `pipeline_descriptors`, `pipeline_facts`, `pipeline_handlers`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_residency`, `render_state`, `resolve_then_load`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `viewport_cuts`, `visibility`, `wide_int_attributes`, `wide_points` |
-| `MTLRenderPipelineFunctionsDescriptor` `fragmentAdditionalBinaryFunctions` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `pipeline_functions` |
-| `MTLRenderPipelineFunctionsDescriptor` `tileAdditionalBinaryFunctions` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `pipeline_functions` |
-| `MTLRenderPipelineFunctionsDescriptor` `vertexAdditionalBinaryFunctions` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `pipeline_functions` |
+| `MTLRenderPipelineFunctionsDescriptor` `fragmentAdditionalBinaryFunctions` | missing | function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`) | `pipeline_functions` |
+| `MTLRenderPipelineFunctionsDescriptor` `tileAdditionalBinaryFunctions` | missing | function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`) | `pipeline_functions` |
+| `MTLRenderPipelineFunctionsDescriptor` `vertexAdditionalBinaryFunctions` | missing | function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`) | `pipeline_functions` |
 | `MTLRenderPipelineState` `device` | missing | a query or call metal2vulkan-runtime does not answer | `pipeline_facts`, `pipeline_handlers` |
-| `MTLRenderPipelineState` `functionHandleWithFunction:stage:` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `visible_tables` |
+| `MTLRenderPipelineState` `functionHandleWithFunction:stage:` | missing | function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`) | `visible_tables` |
 | `MTLRenderPipelineState` `label` | out of scope | the consumer's (metal2vulkan-runtime's README, What the consumer implements) | `pipeline_facts`, `pipeline_handlers` |
 | `MTLRenderPipelineState` `maxTotalThreadgroupsPerMeshGrid` | missing | mesh render pipelines; metal2vulkan-runtime makes none | `pipeline_limits` |
 | `MTLRenderPipelineState` `maxTotalThreadsPerMeshThreadgroup` | missing | mesh render pipelines; metal2vulkan-runtime makes none | `pipeline_limits` |
 | `MTLRenderPipelineState` `maxTotalThreadsPerObjectThreadgroup` | missing | mesh render pipelines; metal2vulkan-runtime makes none | `pipeline_limits` |
 | `MTLRenderPipelineState` `maxTotalThreadsPerThreadgroup` | missing | tile render pipelines; metal2vulkan-runtime makes none | `pipeline_facts`, `pipeline_handlers`, `pipeline_limits`, `tile_threadgroups` |
 | `MTLRenderPipelineState` `meshThreadExecutionWidth` | missing | mesh render pipelines; metal2vulkan-runtime makes none | `pipeline_limits` |
-| `MTLRenderPipelineState` `newVisibleFunctionTableWithDescriptor:stage:` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `visible_tables` |
+| `MTLRenderPipelineState` `newVisibleFunctionTableWithDescriptor:stage:` | missing | function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`) | `visible_tables` |
 | `MTLRenderPipelineState` `objectThreadExecutionWidth` | missing | mesh render pipelines; metal2vulkan-runtime makes none | `pipeline_limits` |
 | `MTLRenderPipelineState` `requiredThreadsPerMeshThreadgroup` | missing | mesh render pipelines; metal2vulkan-runtime makes none | `pipeline_limits` |
 | `MTLRenderPipelineState` `requiredThreadsPerObjectThreadgroup` | missing | mesh render pipelines; metal2vulkan-runtime makes none | `pipeline_limits` |
@@ -2002,11 +2032,6 @@ An item the suite's Metal leg calls whose coverage-map status is not implemented
 | `MTLTextureDescriptor` `textureBufferDescriptorWithPixelFormat:width:resourceOptions:usage:` | missing | a query or call metal2vulkan-runtime does not answer | `blit_encoder_commands`, `buffer_depth_samples`, `buffer_tails`, `buffer_texture_blits`, `buffer_textures`, `chroma_pairs`, `compressed_blits`, `compressed_moves`, `compressed_views`, `copy_out_strides`, `format_copies`, `fresh_contents`, `pvrtc_cpu_order`, `pvrtc_rows`, `texture_buffer_tails`, `texture_fills`, `two_plane_copies`, `two_plane_heap_blits` |
 | `MTLTileRenderPipelineDescriptor` `binaryArchives` | out of scope | the consumer's (metal2vulkan-runtime's README, What the consumer implements) | `tile_pipeline_descriptors` |
 | `MTLTileRenderPipelineDescriptor` `label` | out of scope | the consumer's (metal2vulkan-runtime's README, What the consumer implements) | `tile_pipeline_descriptors` |
-| `MTLVisibleFunctionTable` `gpuResourceID` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `visible_tables` |
-| `MTLVisibleFunctionTable` `setFunction:atIndex:` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `visible_tables` |
-| `MTLVisibleFunctionTable` `setFunctions:withRange:` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `visible_tables` |
-| `MTLVisibleFunctionTableDescriptor` `functionCount` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `visible_tables` |
-| `MTLVisibleFunctionTableDescriptor` `visibleFunctionTableDescriptor` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `visible_tables` |
 
 ## Called, attributed to no family
 

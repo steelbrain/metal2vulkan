@@ -482,8 +482,9 @@ cargo run -p metal2vulkan-validation --release --bin corpus-vulkan -- \
   the device states.
 - **Through the runtime.** On Linux, without a profile restriction, every kernel case the engine
   maps (buffers, device buffer arrays included, bound textures and samplers, argument buffers of
-  buffers, textures and samplers, threadgroup memory, function constants and linked functions,
-  dispatched by threads and observing a buffer, a texture, an argument-buffer member or nothing)
+  buffers, textures and samplers, threadgroup memory, function constants, linked functions and
+  visible-function tables, dispatched by threads and observing a buffer, a texture, an
+  argument-buffer member or nothing)
   runs through `metal2vulkan-runtime`'s public API instead, as a consumer runs it. Each texture is
   made as the Metal oracle makes it, Shared and written with `replace_region`, at an index the run
   grants. An argument buffer holds each member's `gpuAddress` or `gpuResourceID` at its field, as
@@ -508,8 +509,10 @@ cargo run -p metal2vulkan-validation --release --bin corpus-vulkan -- \
   texel size so its bits cross unconverted, a depth one under an always-passing depth test that
   writes. A cube array is made as any cube, of its cubes' faces. A bound sparse
   texture carries `sparse_texture`, which the runtime does not make; a bound texture buffer runs
-  on both executors (the runtime makes it over its buffer's bytes); a kernel's function table carries `kernel_function_table`, its imageblock (a
-  tile function's included) `kernel_imageblock`, its acceleration structure or
+  on both executors (the runtime makes it over its buffer's bytes); a kernel's visible-function
+  table runs on both: the run makes it of the state, as the oracle does, each authored entry the
+  handle of its linked function, and binds it at its index. A kernel's imageblock (a tile
+  function's included) carries `kernel_imageblock`, its acceleration structure or
   intersection-function table `kernel_acceleration_structure`, its stage inputs or stage-in region
   `kernel_stage_input`, and a rasterization-rate map, a render pass's or one whose data a buffer
   holds, `rasterization_rate_map`: each the runtime's limit, run on Metal alone. The runtime's

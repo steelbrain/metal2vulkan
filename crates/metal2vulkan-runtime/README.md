@@ -94,6 +94,11 @@ them over this crate's items:
   `Device::with_present_queue` runs the consumer's presents on the presenting queue under its lock
   (see "Presenting"). The runtime keeps owning every handle.
 - `Device::has_unified_memory` is true where Vulkan's device type is integrated or CPU.
+- `Device::supports_function_pointers` is true on every device: a kernel's call through a
+  visible-function table is a switch over the functions its state links, known when the state is
+  made, and needs no Vulkan feature (see "Visible-function tables"). The runtime gives no
+  `supportsFunctionPointersFromRender` answer: a render pipeline state that reads a function
+  table is refused (the known gaps of render pipeline states).
 - `Device::read_write_texture_support` is `MTLReadWriteTextureTier2` on every device above the
   floor: Vulkan requires storage images of tier 2's four-channel and 32-bit formats, and the
   floor's `shaderStorageImageExtendedFormats` its six 8- and 16-bit single-channel ones. The
@@ -2374,6 +2379,10 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   texture's format (`metal::format::integer_channels_word`); and for each constexpr sampler it
   samples through, the index the consumer gave it at the state's creation. Nothing is written
   into set 1 at bind or dispatch time, and every texture stays in its home layout.
+- `set_visible_function_table` (`setVisibleFunctionTable:atBufferIndex:`; the range call is a
+  loop of it) binds a table's words at a buffer index, through the buffer path: the dispatch
+  pushes their address, and the command buffer keeps them until it retires. `None` unbinds the
+  slot, which then reads the nil buffer's zeros, a null table.
 - `set_stage_in_region` (`setStageInRegion:`) sets the region a kernel's `[[grid_origin]]` and
   `[[grid_size]]` read, pushed at each later dispatch. A dispatch of a kernel that reads it on an
   encoder that set none is `Gap::NoStageInRegion`: what Metal's kernel reads then is not
@@ -3201,6 +3210,31 @@ process, the device's blobs removed, created the pipeline from the entry alone i
 with the entry removed too, the make was refused unfilled. A create with the flag through an empty
 cache is answered compile-required on both.
 
+### Visible-function tables
+
+- `ComputePipelineState::function_handle` is `functionHandleWithFunction:`: the handle of a
+  function the descriptor's `linked` lists in `functions` or `binary_functions`, the
+  translator's `FunctionHandle`, numbered as `LinkedFunctions::function_handle` numbers them;
+  `None`, Metal's nil, for a private function or one the state does not link.
+- `ComputePipelineState::new_visible_function_table` is `newVisibleFunctionTableWithDescriptor:`
+  (`VisibleFunctionTableDescriptor::function_count`): a table of null entries, its words laid out
+  as the translator states (`bind::function_table_header`, then one word per entry at
+  `bind::function_table_entry_offset`) in a Shared block of its own, which the runtime writes
+  through its mapping. `VisibleFunctionTable::set_function` and `set_functions`
+  (`setFunction:atIndex:`, `setFunctions:withRange:`) write the handles' words there, so a
+  dispatch calls the entries as they stand when it runs: an entry set after the dispatch is
+  encoded and before its command buffer is committed is the one it calls. An index at or past the
+  table's size is `Refusal::FunctionTableIndex`, and nothing is written. `gpu_resource_id`
+  (`gpuResourceID`) is the device address of the words.
+- A call through an entry calls the function with that word among the linked functions of the
+  dispatch's state; a null entry, a table of no entries and an unbound slot are what the kernel's
+  `is_null_visible_function_table`, `size` and null-pointer checks read. A table or handle another
+  state answered calls whichever function has the word in the dispatch's state, or nothing, and
+  yields zero.
+- The device test `function_tables` dispatches through tables of two orders, one with a null
+  entry, one of no entries, an unbound slot and an entry set after encoding, and compares every
+  word the kernel writes.
+
 ### Known gaps of pipeline states
 
 - A driver's create of a state's main pipeline can fail after the state has answered, where Metal
@@ -3391,11 +3425,17 @@ cache is answered compile-required on both.
   layout and its pipeline cache cost nothing measurable there. The cost is paid once per driver
   cache: the driver keeps compiled pipelines across processes, and the same modules compiled again
   in a new process took 45 to 48 µs.
-- A kernel that reads anything the encoder does not supply yet, a function table, or a sampler or
-  texture state the translator would take from the bound object rather than from its resource ID,
-  is refused (`Gap::KernelInput`, whose `KernelInputKind` names what the runtime found: `Slot` for
-  a function table). So is a state for indirect command buffers (`Gap::IndirectCommandBuffers`,
-  `IndirectCommandsKind::ComputeCommands`).
+- A kernel that reads anything the encoder does not supply yet, an intersection-function table, a
+  visible-function table an argument buffer holds, or a sampler or texture state the translator
+  would take from the bound object rather than from its resource ID, is refused
+  (`Gap::KernelInput`, whose `KernelInputKind` names what the runtime found: `Slot` for an
+  intersection-function table). So is a state for indirect command buffers
+  (`Gap::IndirectCommandBuffers`, `IndirectCommandsKind::ComputeCommands`).
+- A visible-function table's words take a Shared block of their own, 64 KiB at the least, for a
+  table of any size.
+- A state whose kernel the consumer compiled (`StageSource::Compiled`) holds no linked functions
+  and answers no handle (`function_handle` is `None` for every function), so its tables hold only
+  null entries.
 - Three forms of a kernel's `[[stage_in]]` are refused, each as `Gap::StageIn` naming its
   `StageInKind`: `set_stage_in_region_with_indirect_buffer`
   (`setStageInRegionWithIndirectBuffer:indirectBufferOffset:`, a region the GPU reads),

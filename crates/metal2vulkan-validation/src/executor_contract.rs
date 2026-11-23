@@ -801,8 +801,8 @@ pub fn engine_source_requirements(reflection: &ShaderInterface) -> BTreeSet<Tool
 /// ([`depth_range::depth_range_requirement`]), and so are an indexed draw past its index buffer
 /// (its out-of-bounds target, [`ToolingRequirement::IndexBufferPastEnd`]) and a depth/stencil
 /// attachment of both aspects ([`ToolingRequirement::SeparateDepthStencil`]). So are the families
-/// the runtime builds no call for, or refuses at creation on every device: a kernel's function
-/// table, explicit imageblock, acceleration structure or stage inputs, a sparse texture, a
+/// the runtime builds no call for, or refuses at creation on every device: a kernel's explicit
+/// imageblock, acceleration structure or stage inputs, a sparse texture, a
 /// fragment function's imageblock, a rasterization-rate map, a vertex buffer's dynamic stride, an indirect command buffer of any form but kernel-encoded indexed
 /// draws that inherit the pipeline state and bind their own buffers (its compute commands, its
 /// other draw types, its other inheritance, or a command the host encodes), and a pipeline state
@@ -872,10 +872,6 @@ pub fn case_requirements(case: &AuthoredCase) -> BTreeSet<ToolingRequirement> {
                         && attachment.initial_stencil_b64.is_some()
                 }),
             ToolingRequirement::SeparateDepthStencil,
-        ),
-        (
-            kernel && !case.visible_function_tables.is_empty(),
-            ToolingRequirement::KernelFunctionTable,
         ),
         (
             kernel && case.imageblock.is_some(),
@@ -3003,15 +2999,15 @@ entry:
         let mut fragment = traced.clone();
         fragment.stage = Stage::Fragment;
         only(&fragment, ToolingRequirement::RenderAccelerationStructure);
-        // A function table is the runtime's limit, a kernel's and a vertex or fragment
-        // function's each by its own name.
+        // A kernel's function table is no limit (the runtime makes and binds it); a vertex or
+        // fragment function's is the runtime's.
         let mut tabled = kernel.clone();
         tabled.visible_function_tables = vec![crate::case::FunctionTableResource {
             binding: 1,
             size: 1,
             entries: Vec::new(),
         }];
-        only(&tabled, ToolingRequirement::KernelFunctionTable);
+        assert!(case_requirements(&tabled).is_empty());
         for stage in [Stage::Vertex, Stage::Fragment] {
             let mut drawn = tabled.clone();
             drawn.stage = stage;

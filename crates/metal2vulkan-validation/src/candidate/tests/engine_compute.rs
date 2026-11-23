@@ -419,6 +419,7 @@ fn run_on_runtime(
         crate::candidate::engine::RuntimeKernel {
             bitcode,
             linked,
+            tables: &[],
             buffers: &case.buffers,
             texture_usages: &case
                 .textures

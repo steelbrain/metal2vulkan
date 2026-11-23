@@ -920,8 +920,8 @@ MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setBuffer:offset:attr
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setBuffers:offsets:attributeStrides:withRange:		M			a bind with a per-bind stride, which stage-in and vertex fetch read	M	encoder-calls
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setBufferOffset:attributeStride:atIndex:		M			a bind with a per-bind stride, which stage-in and vertex fetch read	M	encoder-calls
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setBytes:length:attributeStride:atIndex:		M			a bind with a per-bind stride, which stage-in and vertex fetch read	M	encoder-calls
-MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setVisibleFunctionTable:atBufferIndex:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
-MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setVisibleFunctionTables:withBufferRange:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
+MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setVisibleFunctionTable:atBufferIndex:		I	runtime	ComputeCommandEncoder::set_visible_function_table			
+MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setVisibleFunctionTables:withBufferRange:		I	runtime	ComputeCommandEncoder::set_visible_function_table	a loop of it		
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setIntersectionFunctionTable:atBufferIndex:		O			ray tracing		
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setIntersectionFunctionTables:withBufferRange:		O			ray tracing		
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setAccelerationStructure:atBufferIndex:		O			ray tracing		
@@ -987,8 +987,8 @@ MTLComputePipeline.h	MTLComputePipelineState	protocol	MTLComputePipelineState		I
 MTLComputePipeline.h	MTLComputePipelineState	property	label		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLComputePipeline.h	MTLComputePipelineState	property	reflection		M			the state's reflection after creation (macOS 26), nil for a state a device made, set only by Metal 4's compiler	S	reflection
 MTLComputePipeline.h	MTLComputePipelineState	method	functionHandleWithName:		M			a handle by function name	S	function-handles
-MTLComputePipeline.h	MTLComputePipelineState	method	functionHandleWithBinaryFunction:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
-MTLComputePipeline.h	MTLComputePipelineState	method	newComputePipelineStateWithBinaryFunctions:error:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
+MTLComputePipeline.h	MTLComputePipelineState	method	functionHandleWithBinaryFunction:		M			function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`)	L	function-tables
+MTLComputePipeline.h	MTLComputePipelineState	method	newComputePipelineStateWithBinaryFunctions:error:		M			function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`)	L	function-tables
 MTLComputePipeline.h	MTLComputePipelineState	property	device		M			a query or call metal2vulkan-runtime does not answer	S	queries
 MTLComputePipeline.h	MTLComputePipelineState	property	maxTotalThreadsPerThreadgroup		I	runtime	ComputePipelineState::max_total_threads_per_threadgroup			
 MTLComputePipeline.h	MTLComputePipelineState	property	threadExecutionWidth		I	runtime	ComputePipelineState::thread_execution_width			
@@ -996,9 +996,9 @@ MTLComputePipeline.h	MTLComputePipelineState	property	staticThreadgroupMemoryLen
 MTLComputePipeline.h	MTLComputePipelineState	method	imageblockMemoryLengthForDimensions:		I	runtime	ComputePipelineState::imageblock_memory_length_for_dimensions			
 MTLComputePipeline.h	MTLComputePipelineState	property	supportIndirectCommandBuffers		I	runtime	ComputePipelineState::support_indirect_command_buffers			
 MTLComputePipeline.h	MTLComputePipelineState	property	gpuResourceID		M			a query or call metal2vulkan-runtime does not answer	S	queries
-MTLComputePipeline.h	MTLComputePipelineState	method	functionHandleWithFunction:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
-MTLComputePipeline.h	MTLComputePipelineState	method	newComputePipelineStateWithAdditionalBinaryFunctions:error:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
-MTLComputePipeline.h	MTLComputePipelineState	method	newVisibleFunctionTableWithDescriptor:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
+MTLComputePipeline.h	MTLComputePipelineState	method	functionHandleWithFunction:		I	runtime	ComputePipelineState::function_handle			
+MTLComputePipeline.h	MTLComputePipelineState	method	newComputePipelineStateWithAdditionalBinaryFunctions:error:		M			function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`)	L	function-tables
+MTLComputePipeline.h	MTLComputePipelineState	method	newVisibleFunctionTableWithDescriptor:		I	runtime	ComputePipelineState::new_visible_function_table			
 MTLComputePipeline.h	MTLComputePipelineState	method	newIntersectionFunctionTableWithDescriptor:		O			ray tracing		
 MTLComputePipeline.h	MTLComputePipelineState	property	shaderValidation		M			shader validation (not scheduled)	L	shadervalidation
 MTLComputePipeline.h	MTLComputePipelineState	property	requiredThreadsPerThreadgroup		I	runtime	ComputePipelineState::required_threads_per_threadgroup			
@@ -1150,8 +1150,8 @@ MTLDevice.h	MTLDevice	method	supportsCounterSampling:		M			the runtime samples n
 MTLDevice.h	MTLDevice	method	supportsVertexAmplificationCount:		M			a query or call metal2vulkan-runtime does not answer	S	queries
 MTLDevice.h	MTLDevice	property	supportsDynamicLibraries		M			capability query	S	queries
 MTLDevice.h	MTLDevice	property	supportsRenderDynamicLibraries		M			capability query	S	queries
-MTLDevice.h	MTLDevice	method	newDynamicLibrary:error:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
-MTLDevice.h	MTLDevice	method	newDynamicLibraryWithURL:error:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
+MTLDevice.h	MTLDevice	method	newDynamicLibrary:error:		M			function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`)	L	function-tables
+MTLDevice.h	MTLDevice	method	newDynamicLibraryWithURL:error:		M			function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`)	L	function-tables
 MTLDevice.h	MTLDevice	method	newBinaryArchiveWithDescriptor:error:		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLDevice.h	MTLDevice	property	supportsPlacementSparse		M			capability query; the runtime makes no placement-sparse buffers, so NO	S	queries
 MTLDevice.h	MTLDevice	property	supportsRaytracing		M			capability query: the runtime builds no ray tracing, so NO is its answer (the query, not ray tracing)	S	queries
@@ -1160,7 +1160,7 @@ MTLDevice.h	MTLDevice	method	newAccelerationStructureWithSize:		O			ray tracing
 MTLDevice.h	MTLDevice	method	newAccelerationStructureWithDescriptor:		O			ray tracing		
 MTLDevice.h	MTLDevice	method	heapAccelerationStructureSizeAndAlignWithSize:		O			ray tracing		
 MTLDevice.h	MTLDevice	method	heapAccelerationStructureSizeAndAlignWithDescriptor:		O			ray tracing		
-MTLDevice.h	MTLDevice	property	supportsFunctionPointers		M			capability query	S	queries
+MTLDevice.h	MTLDevice	property	supportsFunctionPointers		I	runtime	Device::supports_function_pointers			
 MTLDevice.h	MTLDevice	property	supportsFunctionPointersFromRender		M			capability query	S	queries
 MTLDevice.h	MTLDevice	property	supportsRaytracingFromRender		M			capability query: NO (as `supportsRaytracing`)	S	queries
 MTLDevice.h	MTLDevice	property	supportsPrimitiveMotionBlur		M			capability query: NO (as `supportsRaytracing`)	S	queries
@@ -1200,11 +1200,11 @@ MTLDrawable.h	MTLDrawable	method	presentAfterMinimumDuration:		O			presentation:
 MTLDrawable.h	MTLDrawable	method	addPresentedHandler:		O			presentation: no `CAMetalLayer` or drawables; the consumer presents the Vulkan image		
 MTLDrawable.h	MTLDrawable	property	presentedTime		O			presentation: no `CAMetalLayer` or drawables; the consumer presents the Vulkan image		
 MTLDrawable.h	MTLDrawable	property	drawableID		O			presentation: no `CAMetalLayer` or drawables; the consumer presents the Vulkan image		
-MTLDynamicLibrary.h	MTLDynamicLibrary	protocol	MTLDynamicLibrary		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
+MTLDynamicLibrary.h	MTLDynamicLibrary	protocol	MTLDynamicLibrary		M			function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`)	L	function-tables
 MTLDynamicLibrary.h	MTLDynamicLibrary	property	label		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
-MTLDynamicLibrary.h	MTLDynamicLibrary	property	device		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
-MTLDynamicLibrary.h	MTLDynamicLibrary	property	installName		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
-MTLDynamicLibrary.h	MTLDynamicLibrary	method	serializeToURL:error:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
+MTLDynamicLibrary.h	MTLDynamicLibrary	property	device		M			function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`)	L	function-tables
+MTLDynamicLibrary.h	MTLDynamicLibrary	property	installName		M			function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`)	L	function-tables
+MTLDynamicLibrary.h	MTLDynamicLibrary	method	serializeToURL:error:		M			function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`)	L	function-tables
 MTLEvent.h	MTLEvent	protocol	MTLEvent		I	runtime	Event			
 MTLEvent.h	MTLEvent	property	device		I	runtime	Event::device			
 MTLEvent.h	MTLEvent	property	label		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
@@ -1236,10 +1236,10 @@ MTLFunctionDescriptor.h	MTLFunctionDescriptor	property	constantValues		I	transla
 MTLFunctionDescriptor.h	MTLFunctionDescriptor	property	options		M			a function's options (`MTLFunctionOptions`)	S	library-objects
 MTLFunctionDescriptor.h	MTLFunctionDescriptor	property	binaryArchives		M			binary archives searched for one function's compile (`PipelineOptions.binary_archives` serves pipelines)	S	archive
 MTLFunctionDescriptor.h	MTLIntersectionFunctionDescriptor	class	MTLIntersectionFunctionDescriptor		O			ray tracing		
-MTLFunctionHandle.h	MTLFunctionHandle	protocol	MTLFunctionHandle		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
+MTLFunctionHandle.h	MTLFunctionHandle	protocol	MTLFunctionHandle		I	runtime	FunctionHandle			
 MTLFunctionHandle.h	MTLFunctionHandle	property	functionType		M			a handle's function type (the runtime's `FunctionHandle` names its function)	S	function-handles
-MTLFunctionHandle.h	MTLFunctionHandle	property	name		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
-MTLFunctionHandle.h	MTLFunctionHandle	property	device		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
+MTLFunctionHandle.h	MTLFunctionHandle	property	name		M			the runtime's `FunctionHandle` is the word a table entry holds; the consumer keeps the function it asked of	S	function-handles
+MTLFunctionHandle.h	MTLFunctionHandle	property	device		M			the runtime's `FunctionHandle` is the word a table entry holds; the consumer keeps the function it asked of	S	function-handles
 MTLFunctionHandle.h	MTLFunctionHandle	property	gpuResourceID		M			a handle's resource ID	S	function-handles
 MTLFunctionLog.h	MTLLogContainer	protocol	MTLLogContainer		M			shader logging	M	logging
 MTLFunctionLog.h	MTLFunctionLogDebugLocation	protocol	MTLFunctionLogDebugLocation		M			shader logging	M	logging
@@ -1564,8 +1564,8 @@ MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexSamplerState:a
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexSamplerStates:withRange:		I	runtime	RenderCommandEncoder::set_vertex_sampler_state	a loop of it		
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexSamplerState:lodMinClamp:lodMaxClamp:atIndex:		I	runtime	RenderCommandEncoder::set_vertex_sampler_state_with_lod_clamps			
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexSamplerStates:lodMinClamps:lodMaxClamps:withRange:		I	runtime	RenderCommandEncoder::set_vertex_sampler_state_with_lod_clamps	a loop of it		
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexVisibleFunctionTable:atBufferIndex:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexVisibleFunctionTables:withBufferRange:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexVisibleFunctionTable:atBufferIndex:		M			function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`)	L	function-tables
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexVisibleFunctionTables:withBufferRange:		M			function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`)	L	function-tables
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexIntersectionFunctionTable:atBufferIndex:		O			ray tracing		
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexIntersectionFunctionTables:withBufferRange:		O			ray tracing		
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexAccelerationStructure:atBufferIndex:		O			ray tracing		
@@ -1590,8 +1590,8 @@ MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setFragmentSamplerState
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setFragmentSamplerStates:withRange:		I	runtime	RenderCommandEncoder::set_fragment_sampler_state	a loop of it		
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setFragmentSamplerState:lodMinClamp:lodMaxClamp:atIndex:		I	runtime	RenderCommandEncoder::set_fragment_sampler_state_with_lod_clamps			
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setFragmentSamplerStates:lodMinClamps:lodMaxClamps:withRange:		I	runtime	RenderCommandEncoder::set_fragment_sampler_state_with_lod_clamps	a loop of it		
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setFragmentVisibleFunctionTable:atBufferIndex:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setFragmentVisibleFunctionTables:withBufferRange:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setFragmentVisibleFunctionTable:atBufferIndex:		M			function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`)	L	function-tables
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setFragmentVisibleFunctionTables:withBufferRange:		M			function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`)	L	function-tables
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setFragmentIntersectionFunctionTable:atBufferIndex:		O			ray tracing		
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setFragmentIntersectionFunctionTables:withBufferRange:		O			ray tracing		
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setFragmentAccelerationStructure:atBufferIndex:		O			ray tracing		
@@ -1659,8 +1659,8 @@ MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileSamplerState:atI
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileSamplerStates:withRange:		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileSamplerState:lodMinClamp:lodMaxClamp:atIndex:		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileSamplerStates:lodMinClamps:lodMaxClamps:withRange:		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileVisibleFunctionTable:atBufferIndex:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileVisibleFunctionTables:withBufferRange:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileVisibleFunctionTable:atBufferIndex:		M			function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`)	L	function-tables
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileVisibleFunctionTables:withBufferRange:		M			function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`)	L	function-tables
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileIntersectionFunctionTable:atBufferIndex:		O			ray tracing		
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileIntersectionFunctionTables:withBufferRange:		O			ray tracing		
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileAccelerationStructure:atBufferIndex:		O			ray tracing		
@@ -1792,17 +1792,17 @@ MTLRenderPipeline.h	MTLRenderPipelineDescriptor	property	maxVertexCallStackDepth
 MTLRenderPipeline.h	MTLRenderPipelineDescriptor	property	maxFragmentCallStackDepth		I	translator	RenderPipelineDescriptor.max_fragment_call_stack_depth			
 MTLRenderPipeline.h	MTLRenderPipelineDescriptor	method	reset		I	translator	RenderPipelineDescriptor::new	a plain value: assign a new one		
 MTLRenderPipeline.h	MTLRenderPipelineDescriptor	property	shaderValidation		M			shader validation (not scheduled)	L	shadervalidation
-MTLRenderPipeline.h	MTLRenderPipelineFunctionsDescriptor	class	MTLRenderPipelineFunctionsDescriptor		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
-MTLRenderPipeline.h	MTLRenderPipelineFunctionsDescriptor	property	vertexAdditionalBinaryFunctions		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
-MTLRenderPipeline.h	MTLRenderPipelineFunctionsDescriptor	property	fragmentAdditionalBinaryFunctions		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
-MTLRenderPipeline.h	MTLRenderPipelineFunctionsDescriptor	property	tileAdditionalBinaryFunctions		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
+MTLRenderPipeline.h	MTLRenderPipelineFunctionsDescriptor	class	MTLRenderPipelineFunctionsDescriptor		M			function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`)	L	function-tables
+MTLRenderPipeline.h	MTLRenderPipelineFunctionsDescriptor	property	vertexAdditionalBinaryFunctions		M			function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`)	L	function-tables
+MTLRenderPipeline.h	MTLRenderPipelineFunctionsDescriptor	property	fragmentAdditionalBinaryFunctions		M			function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`)	L	function-tables
+MTLRenderPipeline.h	MTLRenderPipelineFunctionsDescriptor	property	tileAdditionalBinaryFunctions		M			function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`)	L	function-tables
 MTLRenderPipeline.h	MTLRenderPipelineState	protocol	MTLRenderPipelineState		I	runtime	RenderPipelineState			
 MTLRenderPipeline.h	MTLRenderPipelineState	property	label		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLRenderPipeline.h	MTLRenderPipelineState	property	device		M			a query or call metal2vulkan-runtime does not answer	S	queries
 MTLRenderPipeline.h	MTLRenderPipelineState	property	reflection		M			the state's reflection after creation (macOS 26), nil for a state a device made, set only by Metal 4's compiler	S	reflection
 MTLRenderPipeline.h	MTLRenderPipelineState	method	functionHandleWithName:stage:		M			a handle by function name	S	function-handles
-MTLRenderPipeline.h	MTLRenderPipelineState	method	functionHandleWithBinaryFunction:stage:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
-MTLRenderPipeline.h	MTLRenderPipelineState	method	newRenderPipelineStateWithBinaryFunctions:error:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
+MTLRenderPipeline.h	MTLRenderPipelineState	method	functionHandleWithBinaryFunction:stage:		M			function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`)	L	function-tables
+MTLRenderPipeline.h	MTLRenderPipelineState	method	newRenderPipelineStateWithBinaryFunctions:error:		M			function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`)	L	function-tables
 MTLRenderPipeline.h	MTLRenderPipelineState	method	newRenderPipelineDescriptorForSpecialization		M			pipeline specialization (macOS 26): a descriptor to finish an unspecialized state	M	specialization
 MTLRenderPipeline.h	MTLRenderPipelineState	property	maxTotalThreadsPerThreadgroup		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
 MTLRenderPipeline.h	MTLRenderPipelineState	property	threadgroupSizeMatchesTileSize		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
@@ -1815,10 +1815,10 @@ MTLRenderPipeline.h	MTLRenderPipelineState	property	objectThreadExecutionWidth		
 MTLRenderPipeline.h	MTLRenderPipelineState	property	meshThreadExecutionWidth		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
 MTLRenderPipeline.h	MTLRenderPipelineState	property	maxTotalThreadgroupsPerMeshGrid		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
 MTLRenderPipeline.h	MTLRenderPipelineState	property	gpuResourceID		M			a query or call metal2vulkan-runtime does not answer	S	queries
-MTLRenderPipeline.h	MTLRenderPipelineState	method	functionHandleWithFunction:stage:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
-MTLRenderPipeline.h	MTLRenderPipelineState	method	newVisibleFunctionTableWithDescriptor:stage:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
+MTLRenderPipeline.h	MTLRenderPipelineState	method	functionHandleWithFunction:stage:		M			function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`)	L	function-tables
+MTLRenderPipeline.h	MTLRenderPipelineState	method	newVisibleFunctionTableWithDescriptor:stage:		M			function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`)	L	function-tables
 MTLRenderPipeline.h	MTLRenderPipelineState	method	newIntersectionFunctionTableWithDescriptor:stage:		O			ray tracing		
-MTLRenderPipeline.h	MTLRenderPipelineState	method	newRenderPipelineStateWithAdditionalBinaryFunctions:error:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
+MTLRenderPipeline.h	MTLRenderPipelineState	method	newRenderPipelineStateWithAdditionalBinaryFunctions:error:		M			function tables of the render stages, binary functions and dynamic libraries; a draw's function that reads a function table is refused (`Gap::DrawInput`)	L	function-tables
 MTLRenderPipeline.h	MTLRenderPipelineState	property	shaderValidation		M			shader validation (not scheduled)	L	shadervalidation
 MTLRenderPipeline.h	MTLRenderPipelineState	property	requiredThreadsPerTileThreadgroup		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
 MTLRenderPipeline.h	MTLRenderPipelineState	property	requiredThreadsPerObjectThreadgroup		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
@@ -2127,10 +2127,10 @@ MTLVertexDescriptor.h	MTLVertexDescriptor	class method	vertexDescriptor		I	trans
 MTLVertexDescriptor.h	MTLVertexDescriptor	property	layouts		I	translator	VertexDescriptor.layouts			
 MTLVertexDescriptor.h	MTLVertexDescriptor	property	attributes		I	translator	VertexDescriptor.attributes			
 MTLVertexDescriptor.h	MTLVertexDescriptor	method	reset		I	translator	VertexDescriptor::new	a plain value: assign a new one		
-MTLVisibleFunctionTable.h	MTLVisibleFunctionTableDescriptor	class	MTLVisibleFunctionTableDescriptor		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
-MTLVisibleFunctionTable.h	MTLVisibleFunctionTableDescriptor	class method	visibleFunctionTableDescriptor		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
-MTLVisibleFunctionTable.h	MTLVisibleFunctionTableDescriptor	property	functionCount		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
-MTLVisibleFunctionTable.h	MTLVisibleFunctionTable	protocol	MTLVisibleFunctionTable		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
-MTLVisibleFunctionTable.h	MTLVisibleFunctionTable	property	gpuResourceID		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
-MTLVisibleFunctionTable.h	MTLVisibleFunctionTable	method	setFunction:atIndex:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
-MTLVisibleFunctionTable.h	MTLVisibleFunctionTable	method	setFunctions:withRange:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
+MTLVisibleFunctionTable.h	MTLVisibleFunctionTableDescriptor	class	MTLVisibleFunctionTableDescriptor		I	runtime	VisibleFunctionTableDescriptor			
+MTLVisibleFunctionTable.h	MTLVisibleFunctionTableDescriptor	class method	visibleFunctionTableDescriptor		I	runtime	VisibleFunctionTableDescriptor::default			
+MTLVisibleFunctionTable.h	MTLVisibleFunctionTableDescriptor	property	functionCount		I	runtime	VisibleFunctionTableDescriptor.function_count			
+MTLVisibleFunctionTable.h	MTLVisibleFunctionTable	protocol	MTLVisibleFunctionTable		I	runtime	VisibleFunctionTable			
+MTLVisibleFunctionTable.h	MTLVisibleFunctionTable	property	gpuResourceID		I	runtime	VisibleFunctionTable::gpu_resource_id			
+MTLVisibleFunctionTable.h	MTLVisibleFunctionTable	method	setFunction:atIndex:		I	runtime	VisibleFunctionTable::set_function			
+MTLVisibleFunctionTable.h	MTLVisibleFunctionTable	method	setFunctions:withRange:		I	runtime	VisibleFunctionTable::set_functions			

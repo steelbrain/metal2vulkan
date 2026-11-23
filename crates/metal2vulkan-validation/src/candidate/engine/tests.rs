@@ -122,10 +122,11 @@ fn the_case_maps_or_names_the_gap() {
 
 /// A case's visible-function references are no resource gap: its function links them, each
 /// module once with the functions it supplies and its retained bitcode, as the Metal oracle links
-/// them. A kernel's visible-function table and intersection-function table, a linked intersection
-/// function and an argument-buffer intersection-function table are requirements that stop this
-/// executor ([`require_case_families`]). The linking takes the tables' entries' functions as the
-/// oracle's does.
+/// them. A kernel's visible-function table is none either: the run makes and binds it. Its
+/// intersection-function table, a linked intersection function and an argument-buffer
+/// intersection-function table are requirements that stop this executor
+/// ([`require_case_families`]). The linking takes the tables' entries' functions as the oracle's
+/// does.
 #[test]
 fn references_link_and_function_tables_are_typed_gaps() {
     use crate::case::{
@@ -203,7 +204,8 @@ fn references_link_and_function_tables_are_typed_gaps() {
         }]
     );
 
-    // A kernel's function table and intersection-function table are the runtime's limits.
+    // A kernel's visible-function table maps; its intersection-function table is the runtime's
+    // limit.
     let refused = |requirements: &[ToolingRequirement]| {
         Err(NotSupported::Requirements(
             requirements.iter().copied().collect(),
@@ -219,10 +221,8 @@ fn references_link_and_function_tables_are_typed_gaps() {
             function: "c".into(),
         }],
     }];
-    assert_eq!(
-        require_case_families(&visible),
-        refused(&[ToolingRequirement::KernelFunctionTable])
-    );
+    assert_eq!(require_case_families(&visible), Ok(()));
+    assert!(map_kernel(&visible).is_ok());
     let mut opaque = case.clone();
     opaque.intersection_function_tables = vec![IntersectionFunctionTableResource {
         binding: 2,

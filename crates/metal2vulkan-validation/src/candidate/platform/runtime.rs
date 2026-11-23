@@ -6,7 +6,9 @@
 //! options, a library and a function from the row's AIR with the case's constants and linked
 //! functions, one compute pipeline state, one Shared buffer per bound buffer and per
 //! argument-buffer buffer, each bound and argument-buffer texture and sampler as the Metal oracle
-//! makes them (`runtime_textures`), and one command buffer of one compute encoder and one
+//! makes them (`runtime_textures`), each visible-function table the state makes as the oracle
+//! makes it (`metal::platform::function_tables`: the case's size, each authored entry the handle of
+//! its linked function, the others null), and one command buffer of one compute encoder and one
 //! dispatch, waited for under the hang protocol, then read back. An argument buffer holds each
 //! member's `gpuAddress` or `gpuResourceID` at its field, written into the owner's bytes before
 //! the owner is made, as a program writes them (`engine::argument_buffers::owner_bytes`), and the
@@ -67,7 +69,7 @@ use ash::vk;
 use metal2vulkan::bind::Dispatch;
 use metal2vulkan::library::Library;
 use metal2vulkan::pipeline::{
-    ComputePipelineDescriptor, FunctionDescriptor, NumberedSampler, StageSource,
+    ComputePipelineDescriptor, FunctionDescriptor, LinkedFunction, NumberedSampler, StageSource,
 };
 use metal2vulkan_runtime as rt;
 use std::collections::BTreeMap;
@@ -465,6 +467,7 @@ fn run(
         case.creation_bound,
     )
     .map_err(ExecutorError::Failed)?;
+    let tables = function_tables(&state, case, kernel)?;
     let members = case
         .argument_buffer_buffers
         .iter()
@@ -507,7 +510,7 @@ fn run(
             device,
             device_type,
             &state,
-            (&buffers, &members, &bound),
+            (&buffers, &members, &bound, &tables),
             case,
             (dispatch, threads_per_group),
         )
@@ -654,6 +657,60 @@ pub(super) fn sampler_grant(device: &rt::Device) -> Result<rt::IndexGrant, Execu
             range.end - range.start,
         )
         .map_err(|error| runtime_error("grant the sampler indices", error))
+}
+
+/// Each visible-function table `kernel` binds, by Metal buffer index, made of `state` as the
+/// Metal oracle makes it (`metal::platform::function_tables`): `newVisibleFunctionTableWithDescriptor:`
+/// of the table's size, and `setFunction:atIndex:` of each authored entry with the handle of its
+/// linked function, made with the case's constants as the state links it
+/// ([`descriptor`]); an entry the case does not author stays null. Each linked module is decoded
+/// once.
+fn function_tables(
+    state: &rt::ComputePipelineState,
+    case: &ComputeCase,
+    kernel: &RuntimeKernel<'_>,
+) -> Result<Vec<(u32, rt::VisibleFunctionTable)>, ExecutorError> {
+    let mut libraries: BTreeMap<&str, Library> = BTreeMap::new();
+    let mut tables = Vec::new();
+    for table in kernel.tables {
+        let descriptor = rt::VisibleFunctionTableDescriptor::new(u64::from(table.size));
+        let made = (state.new_visible_function_table(&descriptor))
+            .map_err(|error| runtime_error("a visible-function table", error))?;
+        for entry in &table.entries {
+            let sha = entry.module.module_sha256.as_str();
+            let library = match libraries.entry(sha) {
+                std::collections::btree_map::Entry::Occupied(found) => found.into_mut(),
+                std::collections::btree_map::Entry::Vacant(slot) => {
+                    let module = (kernel.linked.iter())
+                        .find(|module| module.module_sha256 == sha)
+                        .ok_or_else(|| {
+                            ExecutorError::Failed(format!(
+                                "table {} entry {} names module {sha}, which the kernel does not \
+                                 link",
+                                table.binding, entry.index
+                            ))
+                        })?;
+                    slot.insert(
+                        Library::from_air(&module.bitcode)
+                            .map_err(|error| product_refusal(&error))?,
+                    )
+                }
+            };
+            let function =
+                (library.function(&entry.function)).map_err(|error| product_refusal(&error))?;
+            let linked = LinkedFunction::new(function).with_constants(case.constants.clone());
+            let handle = state.function_handle(&linked).ok_or_else(|| {
+                ExecutorError::Failed(format!(
+                    "the state answers no handle for linked function {}",
+                    entry.function
+                ))
+            })?;
+            (made.set_function(Some(handle), entry.index))
+                .map_err(|error| runtime_error("a visible-function table's entry", error))?;
+        }
+        tables.push((table.binding, made));
+    }
+    Ok(tables)
 }
 
 /// The case's `MTLComputePipelineDescriptor` as the Metal oracle makes it
@@ -887,17 +944,18 @@ impl Placed {
     }
 }
 
-/// Encode `case`'s dispatch of `state` over `buffers` and `bound`'s textures and samplers in one
-/// command buffer, commit it and wait until it has retired, under the hang protocol; a command
-/// buffer that did not complete fails the run.
+/// Encode `case`'s dispatch of `state` over `buffers`, `bound`'s textures and samplers and
+/// `tables` in one command buffer, commit it and wait until it has retired, under the hang
+/// protocol; a command buffer that did not complete fails the run.
 fn dispatched(
     device: &rt::Device,
     device_type: DeviceType,
     state: &rt::ComputePipelineState,
-    (buffers, members, bound): (
+    (buffers, members, bound, tables): (
         &BTreeMap<u32, Placed>,
         &BTreeMap<FieldKey, Placed>,
         &runtime_textures::Bound,
+        &[(u32, rt::VisibleFunctionTable)],
     ),
     case: &ComputeCase,
     (dispatch, threads_per_group): (rt::Dispatch, [u32; 3]),
@@ -928,6 +986,11 @@ fn dispatched(
                 encoder
                     .set_sampler_state(Some(sampler), index)
                     .map_err(fail("a sampler"))?;
+            }
+            for (index, table) in tables {
+                encoder
+                    .set_visible_function_table(Some(table), *index)
+                    .map_err(fail("a visible-function table"))?;
             }
             let used = members
                 .values()
