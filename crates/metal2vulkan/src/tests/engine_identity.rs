@@ -786,6 +786,122 @@ fn an_integer_write_saturates_to_the_pushed_channel_widths() {
     }
 }
 
+/// A kernel over a `2 × 2 × 6` grid writing `(x, y, face, 7)` at texel `(x, y)` of face `z` of
+/// its `texturecube<uint, write>` slot 0 and of cube 1 of its `texturecube_array<uint, write>`
+/// slot 1, and storing slot 0's width and slot 1's cube count to words 0 and 1 of `out`
+/// (buffer 2).
+const CUBE_FACES_KERNEL: &str = "define void @cf(ptr addrspace(1) %c, ptr addrspace(1) %a, ptr addrspace(1) noundef \"air-buffer-no-alias\" %out, <3 x i32> noundef %tid) {\n\
+entry:\n\
+  %xy = shufflevector <3 x i32> %tid, <3 x i32> poison, <2 x i32> <i32 0, i32 1>\n\
+  %x = extractelement <3 x i32> %tid, i64 0\n\
+  %y = extractelement <3 x i32> %tid, i64 1\n\
+  %f = extractelement <3 x i32> %tid, i64 2\n\
+  %v0 = insertelement <4 x i32> <i32 0, i32 0, i32 0, i32 7>, i32 %x, i64 0\n\
+  %v1 = insertelement <4 x i32> %v0, i32 %y, i64 1\n\
+  %v = insertelement <4 x i32> %v1, i32 %f, i64 2\n\
+  tail call void @air.write_texture_cube.u.v4i32(ptr addrspace(1) %c, <2 x i32> %xy, i32 %f, <4 x i32> %v, i32 0, i32 2)\n\
+  tail call void @air.write_texture_cube_array.u.v4i32(ptr addrspace(1) %a, <2 x i32> %xy, i32 %f, i32 1, <4 x i32> %v, i32 0, i32 2)\n\
+  %w = tail call i32 @air.get_width_texture_cube(ptr addrspace(1) %c, i32 0)\n\
+  %n = tail call i32 @air.get_array_size_texture_cube_array(ptr addrspace(1) %a)\n\
+  store i32 %w, ptr addrspace(1) %out, align 4\n\
+  %p = getelementptr inbounds i32, ptr addrspace(1) %out, i64 1\n\
+  store i32 %n, ptr addrspace(1) %p, align 4\n\
+  ret void\n\
+}\n\n\
+declare void @air.write_texture_cube.u.v4i32(ptr addrspace(1), <2 x i32>, i32, <4 x i32>, i32, i32)\n\
+declare void @air.write_texture_cube_array.u.v4i32(ptr addrspace(1), <2 x i32>, i32, i32, <4 x i32>, i32, i32)\n\
+declare i32 @air.get_width_texture_cube(ptr addrspace(1), i32)\n\
+declare i32 @air.get_array_size_texture_cube_array(ptr addrspace(1))\n\n\
+!air.kernel = !{!0}\n!air.version = !{!4}\n!air.language_version = !{!5}\n\
+!0 = !{ptr @cf, !1, !2}\n!1 = !{}\n!2 = !{!6, !7, !8, !3}\n\
+!6 = !{i32 0, !\"air.texture\", !\"air.location_index\", i32 0, i32 1, !\"air.write\", !\"air.arg_type_name\", !\"texturecube<uint, write>\", !\"air.arg_name\", !\"c\"}\n\
+!7 = !{i32 1, !\"air.texture\", !\"air.location_index\", i32 1, i32 1, !\"air.write\", !\"air.arg_type_name\", !\"texturecube_array<uint, write>\", !\"air.arg_name\", !\"a\"}\n\
+!8 = !{i32 2, !\"air.buffer\", !\"air.location_index\", i32 2, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"out\"}\n\
+!3 = !{i32 3, !\"air.thread_position_in_grid\", !\"air.arg_type_name\", !\"uint3\", !\"air.arg_name\", !\"tid\"}\n\
+!4 = !{i32 2, i32 8, i32 0}\n!5 = !{!\"Metal\", i32 4, i32 0, i32 0}\n";
+
+/// A storage cube or cube array slot written by face is the element of the 2D-array storage
+/// class at its resource ID's index, which the runtime holds as the 2D-array view of the
+/// texture's faces (layer `6 · cube + face`): no view shape is stated, the writes land on those
+/// layers, and the width and the cube count are the view's.
+#[test]
+fn a_storage_cube_written_by_face_is_the_2d_array_element_of_its_faces() {
+    let Some(bc) = assemble_text("cf", CUBE_FACES_KERNEL) else {
+        return;
+    };
+    const L: [u32; 3] = [2, 2, 6];
+    // `c` at index 2 and `a` at index 3 of the storage array; the elements below are others.
+    const C: u32 = 2;
+    const A: u32 = 3;
+    for stem in PROFILES {
+        let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
+        let (a, plan, module) =
+            compile_kept(&bc, "cf", &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
+        assert!(
+            !(plan.facts.iter()).any(|f| matches!(f, RuntimeFact::ImageViewShape { .. })),
+            "{stem}"
+        );
+        let linked = link(&[&a], &LinkInputs::standalone(), &p).unwrap_or_else(|e| panic!("{e}"));
+        let mut classes = (linked.table.bindings.iter()).filter(|(_, b)| **b == (1, 1));
+        let (storage, _) = classes
+            .next()
+            .unwrap_or_else(|| panic!("{stem}: no storage class"));
+        assert!(classes.next().is_none(), "{stem}: two storage classes");
+        let mut push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
+        for field in &plan.push.fields {
+            let PushLoc::Push { offset } = field.loc else {
+                panic!("{stem}: {field:?} spilled");
+            };
+            let o = offset as usize;
+            match field.field {
+                PushField::SlotGuestBase(s) => {
+                    let bytes = match (s.class, s.index) {
+                        (SlotClass::Texture, 0) => resource_id(C, 0),
+                        (SlotClass::Texture, 1) => resource_id(A, 0),
+                        (SlotClass::Buffer, 2) => slot_word(OUT),
+                        _ => panic!("{stem}: unexpected slot {s:?}"),
+                    };
+                    push[o..o + 8].copy_from_slice(&bytes.to_le_bytes());
+                }
+                PushField::SlotBounds(_) => push[o..o + 8].copy_from_slice(&bounds_word(8, 0)),
+                PushField::ZeroAddress => {
+                    push[o..o + 8].copy_from_slice(&ZERO_UNMAPPED.to_le_bytes())
+                }
+                PushField::DispatchRegion => {
+                    let region = region_bytes([0; 3], L, L).expect("packs");
+                    push[o..o + 32].copy_from_slice(&region);
+                }
+                other => panic!("{stem}: unexpected push field {other:?}"),
+            }
+        }
+        let mut images: Vec<Image> = (0..C)
+            .map(|e| texture(*storage, e, [1, 1], |_, _| [0; 4], None))
+            .collect();
+        images.push(Image::new(*storage, [2, 2, 1], 6, 1, 1).at_element(C));
+        images.push(Image::new(*storage, [2, 2, 1], 12, 1, 1).at_element(A));
+        let res = Resources {
+            buffers: vec![Buffer {
+                slot: None,
+                address: Some(OUT),
+                bytes: vec![0; 8],
+            }],
+            push,
+            spec: local_size3(L),
+        };
+        let (got, images) = run_with_images(&module, &Config::default(), res, images)
+            .unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let faces: Vec<[u32; 4]> = (0..6)
+            .flat_map(|f| (0..2).flat_map(move |y| (0..2).map(move |x| [x, y, f, 7])))
+            .collect();
+        assert_eq!(images[C as usize].texels, faces, "{stem}: the cube");
+        let cubes: Vec<[u32; 4]> = std::iter::repeat_n([0; 4], 24).chain(faces).collect();
+        assert_eq!(images[A as usize].texels, cubes, "{stem}: the cube array");
+        let words: Vec<u8> = [2u32, 2].iter().flat_map(|w| w.to_le_bytes()).collect();
+        assert_eq!(got.buffers[0], words, "{stem}: width and cubes");
+    }
+}
+
 /// Set 1's fixed arrays under the identity domains: binding, descriptor type and count.
 fn identity_arrays() -> Vec<(u32, vk::DescriptorType, u32)> {
     vec![
