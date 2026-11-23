@@ -2842,6 +2842,7 @@ pub(crate) mod on_device {
                     read(&source) == from,
                     "{name}: {at} {to} {size}: the source"
                 );
+                println!("{name}: {size} bytes from {at} to {to}: each byte of the range copied");
             }
         });
     }
