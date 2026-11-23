@@ -54,6 +54,7 @@ pub(crate) mod on_device {
             fields,
             stage_in_region: false,
             private_arena: None,
+            imageblock: None,
             constants: vec![
                 (0, Constant::Size(0)),
                 (1, Constant::Size(1)),

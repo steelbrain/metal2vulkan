@@ -2855,10 +2855,10 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   (`thread_execution_width`), 32 on every device: a kernel that observes its SIMD group runs it 32
   wide, and one that does not cannot tell its width. `imageblockMemoryLengthForDimensions:`
   (`imageblock_memory_length_for_dimensions`) answers 0 for a kernel that declares no imageblock, as
-  Metal does. A kernel that reaches an imageblock has no state (`Gap::KernelInput` of
-  `KernelInputKind::RuntimeFact` naming `ImageblockSize`); one that declares an imageblock it never
-  reaches, or whose compile kept no reflection to tell, answers `Gap::ImageblockLength`, as no case
-  measures Metal's length. `requiredThreadsPerThreadgroup` (`required_threads_per_threadgroup`) is
+  Metal does; one that declares an imageblock, or whose compile kept no reflection to tell, answers
+  `Gap::ImageblockLength`: the one recording of Metal's answer for such a kernel
+  (`pipeline-facts-compute-imageblock`, 256 bytes at 8 by 4 by 3) settles no rule.
+  `requiredThreadsPerThreadgroup` (`required_threads_per_threadgroup`) is
   the descriptor's size, `[0, 0, 0]` where it set none, as the M3 recordings
   `pipeline-facts-compute-plain` and `pipeline-facts-compute-described` answer, and
   `supportIndirectCommandBuffers` (`support_indirect_command_buffers`) is false: a descriptor that
@@ -3318,15 +3318,18 @@ cache is answered compile-required on both.
   cold cache it compiles in that call, where Metal changes these with no compile: on a cold play,
   `Metrics::first_use_waits` against `Metrics::made_ahead_variants` reads what the consumer's
   pre-pass left to the encoding threads.
-- A compute kernel with an explicit imageblock has no state (`Gap::KernelInput` of
-  `KernelInputKind::RuntimeFact` naming `ImageblockSize`). The Metal Shading Language specification
+- A compute kernel with an explicit imageblock has a state, and its dispatch is refused
+  (`Gap::KernelInput` of `KernelInputKind::RuntimeFact` naming `ImageblockSize`): the extent a
+  dispatch runs is what `setImageblockWidth:height:` sets, and the compute encoder has no
+  counterpart for that call. Such a kernel that writes no memory records nothing, as any such
+  kernel's dispatch does. A pre-pass gets no key or pipeline of its dispatches (`dispatch_variant`,
+  `prepare_dispatch`), and `finish_pipeline` makes none. The Metal Shading Language specification
   supports imageblocks on macOS for Apple silicon only (sections 5.6 and 6.14), so a device that
   answers `supportsImageBlocks` NO gives a guest no imageblock to use. Over 34 recorded guest
   streams, one of them an arm64 macOS 27 boot, two such kernels are made, no dispatch binds one, and
-  no stream calls `setImageblockWidth:height:`; the compute encoder has no counterpart for that
-  call. One recording, the M3's, makes 10 states refused as `Gap::KernelInput`, the count of its
-  explicit-imageblock makes; none is dispatched (jobs m3-max-58471, m3-max-58477, m3-max-58478 and
-  m3-max-58483, and m3-max-57983 for the count).
+  no stream calls `setImageblockWidth:height:`. One recording, the M3's, makes 10 states of
+  explicit-imageblock kernels and dispatches none (jobs m3-max-58471, m3-max-58477, m3-max-58478
+  and m3-max-58483, and m3-max-57983 for the count).
 - An image-only kernel's first dispatch over a grid more than one deep at a tile no state of its
   content has run makes that tile's `VkPipeline` on the calling thread, which waits for it
   (`Metrics::first_use_waits`), through the device's pipeline cache. In each of the two recorded

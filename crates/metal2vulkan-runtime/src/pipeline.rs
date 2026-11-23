@@ -612,6 +612,11 @@ pub(crate) struct Interface {
     /// (`RuntimeFact::PrivateArena`), where its private memory passes the translator's floor: a
     /// dispatch of it takes the runtime's arena (`crate::arena`, [`FieldValue::PrivateArena`]).
     pub(crate) private_arena: Option<u32>,
+    /// The bytes of each cell of the kernel's explicit imageblock (`RuntimeFact::ImageblockSize`),
+    /// where it reaches one. Its extent is what `setImageblockWidth:height:` sets, which the
+    /// encoder does not have: the state is made, and its dispatches are refused
+    /// (`encoder::decide`).
+    pub(crate) imageblock: Option<u32>,
     /// The kernel's specialization constants: each one's id and what sets it.
     pub(crate) constants: Vec<(u32, Constant)>,
     /// The index of each threadgroup memory argument the kernel takes, in the order of
@@ -883,10 +888,12 @@ impl crate::Device {
     /// Err: [`Error::Translation`], the translator's typed refusal or a descriptor Metal refuses,
     /// naming the kernel; [`Gap::IndirectCommandBuffers`] of
     /// [`IndirectCommandsKind::ComputeCommands`] for a descriptor that sets
-    /// `supportIndirectCommandBuffers`; [`Gap::KernelInput`] for a kernel that
-    /// reads what the compute encoder does not supply yet; [`Gap::StageIn`] for a `[[stage_in]]`
-    /// attribute the kernel reads through a layout of a dynamic stride
-    /// ([`StageInKind::DynamicStride`]) or of an indexed step at a step rate past 1
+    /// `supportIndirectCommandBuffers`; [`Gap::KernelInput`] for a kernel that reads what the
+    /// compute encoder does not supply yet, but for an explicit imageblock's extent: a kernel that
+    /// reaches one is made, and its dispatches are refused
+    /// ([`ComputeCommandEncoder::dispatch_threadgroups`](crate::ComputeCommandEncoder::dispatch_threadgroups));
+    /// [`Gap::StageIn`] for a `[[stage_in]]` attribute the kernel reads through a layout of a
+    /// dynamic stride ([`StageInKind::DynamicStride`]) or of an indexed step at a step rate past 1
     /// ([`StageInKind::IndexedStepRate`]); [`Refusal::SamplerIds`] where
     /// `sampler_ids` answers another count; [`Refusal::IndicesNotGranted`] for a constexpr
     /// sampler's index; [`Limit::DeviceSamplers`](crate::Limit::DeviceSamplers);
@@ -1149,7 +1156,8 @@ impl Compiled {
     /// partial-threadgroups variant's, which runs whole grids, ragged and indirect ones alike, or
     /// the whole module's where the content has no such variant or the variant's threadgroup
     /// memory, a predicated walk's vote word with it, is past the device's (`encoder::decide`);
-    /// none where the module takes a threadgroup memory length from the encoder.
+    /// none where the module takes a threadgroup memory length from the encoder, or where
+    /// `encoder::decide` refuses the dispatch (a kernel's explicit imageblock).
     fn main_key(&self, descriptor: &ComputePipelineDescriptor) -> Option<DispatchVariant> {
         let (module, size) = match &self.form {
             Form::Tiled => (Module::Tiles, [GRID_TILE_THREADS, 1, 1]),
@@ -1480,6 +1488,7 @@ pub(crate) fn interface(
     let mut aligned = Vec::new();
     let mut vote = 0;
     let mut private_arena = None;
+    let mut imageblock = None;
     let mut own = OwnMemory::Static(pipeline.metal_info.static_threadgroup_memory_length);
     for dependency in &pipeline.dependencies {
         match dependency.fact {
@@ -1499,6 +1508,8 @@ pub(crate) fn interface(
             // Each invocation's slot of the private arena, which the encoder places
             // (`FieldValue::PrivateArena`).
             RuntimeFact::PrivateArena { slot_bytes } => private_arena = Some(slot_bytes),
+            // The explicit imageblock's extent, which no dispatch supplies.
+            RuntimeFact::ImageblockSize { cell_bytes } => imageblock = Some(cell_bytes),
             // The emulated tier's arena and scratch, in place of Metal's static part.
             RuntimeFact::SimdgroupEmulation {
                 bytes_per_simdgroup,
@@ -1701,6 +1712,9 @@ pub(crate) fn interface(
             // (true) for every dispatch: one pipeline, whose fetch reads an element past the first
             // 2^32 bytes from its bind offset as zero.
             SpecKey::StageInReach => continue,
+            // The explicit imageblock's extent, kept at the module's default (0 by 0): no
+            // dispatch runs a module that reaches an imageblock (`encoder::decide`).
+            SpecKey::ImageblockWidth | SpecKey::ImageblockHeight => continue,
             _ => return Err(KernelInputKind::Specialization),
         };
         constants.push((constant.id, set));
@@ -1747,6 +1761,7 @@ pub(crate) fn interface(
         stage_in_region: (fields.iter())
             .any(|field| matches!(field.value, FieldValue::StageInRegion)),
         private_arena,
+        imageblock,
         fields,
         constants,
         threadgroups,
@@ -1760,7 +1775,7 @@ pub(crate) fn interface(
 }
 
 /// The refusal of a kernel that reads what the compute encoder does not supply, of `kind`.
-fn gap(kind: KernelInputKind) -> Error {
+pub(crate) fn gap(kind: KernelInputKind) -> Error {
     Error::Unsupported(Gap::KernelInput { kind })
 }
 
@@ -1890,11 +1905,11 @@ impl ComputePipelineState {
     /// of the dispatch's module, workgroup size, threadgroup memory lengths and grid tiles. It
     /// returns at once where that is made, or another thread is making it: a dispatch that needs
     /// it then waits for that thread alone. It makes nothing where the dispatch would refuse its
-    /// threadgroup size, its variant or its threadgroup memory, or records nothing (a grid with no
-    /// threads, a kernel that writes no memory), and it reports no other error than a kernel's past
-    /// the stage bound: every other is the dispatch's own. What the dispatch checks of the
-    /// encoder's bindings is not checked here. A make that failed is made again by the next call
-    /// or dispatch that needs it.
+    /// threadgroup size, its variant, its threadgroup memory or its kernel's explicit imageblock,
+    /// or records nothing (a grid with no threads, a kernel that writes no memory), and it reports
+    /// no other error than a kernel's past the stage bound: every other is the dispatch's own.
+    /// What the dispatch checks of the encoder's bindings is not checked here. A make that failed
+    /// is made again by the next call or dispatch that needs it.
     ///
     /// Counted as [`Metrics::made_ahead_variants`](crate::Metrics::made_ahead_variants).
     ///
@@ -1940,10 +1955,10 @@ impl ComputePipelineState {
     /// reads false until its [`finish_pipeline`](Self::finish_pipeline), a `prepare_dispatch`
     /// call or a dispatch has made it. The key does not move.
     ///
-    /// None where the dispatch would refuse its threadgroup size, its variant or its threadgroup
-    /// memory, or records nothing (a grid with no threads, a kernel that writes no memory): where
-    /// `prepare_dispatch` makes nothing whatever was made before. It makes nothing and allocates
-    /// nothing where it answers a key.
+    /// None where the dispatch would refuse its threadgroup size, its variant, its threadgroup
+    /// memory or its kernel's explicit imageblock, or records nothing (a grid with no threads, a
+    /// kernel that writes no memory): where `prepare_dispatch` makes nothing whatever was made
+    /// before. It makes nothing and allocates nothing where it answers a key.
     pub fn dispatch_variant(
         &self,
         dispatch: Dispatch,
@@ -1983,11 +1998,11 @@ impl ComputePipelineState {
     }
 
     /// `imageblockMemoryLengthForDimensions:`: 0 for a kernel that declares no imageblock, as
-    /// Metal answers, whatever the dimensions. A kernel that reaches an imageblock has no state
-    /// here ([`Gap::KernelInput`]).
+    /// Metal answers, whatever the dimensions.
     ///
-    /// Err: [`Gap::ImageblockLength`] for a kernel that declares an imageblock it never reaches,
-    /// or whose compile kept no reflection to tell: its length is not measured against Metal's.
+    /// Err: [`Gap::ImageblockLength`] for a kernel that declares an imageblock, or whose compile
+    /// kept no reflection to tell: Metal's rule for its length is not measured (the conformance
+    /// recording `pipeline-facts-compute-imageblock` answers one extent of one kernel).
     pub fn imageblock_memory_length_for_dimensions(
         &self,
         _dimensions: [u32; 3],
@@ -2212,8 +2227,8 @@ impl Compiled {
     /// What a dispatch of `dispatch` at threadgroup size `size`, with the encoder's threadgroup
     /// memory lengths `set`, runs, decided as the dispatch decides it: its kernel, its module, its
     /// workgroup size and its kernel's threadgroup memory lengths. None where the dispatch refuses
-    /// its threadgroup size, its variant or its threadgroup memory, or records nothing (a grid
-    /// with no threads, a kernel that writes no memory).
+    /// its threadgroup size, its variant, its threadgroup memory or its kernel's explicit
+    /// imageblock, or records nothing (a grid with no threads, a kernel that writes no memory).
     fn dispatched(
         &self,
         dispatch: Dispatch,

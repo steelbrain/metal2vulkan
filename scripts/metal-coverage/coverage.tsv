@@ -932,7 +932,7 @@ MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setSamplerStates:with
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setSamplerState:lodMinClamp:lodMaxClamp:atIndex:		I	runtime	ComputeCommandEncoder::set_sampler_state			
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setSamplerStates:lodMinClamps:lodMaxClamps:withRange:		I	runtime	ComputeCommandEncoder::set_sampler_state_with_lod_clamps	a loop of it		
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setThreadgroupMemoryLength:atIndex:		I	runtime	ComputeCommandEncoder::set_threadgroup_memory_length			
-MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setImageblockWidth:height:		M			explicit imageblocks; a kernel that declares one is refused (`Gap::KernelInput`)	M	encoder-calls
+MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setImageblockWidth:height:		M			explicit imageblocks; a kernel that reaches one is made and its dispatch refused (`Gap::KernelInput`)	M	encoder-calls
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setStageInRegion:		I	runtime	ComputeCommandEncoder::set_stage_in_region			
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setStageInRegionWithIndirectBuffer:indirectBufferOffset:		I	runtime	ComputeCommandEncoder::set_stage_in_region_with_indirect_buffer	always refused: a stage-in region the GPU reads is not built (`Gap::StageIn`)		
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	dispatchThreadgroups:threadsPerThreadgroup:		I	runtime	ComputeCommandEncoder::dispatch_threadgroups			

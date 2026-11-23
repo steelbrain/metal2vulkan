@@ -209,10 +209,11 @@ pub enum ToolingRequirement {
     KernelFunctionTable,
     /// A compute kernel's explicit imageblock (`executor_contract::case_requirements`), a tile
     /// pass's tile size included. The runtime's compute encoder has no
-    /// `setImageblockWidth:height:`, and its make of a pipeline state that reaches an imageblock is
-    /// `metal2vulkan_runtime::Gap::KernelInput` of `KernelInputKind::RuntimeFact` naming
-    /// `ImageblockSize`, held on lavapipe by the runtime's device test
-    /// `tests::kernel_input::an_explicit_imageblock_kernel_is_refused_as_its_named_runtime_fact`;
+    /// `setImageblockWidth:height:`: it makes the pipeline state of a kernel that reaches an
+    /// imageblock, and refuses its dispatch as `metal2vulkan_runtime::Gap::KernelInput` of
+    /// `KernelInputKind::RuntimeFact` naming `ImageblockSize`, held on lavapipe by the runtime's
+    /// device test in `tests::kernel_input`
+    /// `an_explicit_imageblock_kernel_is_made_and_its_dispatch_refused_as_its_named_runtime_fact`;
     /// it builds no tile function. Both are known gaps its README states.
     KernelImageblock,
     /// A fragment function's imageblock, the case's cells of it

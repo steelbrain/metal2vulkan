@@ -141,8 +141,9 @@ fn a_full_subgroup_kernel_row_is_made_through_the_runtime() {
     }
 }
 
-/// A kernel with an explicit imageblock is the runtime's typed refusal, as a guest's is: its
-/// compute encoder does not set an imageblock's extent (`setImageblockWidth:height:`).
+/// A kernel with an explicit imageblock is the runtime's typed refusal at its dispatch, as a
+/// guest's is: its compute encoder does not set an imageblock's extent
+/// (`setImageblockWidth:height:`).
 #[cfg(target_os = "linux")]
 #[test]
 fn an_imageblock_kernel_row_is_the_runtimes_refusal() {

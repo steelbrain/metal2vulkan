@@ -1076,7 +1076,10 @@ pub enum Gap {
     /// `[[stage_in]]` attributes of a fixed layout stride and a pinned subgroup size are supplied.
     /// Metal's counterpart is the compute pipeline state's make
     /// (`newComputePipelineStateWithDescriptor:options:reflection:error:` and its siblings), which
-    /// makes each.
+    /// makes each. An explicit imageblock's extent is refused at the dispatch instead
+    /// (`dispatchThreadgroups:threadsPerThreadgroup:` and its siblings), the state being made:
+    /// Metal's dispatch runs the extent `setImageblockWidth:height:` set, which the encoder does
+    /// not have.
     ///
     /// Basis: ours (the encoder supplies only those).
     KernelInput {
@@ -1097,14 +1100,15 @@ pub enum Gap {
         /// The form, named where the runtime found it.
         kind: StageInKind,
     },
-    /// An imageblock length Metal answers that no case measures: a compute state's
-    /// `imageblockMemoryLengthForDimensions:` where its kernel declares an imageblock it never
-    /// reaches, or its compile kept no reflection to tell whether it declares one (a kernel that
-    /// declares none answers 0, as Metal's does); a render state's `imageblockSampleLength` and
+    /// An imageblock length Metal answers by a rule no case measures: a compute state's
+    /// `imageblockMemoryLengthForDimensions:` where its kernel declares an imageblock (one
+    /// recording answers one extent of one kernel, which settles no rule), or its
+    /// compile kept no reflection to tell whether it declares one (a kernel that declares none
+    /// answers 0, as Metal's does); a render state's `imageblockSampleLength` and
     /// `imageblockMemoryLengthForDimensions:` where a color format has no measured place in
     /// Metal's record of a pixel's colors.
     ///
-    /// Basis: ours (the length is not measured against Metal's).
+    /// Basis: ours (no case measures Metal's rule for the length).
     ImageblockLength,
     /// A dispatch whose threadgroup is not whole SIMD groups of a kernel whose tier runs each SIMD
     /// group as one subgroup of `width` threads (a pinned subgroup of 32, or the device's own
@@ -1662,10 +1666,11 @@ pub enum KernelInputKind {
     /// counterpart: it states no subgroup control.
     StageFlags,
     /// A fact of the module the encoder does not supply: a `RuntimeFact` the runtime does not
-    /// name, such as an explicit imageblock's size (`RuntimeFact::ImageblockSize`), a resource's
-    /// presence or a sampler's coordinates, or an address alignment of a slot that is not a
-    /// kernel's buffer or that is not a power of two. Metal's counterpart is the dispatch's state
-    /// the fact stands for: `setImageblockWidth:height:`, or the bound resource's own state.
+    /// name, such as a resource's presence or a sampler's coordinates, or an address alignment of
+    /// a slot that is not a kernel's buffer or that is not a power of two, at the state's make;
+    /// an explicit imageblock's size (`RuntimeFact::ImageblockSize`) at a dispatch of the state.
+    /// Metal's counterpart is the dispatch's state the fact stands for:
+    /// `setImageblockWidth:height:`, or the bound resource's own state.
     RuntimeFact {
         /// The fact's name (`RuntimeFact::name`), such as `"ImageblockSize"`.
         fact: &'static str,
@@ -1691,12 +1696,11 @@ pub enum KernelInputKind {
     /// (`DeviceProfile::push_window`, its `maxPushConstantsSize` up to 256 bytes). Metal's
     /// counterpart is the kernel's arguments, which Metal binds however many there are.
     PushBytes,
-    /// A specialization constant the runtime does not set: an explicit imageblock's width or
-    /// height, a sampler state's fields, a constant that is not 4 bytes, the threadgroup memory
-    /// length of an argument the kernel does not take, or a kernel's threadgroup memory lengths
-    /// past the 31 indices `setThreadgroupMemoryLength:atIndex:` sets. Metal's counterpart is the
-    /// state the constant stands for: `setImageblockWidth:height:`, a sampler state's descriptor,
-    /// or `setThreadgroupMemoryLength:atIndex:`.
+    /// A specialization constant the runtime does not set: a sampler state's fields, a constant
+    /// that is not 4 bytes, the threadgroup memory length of an argument the kernel does not take,
+    /// or a kernel's threadgroup memory lengths past the 31 indices
+    /// `setThreadgroupMemoryLength:atIndex:` sets. Metal's counterpart is the state the constant
+    /// stands for: a sampler state's descriptor, or `setThreadgroupMemoryLength:atIndex:`.
     Specialization,
     /// A workgroup the module fixes in a shape the runtime does not run: a subgroup multiple
     /// outside a flattened local size (a compute-derivative group), or a module that neither

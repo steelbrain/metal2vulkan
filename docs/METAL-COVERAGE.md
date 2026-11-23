@@ -1243,7 +1243,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLComputeCommandEncoder.setSamplerState:lodMinClamp:lodMaxClamp:atIndex:` | method | implemented | `ComputeCommandEncoder::set_sampler_state` (runtime) |
 | `MTLComputeCommandEncoder.setSamplerStates:lodMinClamps:lodMaxClamps:withRange:` | method | implemented | `ComputeCommandEncoder::set_sampler_state_with_lod_clamps` (runtime): a loop of it |
 | `MTLComputeCommandEncoder.setThreadgroupMemoryLength:atIndex:` | method | implemented | `ComputeCommandEncoder::set_threadgroup_memory_length` (runtime) |
-| `MTLComputeCommandEncoder.setImageblockWidth:height:` | method | missing | M: explicit imageblocks; a kernel that declares one is refused (`Gap::KernelInput`) |
+| `MTLComputeCommandEncoder.setImageblockWidth:height:` | method | missing | M: explicit imageblocks; a kernel that reaches one is made and its dispatch refused (`Gap::KernelInput`) |
 | `MTLComputeCommandEncoder.setStageInRegion:` | method | implemented | `ComputeCommandEncoder::set_stage_in_region` (runtime) |
 | `MTLComputeCommandEncoder.setStageInRegionWithIndirectBuffer:indirectBufferOffset:` | method | implemented | `ComputeCommandEncoder::set_stage_in_region_with_indirect_buffer` (runtime): always refused: a stage-in region the GPU reads is not built (`Gap::StageIn`) |
 | `MTLComputeCommandEncoder.dispatchThreadgroups:threadsPerThreadgroup:` | method | implemented | `ComputeCommandEncoder::dispatch_threadgroups` (runtime) |

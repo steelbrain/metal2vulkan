@@ -5,7 +5,7 @@ use crate::buffer::{Buffer, BufferInner, BufferObject};
 use crate::command::{Building, CommandBuffer};
 use crate::counters::Metric;
 use crate::device::Core;
-use crate::error::{Error, Gap, Limit, Refusal, StageInKind};
+use crate::error::{Error, Gap, KernelInputKind, Limit, Refusal, StageInKind};
 use crate::fence::Fence;
 use crate::floor;
 use crate::hazard::Access;
@@ -14,7 +14,7 @@ use crate::kept::{Handle, Lent, Uncounted};
 use crate::memory::BlockId;
 use crate::over::{self, Reached, Span};
 use crate::pipeline::{
-    address_word, Compiled, ComputePipelineState, FieldValue, Form, Interface, Kernel, Place,
+    address_word, gap, Compiled, ComputePipelineState, FieldValue, Form, Interface, Kernel, Place,
     Which, PUSH_STAGES, SQUARE,
 };
 use crate::record::Reach;
@@ -25,7 +25,8 @@ use ash::vk;
 use metal2vulkan::metal::format::{integer_channels_word, BICUBIC_TEXELS_UNBOUND};
 use metal2vulkan::metal::PixelFormat;
 use metal2vulkan::pipeline::{
-    grid_tile, nonuniform_region_bytes, region_bytes, DEEP_THREADGROUP, GRID_TILE_THREADS,
+    grid_tile, nonuniform_region_bytes, region_bytes, RuntimeFact, DEEP_THREADGROUP,
+    GRID_TILE_THREADS,
 };
 use std::ops::BitOr;
 use std::sync::Arc;
@@ -881,6 +882,9 @@ impl ComputeCommandEncoder {
     /// alignment, which nothing records; [`Gap::SwizzledReadWrite`]; [`Gap::BicubicTexels`];
     /// [`Limit::ThreadgroupMemory`]; [`Gap::PartialSimdgroups`] for a threadgroup that is not
     /// whole SIMD groups of a kernel whose tier needs them and that has no emulated module;
+    /// [`Gap::KernelInput`] naming `RuntimeFact::ImageblockSize` for a kernel that reaches an
+    /// explicit imageblock and writes memory: its extent is what Metal's
+    /// `setImageblockWidth:height:` sets, which this encoder does not have;
     /// [`Limit::MemoryAllocations`] where the parameter ring needs a block past the device's
     /// allocation count; [`Error::Vulkan`] where the pipeline's compile, the ring or recording
     /// fails.
@@ -1317,13 +1321,19 @@ pub(crate) fn size_checked(interface: &Interface, size: [u32; 3]) -> Result<(), 
 /// dispatch of it the variant takes. The variant is the state's module itself where its make
 /// lowered no plain module beside it (`pipeline::Partial::Alone`). An indirect dispatch states no
 /// grid in its region, so the variant runs it in the single-region form, every invocation live,
-/// as the translator's dispatch regions say (`lower::dispatch`).
+/// as the translator's dispatch regions say (`lower::dispatch`). A kernel that reaches an
+/// explicit imageblock runs nothing: its extent is `setImageblockWidth:height:`'s, which the
+/// encoder does not have ([`Gap::KernelInput`] naming `RuntimeFact::ImageblockSize`).
 pub(crate) fn decide<'a>(
     compiled: &'a Compiled,
     direct: Option<Direct>,
     size: [u32; 3],
     (set, max): (&[(u32, u32)], u32),
 ) -> Result<(Choice, Module, &'a Kernel), Error> {
+    if let Some(cell_bytes) = compiled.whole.interface.imageblock {
+        let fact = RuntimeFact::ImageblockSize { cell_bytes }.name();
+        return Err(gap(KernelInputKind::RuntimeFact { fact }));
+    }
     let choice = choose(&compiled.form, direct, size);
     let partial_threadgroups = || {
         Error::Unsupported(Gap::PartialThreadgroups {

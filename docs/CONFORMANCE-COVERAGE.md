@@ -42,7 +42,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1325 |
 | distinct SDK items the Metal leg reaches, of any status | 808 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 7988 |
+| ledger rows (a case whose gap is recorded) | 7990 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2053,8 +2053,8 @@ A facts call answers many getters at once, and a side answers or refuses each of
 | `ComputeDescriptorFacts` | 11 | 2 | `label`: `label`, 3 (3), 3; `binary_archives`: `binary_archives`, 3 (3), 3 |
 | `FunctionFacts` | 9 | 2 | `options`: `options`, 22 (22), 22; `device_is_the_cases`: `device`, 24 (24), 24 |
 | `LibraryFacts` | 4 | 1 | `device_is_the_cases`: `device`, 9 (9), 9 |
-| `ComputeStateFacts` | 6 | 3 | `label`: `label`, 7 (7), 7; `device_is_the_cases`: `device`, 7 (7), 7; `imageblock_memory_length`: `imageblock_memory_length`, 0 (0), 0 |
-| `RenderStateFacts` | 8 | 5 | `label`: `label`, 7 (7), 7; `device_is_the_cases`: `device`, 7 (7), 7; `max_total_threads_per_threadgroup`: `max_total_threads_per_threadgroup`, 6 (6), 6; `threadgroup_size_matches_tile_size`: `threadgroup_size_matches_tile_size`, 6 (6), 6; `required_threads_per_tile_threadgroup`: `required_threads_per_tile_threadgroup`, 6 (6), 6 |
+| `ComputeStateFacts` | 6 | 3 | `label`: `label`, 8 (8), 8; `device_is_the_cases`: `device`, 8 (8), 8; `imageblock_memory_length`: `imageblock_memory_length`, 0 (0), 0 |
+| `RenderStateFacts` | 8 | 5 | `label`: `label`, 8 (8), 8; `device_is_the_cases`: `device`, 8 (8), 8; `max_total_threads_per_threadgroup`: `max_total_threads_per_threadgroup`, 6 (6), 6; `threadgroup_size_matches_tile_size`: `threadgroup_size_matches_tile_size`, 6 (6), 6; `required_threads_per_tile_threadgroup`: `required_threads_per_tile_threadgroup`, 6 (6), 6 |
 | `RenderDescriptorFacts` | 30 | 2 | `label`: `label`, 3 (3), 3; `binary_archives`: `binary_archives`, 3 (3), 3 |
 | `EventRise` | 7 | 1 | `label`: `label`, 1 (1), 1 |
 
@@ -5383,6 +5383,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `library-facts-one-function` | refused: the consumer's own (device). The runtime's library and its functions are the translator's, which keep no device, so the device relation is a refused fi… |
 | `pipeline-facts-compute-plain` | refused: the consumer's own (device). rt keeps no device on a pipeline state, so the state facts' device relation is a refused field and the state's other gette… |
 | `pipeline-facts-compute-plain` | refused: the consumer's own (label). rt keeps no label on a pipeline state, so the state facts' label field is refused and the state's other getters compare. |
+| `pipeline-facts-compute-imageblock` | refused: the consumer's own (device). rt keeps no device on a pipeline state, so the state facts' device relation is a refused field and the state's other gette… |
+| `pipeline-facts-compute-imageblock` | refused: the consumer's own (label). rt keeps no label on a pipeline state, so the state facts' label field is refused and the state's other getters compare. |
 | `pipeline-facts-render-plain` | refused: the consumer's own (device). rt keeps no device on a pipeline state, so the state facts' device relation is a refused field and the state's other gette… |
 | `pipeline-facts-render-plain` | refused: the consumer's own (label). rt keeps no label on a pipeline state, so the state facts' label field is refused and the state's other getters compare. |
 | `pipeline-facts-render-plain` | refused: no stream uses it yet (libs census 11-19, m3-max-51379..51431: 0 tile pipelines). A tile getter of a drawing state: rt makes no tile render state, so i… |
@@ -8006,7 +8008,7 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `pass-start-barrier-over-buffer-sample` | rt's own gap, not the device's: the pass reads, at its own pixels, its target, a texture over a buffer, and where the device's linear image lies at the buffer's… |
 | `pass-start-barrier-over-buffer-sample` | rt's own gap, not the device's: the pass reads, at its own pixels, its target, a texture over a buffer, and where the device's linear image lies at the buffer's… |
 | `pipeline-facts-compute-described` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every pipeline descriptor's supportIndirectComma… |
-| `pipeline-facts-compute-imageblock` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no imageblock). rt refuses it (the kernel reads … |
+| `pipeline-facts-compute-imageblock` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no imageblock). Gap::ImageblockLength: rt makes … |
 | `pipeline-functions-cleared` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no render pipeline functions descriptor and no b… |
 | `pipeline-functions-emptied` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no render pipeline functions descriptor and no b… |
 | `pipeline-functions-every-stage` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no render pipeline functions descriptor and no b… |
