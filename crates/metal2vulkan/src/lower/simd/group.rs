@@ -1,6 +1,9 @@
 //! Emission of the simd strategies per tier, their operation classes, and their word bounds. See
 //! the module documentation of `lower::simd`.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use crate::air::intrinsics::{GroupOp, GroupScope};
 use crate::air::ir::{InstId, InstKind, Value};
 use crate::device::subgroup::{OpBits, Tier};
@@ -10,7 +13,7 @@ use crate::lower::emit::EmitCx;
 use crate::spirv::builder::ops::group::GroupMode;
 use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::error::{BResult, BuildError, Dangling};
-use crate::spirv::ids::{GlobalId, Value as SValue};
+use crate::spirv::ids::{BlockId, GlobalId, Value as SValue};
 use crate::spirv::ir::{
     BinOp, ConstBits, Constant, ConvOp, GlslOp, GroupArith, MemAccess, QuadDirection, ShuffleOp,
     Type, UnOp,
@@ -267,6 +270,34 @@ pub(super) struct Lane {
     /// live lane read ([`Lane::live_lanes`]): there the subgroup may be narrower than the 32 Metal
     /// lanes a read names.
     size: Option<GlobalId>,
+    /// The function's [`QuadSeen`].
+    quad: Rc<RefCell<QuadSeen>>,
+}
+
+/// What a fragment's quad operations made in one SPIR-V block, for the block's later ones
+/// ([`quad_votes`], [`quad_lanes`]): the votes of which quad lanes take part, and the four lanes of
+/// the last [`QUAD_SEEN_VALUES`] values read. Every operation of a block runs on the same active
+/// lanes, so they share these; another block starts afresh.
+#[derive(Default)]
+pub(crate) struct QuadSeen {
+    block: Option<BlockId>,
+    on: Vec<SValue>,
+    lanes: Vec<(SValue, Vec<SValue>)>,
+}
+
+/// The values a block's [`QuadSeen`] keeps the four lanes of.
+const QUAD_SEEN_VALUES: usize = 8;
+
+impl QuadSeen {
+    /// The record of block `here`, emptied first where it was another block's.
+    fn at(&mut self, here: Option<BlockId>) -> &mut QuadSeen {
+        if self.block != here {
+            self.block = here;
+            self.on.clear();
+            self.lanes.clear();
+        }
+        self
+    }
 }
 
 /// The lanes executing a partly live lane read ([`Lane::live_lanes`]): the ballot of `true`, and
@@ -541,6 +572,7 @@ pub(super) fn lane(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResult
         cluster,
         emu,
         size,
+        quad: Rc::clone(&cx.quad),
     })
 }
 
@@ -849,14 +881,21 @@ pub(super) fn fill_source(
 /// 9.31, "Helper Invocations"), and AMD's open Linux driver leaves the helpers out of a ballot even
 /// there. So a fragment reads its quad through quad instructions alone: quad lane `j` takes part
 /// when `OpGroupNonUniformQuadAnyKHR` of "the quad lane is `j`" (and of `pred`, where given)
-/// holds.
+/// holds. The votes without `pred` are the block's ([`QuadSeen`]).
 fn quad_votes(
     fb: &mut FunctionBuilder<'_>,
     ln: &Lane,
     pred: Option<SValue>,
 ) -> BResult<Vec<SValue>> {
+    let here = fb.current_block();
+    if pred.is_none() {
+        let on = ln.quad.borrow_mut().at(here).on.clone();
+        if !on.is_empty() {
+            return Ok(on);
+        }
+    }
     let q = bin_k(fb, BinOp::BitwiseAnd, ln.l, 3)?;
-    (0..4)
+    let votes = (0..4)
         .map(|j| {
             let me = bin_k(fb, BinOp::IEqual, q, j)?;
             let me = match pred {
@@ -865,7 +904,11 @@ fn quad_votes(
             };
             fb.group_quad_vote(false, me)
         })
-        .collect()
+        .collect::<BResult<Vec<_>>>()?;
+    if pred.is_none() {
+        ln.quad.borrow_mut().at(here).on.clone_from(&votes);
+    }
+    Ok(votes)
 }
 
 /// The quad's four bits of a fragment's quad `votes` ([`quad_votes`]): bit `j` is quad lane `j`'s.
@@ -881,23 +924,44 @@ fn quad_word(fb: &mut FunctionBuilder<'_>, votes: &[SValue]) -> BResult<SValue> 
 }
 
 /// A fragment's quad's four lanes of `x` ([`quad_votes`]): for each quad lane `j`, its value,
-/// `OpGroupNonUniformQuadBroadcast` from the constant lane `j`, and whether it takes part. A lane
-/// that takes no part is read as poison, which no caller's select takes (SPIR-V's `OpSelect`
-/// keeps an operand it does not select from its result).
+/// `OpGroupNonUniformQuadBroadcast` from the constant lane `j`, and whether it takes part, the
+/// block's where it read `x` already ([`QuadSeen`]). A lane that takes no part is read as poison,
+/// which no caller's select takes (SPIR-V's `OpSelect` keeps an operand it does not select from
+/// its result).
 fn quad_lanes(
     fb: &mut FunctionBuilder<'_>,
     ln: &Lane,
     x: SValue,
 ) -> BResult<Vec<(SValue, SValue)>> {
-    let q = bin_k(fb, BinOp::BitwiseAnd, ln.l, 3)?;
-    (0..4)
-        .map(|j| {
-            let me = bin_k(fb, BinOp::IEqual, q, j)?;
-            let on = fb.group_quad_vote(false, me)?;
-            let i = k(fb, j)?;
-            Ok((fb.group_quad_broadcast(x, i)?, on))
-        })
-        .collect()
+    let on = quad_votes(fb, ln, None)?;
+    let here = fb.current_block();
+    let seen = ln
+        .quad
+        .borrow_mut()
+        .at(here)
+        .lanes
+        .iter()
+        .find(|(v, _)| *v == x)
+        .map(|(_, l)| l.clone());
+    let values = match seen {
+        Some(values) => values,
+        None => {
+            let values = (0..4)
+                .map(|j| {
+                    let i = k(fb, j)?;
+                    fb.group_quad_broadcast(x, i)
+                })
+                .collect::<BResult<Vec<_>>>()?;
+            let mut quad = ln.quad.borrow_mut();
+            let lanes = &mut quad.at(here).lanes;
+            if lanes.len() == QUAD_SEEN_VALUES {
+                lanes.remove(0);
+            }
+            lanes.push((x, values.clone()));
+            values
+        }
+    };
+    Ok(values.into_iter().zip(on).collect())
 }
 
 /// A quad reduction in every subgroup tier: the quad's four lanes, each with whether it takes

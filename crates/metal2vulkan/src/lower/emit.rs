@@ -33,6 +33,7 @@
 //! without a strategy, an operand without a value) is recorded as an internal invariant error in
 //! the emitter and surfaced by [`emit_module`] in place of the builder error that aborted the walk.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
@@ -219,6 +220,9 @@ pub struct EmitCx<'a> {
     /// `stage_io::emit_draw_entry` finds before the body and before any other hook reads it
     /// (`stage_io::StageIoPlan::merged_fragment`), defined in the function's straight-line entry.
     pub(crate) merged_fragment_table: Option<SValue>,
+    /// The quad votes and lanes the open SPIR-V block's fragment quad operations made, which its
+    /// later ones share (`simd::QuadSeen`).
+    pub(crate) quad: Rc<RefCell<crate::lower::simd::QuadSeen>>,
 }
 
 /// A value that is the same wherever an invocation computes it, so a block computes it once, and
@@ -281,6 +285,7 @@ impl<'a> EmitCx<'a> {
             sampling: Default::default(),
             merged_draw: None,
             merged_fragment_table: None,
+            quad: Default::default(),
         }
     }
 
@@ -948,6 +953,7 @@ impl<'a> Emitter<'a> {
                 sampling: Default::default(),
                 merged_draw: None,
                 merged_fragment_table: None,
+                quad: Default::default(),
             },
             vars: None,
             phis,

@@ -125,8 +125,9 @@
 //! A fragment's (**Helpers** above) read lane `j` by `OpGroupNonUniformQuadBroadcast` under
 //! `OpGroupNonUniformQuadAnyKHR` of "the quad lane is `j`", take the active lanes' bits from those
 //! votes (of the predicate too, for `quad_ballot`), and vote by `OpGroupNonUniformQuadAllKHR` and
-//! `…AnyKHR`. A simdgroup's `simd_active_threads_mask` is the ballot of `true`, held as the 64-bit
-//! ballot is. A fragment's `[[thread_index_in_quadgroup]]` is the subgroup lane's low two bits
+//! `…AnyKHR`; the operations of one block, which run on the same active lanes, share the four
+//! votes and the lanes read of each value. A simdgroup's `simd_active_threads_mask` is the ballot
+//! of `true`, held as the 64-bit ballot is. A fragment's `[[thread_index_in_quadgroup]]` is the subgroup lane's low two bits
 //! ([`select_param`]), or, on a profile without the fragment quad tier, the pixel's place in its
 //! aligned 2x2 block, read from `FragCoord`.
 //!
@@ -191,6 +192,7 @@ use crate::spirv::error::BResult;
 use crate::spirv::ids::{GlobalId, Value as SValue};
 use crate::spirv::ir::{ExecMode, GroupArith, IoDir, Type};
 
+pub(crate) use group::QuadSeen;
 pub use group::{cluster_ops, direct_ops};
 
 fn not_lowered() -> Error {
