@@ -4618,9 +4618,9 @@ cache is answered compile-required on both.
   RX 550 and 5.2 µs on the XTX in a pass that loads an image the last pass moved home from the
   feedback layout with no draw between, 370.6 and 19.6 µs after the pass's clear (the table's),
   and 477.3 and 22.7 µs after a draw over the image in the pass.
-- On a device that does not report `attachmentFeedbackLoopLayout` (the UHD 630 among the lab's,
-  Windows driver 101.2145), a
-  draw reads an attachment through a copy into the image's shadow, which Metal does not make: at
+- On a device that does not report `attachmentFeedbackLoopLayout` (expected of the UHD 630
+  among the lab's, Windows driver 101.2145: no public report of that card on Windows lists
+  `VK_EXT_attachment_feedback_loop_layout`), a draw reads an attachment through a copy into the image's shadow, which Metal does not make: at
   the pass's first draw that reads the image, at the first after a memory barrier after draws,
   and where a draw reads what the shadow does not hold, the rendering ended and begun again
   around the copies and their two barriers; where the draw is the pass's first and reads only
