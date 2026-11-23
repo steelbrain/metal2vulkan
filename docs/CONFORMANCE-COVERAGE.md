@@ -10073,10 +10073,10 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `reconvergence-constructs` | llvmpipe's own answer, on no GPU: after a loop of the pixel's own trip count, the fine pair of the pixels along the full-screen triangle's diagonal, x + y = 62 … |
 | `reconvergence-constructs` | The device's own answer (rule 1): llvmpipe's trilinear sample of the R16Float mip chain at a level of detail of q + log2(1.5) answers other bits than Metal's in… |
 | `reconvergence-constructs` | The device's own answer (rule 1): llvmpipe's trilinear sample of the R16Float mip chain at a level of detail of q + log2(1.5) answers other bits than Metal's in… |
-| `reconvergence-handle-choices` | The device's own answer (rule 1): the 780M's trilinear sample of the second source, whose values 21 + n are 16 or more, is one step of a half (1/64) from Metal'… |
-| `reconvergence-handle-choices` | The device's own answer (rule 1): the 780M's trilinear sample of the second source, whose values 21 + n are 16 or more, is one step of a half (1/64) from Metal'… |
-| `reconvergence-handle-choices` | The device's own answer (rule 1): the 780M's trilinear sample of the second source, whose values 21 + n are 16 or more, is one step of a half (1/64) from Metal'… |
-| `reconvergence-handle-choices` | The device's own answer (rule 1): the 780M's trilinear sample of the second source, whose values 21 + n are 16 or more, is one step of a half (1/64) from Metal'… |
+| `reconvergence-handle-choices` | The device's own answer (rule 1): the AMD GPU's trilinear sample of the second source, whose values 21 + n are 16 or more, is one step of a half (1/64) from Met… |
+| `reconvergence-handle-choices` | The device's own answer (rule 1): the AMD GPU's trilinear sample of the second source, whose values 21 + n are 16 or more, is one step of a half (1/64) from Met… |
+| `reconvergence-handle-choices` | The device's own answer (rule 1): the AMD GPU's trilinear sample of the second source, whose values 21 + n are 16 or more, is one step of a half (1/64) from Met… |
+| `reconvergence-handle-choices` | The device's own answer (rule 1): the AMD GPU's trilinear sample of the second source, whose values 21 + n are 16 or more, is one step of a half (1/64) from Met… |
 | `reconvergence-handle-choices` | The device's own answer (rule 1): llvmpipe's trilinear sample of the R16Float mip chain at a level of detail of q + log2(1.5) answers other bits than Metal's in… |
 | `reconvergence-handle-choices` | The device's own answer (rule 1): llvmpipe's trilinear sample of the R16Float mip chain at a level of detail of q + log2(1.5) answers other bits than Metal's in… |
 | `reconvergence-handle-choices` | The device's own answer (rule 1): llvmpipe's trilinear sample of the R16Float mip chain at a level of detail of q + log2(1.5) answers other bits than Metal's in… |
