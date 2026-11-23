@@ -42,7 +42,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1325 |
 | distinct SDK items the Metal leg reaches, of any status | 811 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 7978 |
+| ledger rows (a case whose gap is recorded) | 7968 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -516,7 +516,7 @@ An implemented container no case's Metal leg touches. These are the families of 
 | cases whose Metal answer is `never_returned` | 4 |
 | modules that loosen a measured value | 17 |
 | tolerances in all | 21 |
-| modules declaring a notice (loosening no value) | 41 |
+| modules declaring a notice (loosening no value) | 42 |
 | loosenings used | `Unchecked`, `AnyOf`, `Nonzero`, `Absolute` |
 | justifications named | `Degradation`, `AcceptedDifference`, `WithoutCompression` |
 | modules forbidding a re-record | 8 |
@@ -2765,19 +2765,18 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `fetch-ordered-rgba8unorm-srgb` | The device's own answers (rule 1): a fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch, halve and sto… |
 | `format-copies-d16-to-r16` | An accepted difference: Metal documents the copy as invalid, and rt refuses it typed. Apple's copy(from:sourceSlice:sourceLevel:sourceOrigin:sourceSize:to:desti… |
 | `format-copies-d16-to-rg8` | An accepted difference: Metal documents the copy as invalid, and rt refuses it typed. Apple's copy(from:sourceSlice:sourceLevel:sourceOrigin:sourceSize:to:desti… |
-| `format-copies-d32f-to-r32f` | Known gap (rt README, Known gaps of textures): no bytes are uploaded into a 32-bit float depth (Gap::FloatDepthUpload). Metal keeps any float there; Vulkan copi… |
-| `format-copies-d32f-to-r32u` | Known gap (rt README, Known gaps of textures): no bytes are uploaded into a 32-bit float depth (Gap::FloatDepthUpload). Metal keeps any float there; Vulkan copi… |
-| `format-copies-d32f-to-rgba8` | Known gap (rt README, Known gaps of textures): no bytes are uploaded into a 32-bit float depth (Gap::FloatDepthUpload). Metal keeps any float there; Vulkan copi… |
+| `format-copies-d32f-to-r32f` | An accepted difference: Metal documents the copy as invalid, and rt refuses it typed. Apple's copy(from:sourceSlice:sourceLevel:sourceOrigin:sourceSize:to:desti… |
+| `format-copies-d32f-to-r32u` | An accepted difference: Metal documents the copy as invalid, and rt refuses it typed. Apple's copy(from:sourceSlice:sourceLevel:sourceOrigin:sourceSize:to:desti… |
+| `format-copies-d32f-to-rgba8` | An accepted difference: Metal documents the copy as invalid, and rt refuses it typed. Apple's copy(from:sourceSlice:sourceLevel:sourceOrigin:sourceSize:to:desti… |
 | `format-copies-r16f-to-d16` | An accepted difference: Metal documents the copy as invalid, and rt refuses it typed. Apple's copy(from:sourceSlice:sourceLevel:sourceOrigin:sourceSize:to:desti… |
 | `format-copies-r16u-to-d16` | An accepted difference: Metal documents the copy as invalid, and rt refuses it typed. Apple's copy(from:sourceSlice:sourceLevel:sourceOrigin:sourceSize:to:desti… |
-| `format-copies-r32f-to-d32f` | Known gap (rt README, Known gaps of textures): no bytes are uploaded into a 32-bit float depth (Gap::FloatDepthUpload). Metal keeps any float there; Vulkan copi… |
-| `format-copies-r32u-to-d32f` | Known gap (rt README, Known gaps of textures): no bytes are uploaded into a 32-bit float depth (Gap::FloatDepthUpload). Metal keeps any float there; Vulkan copi… |
+| `format-copies-r32f-to-d32f` | An accepted difference: Metal documents the copy as invalid, and rt refuses it typed. Apple's copy(from:sourceSlice:sourceLevel:sourceOrigin:sourceSize:to:desti… |
+| `format-copies-r32u-to-d32f` | An accepted difference: Metal documents the copy as invalid, and rt refuses it typed. Apple's copy(from:sourceSlice:sourceLevel:sourceOrigin:sourceSize:to:desti… |
 | `format-copies-r8-to-s8` | An accepted difference: Metal documents the copy as invalid, and rt refuses it typed. Apple's copy(from:sourceSlice:sourceLevel:sourceOrigin:sourceSize:to:desti… |
 | `format-copies-r8snorm-to-s8` | An accepted difference: Metal documents the copy as invalid, and rt refuses it typed. Apple's copy(from:sourceSlice:sourceLevel:sourceOrigin:sourceSize:to:desti… |
-| `format-copies-rgba8-to-d32f` | Known gap (rt README, Known gaps of textures): no bytes are uploaded into a 32-bit float depth (Gap::FloatDepthUpload). Metal keeps any float there; Vulkan copi… |
+| `format-copies-rgba8-to-d32f` | An accepted difference: Metal documents the copy as invalid, and rt refuses it typed. Apple's copy(from:sourceSlice:sourceLevel:sourceOrigin:sourceSize:to:desti… |
 | `format-copies-s8-to-r8i` | An accepted difference: Metal documents the copy as invalid, and rt refuses it typed. Apple's copy(from:sourceSlice:sourceLevel:sourceOrigin:sourceSize:to:desti… |
 | `format-copies-s8-to-r8u` | An accepted difference: Metal documents the copy as invalid, and rt refuses it typed. Apple's copy(from:sourceSlice:sourceLevel:sourceOrigin:sourceSize:to:desti… |
-| `fresh-texture-depth32float-private` | Known gap (rt README, Known gaps of textures): no bytes are uploaded into a 32-bit float depth (Gap::FloatDepthUpload). Metal keeps any float there; Vulkan copi… |
 | `half-read-nans-r16f` | The device's own answer (rule 1): a `float` nearest sample of a 16-bit float texel's NaN. Metal answers the canonical 0x7fc00000; lavapipe's decode keeps the Na… |
 | `half-read-nans-r16f` | The device's own answer (rule 1): a `float` read of a 16-bit float texel's NaN. Metal answers the canonical 0x7fc00000; lavapipe's decode keeps the NaN's payloa… |
 | `half-read-nans-rg16f` | The device's own answer (rule 1): a `float` nearest sample of a 16-bit float texel's NaN. Metal answers the canonical 0x7fc00000; lavapipe's decode keeps the Na… |
@@ -4335,15 +4334,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `sampler-border-colours` | The device's own answer (rule 1): the first differing element is the case's constexpr control, a linear sample repeating on every axis, at `r` = -2.3, where the… |
 | `sampler-border-colours` | The device's own answer (rule 1): the first differing element is the case's constexpr control, a linear sample repeating on every axis, at `r` = -2.3, where the… |
 | `sampler-border-colours` | The device's own answer (rule 1): the first differing element is the case's constexpr control, a linear sample repeating on every axis, at `r` = -2.3, where the… |
-| `sampler-compare-always` | Known gap (rt README, Known gaps of textures): no bytes are uploaded into a 32-bit float depth (Gap::FloatDepthUpload). Metal keeps any float there; Vulkan copi… |
-| `sampler-compare-equal` | Known gap (rt README, Known gaps of textures): no bytes are uploaded into a 32-bit float depth (Gap::FloatDepthUpload). Metal keeps any float there; Vulkan copi… |
-| `sampler-compare-filter-pairs` | Known gap (rt README, Known gaps of textures): no bytes are uploaded into a 32-bit float depth (Gap::FloatDepthUpload). Metal keeps any float there; Vulkan copi… |
-| `sampler-compare-greater` | Known gap (rt README, Known gaps of textures): no bytes are uploaded into a 32-bit float depth (Gap::FloatDepthUpload). Metal keeps any float there; Vulkan copi… |
-| `sampler-compare-greater-equal` | Known gap (rt README, Known gaps of textures): no bytes are uploaded into a 32-bit float depth (Gap::FloatDepthUpload). Metal keeps any float there; Vulkan copi… |
-| `sampler-compare-less` | Known gap (rt README, Known gaps of textures): no bytes are uploaded into a 32-bit float depth (Gap::FloatDepthUpload). Metal keeps any float there; Vulkan copi… |
-| `sampler-compare-less-equal` | Known gap (rt README, Known gaps of textures): no bytes are uploaded into a 32-bit float depth (Gap::FloatDepthUpload). Metal keeps any float there; Vulkan copi… |
-| `sampler-compare-never` | Known gap (rt README, Known gaps of textures): no bytes are uploaded into a 32-bit float depth (Gap::FloatDepthUpload). Metal keeps any float there; Vulkan copi… |
-| `sampler-compare-not-equal` | Known gap (rt README, Known gaps of textures): no bytes are uploaded into a 32-bit float depth (Gap::FloatDepthUpload). Metal keeps any float there; Vulkan copi… |
 | `sampler-mip-filter-pairs-nearest` | Under a nearest mip filter and `lodMinClamp` 1.5 Metal reads level 1 (`ceil(clamp + 0.5) - 1`, the case's table); the device's own sampler takes the descriptor'… |
 | `sampler-mip-filter-pairs-nearest` | Under a nearest mip filter and `lodMinClamp` 1.5 Metal reads level 1 (`ceil(clamp + 0.5) - 1`, the case's table); the device's own sampler takes the descriptor'… |
 | `sampler-mip-filter-pairs-nearest` | Under a nearest mip filter and `lodMinClamp` 1.5 Metal reads level 1 (`ceil(clamp + 0.5) - 1`, the case's table); the device's own sampler takes the descriptor'… |
@@ -4553,7 +4543,7 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `texture-fills-187` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_5x4_sRGB with the usage the case asks, so rt makes no such t… |
 | `texture-fills-198` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x10_sRGB with the usage the case asks, so rt makes no such… |
 | `texture-fills-212` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_8x8_LDR with the usage the case asks, so rt makes no such te… |
-| `texture-fills-252` | Known gap (rt README, Known gaps of textures): no bytes are uploaded into a 32-bit float depth (Gap::FloatDepthUpload). Metal keeps any float there; Vulkan copi… |
+| `texture-fills-252` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
 | `argb8-targets-additive-alpha` | Metal's stored 8-bit blend code and ours differ at this site, and the row's count and bound are this venue's. The case's two formats move by the same count on e… |
 | `argb8-targets-additive-alpha` | Metal's stored 8-bit blend code and ours differ at this site, and the row's count and bound are this venue's. The case's two formats move by the same count on e… |
 | `argb8-targets-additive-alpha` | Metal's stored 8-bit blend code and ours differ at this site, and the row's count and bound are this venue's. The case's two formats move by the same count on e… |
@@ -8750,7 +8740,7 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `texture-fills-25` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
 | `texture-fills-250` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
 | `texture-fills-253` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
-| `texture-fills-260` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). Known gap (rt READM… |
+| `texture-fills-260` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
 | `texture-fills-261` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
 | `texture-fills-30` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
 | `texture-fills-40` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no fillTexture call). The rt side of the suite a… |
