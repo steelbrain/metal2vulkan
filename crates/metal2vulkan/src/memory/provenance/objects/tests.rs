@@ -89,7 +89,7 @@ fn a_shared_layout_is_classified_once() {
     for object in [true, false] {
         let structs = shared_graph(60, |_| 0, object);
         let mut m = meter(u64::MAX);
-        let layouts = ObjectLayouts::of(&structs, &mut m).expect("layouts");
+        let layouts = ObjectLayouts::of(&structs, false, &mut m).expect("layouts");
         assert!((0..=60).all(|s| layouts.holds(StructRef(s)) == object));
         assert!((0..=60).all(|s| !layouts.behind(StructRef(s))));
         assert!(m.work() <= 4 * 121, "work {}", m.work());
@@ -102,7 +102,7 @@ fn an_access_descends_only_into_the_elements_it_covers_partly() {
     let depth = 27;
     let structs = shared_graph(depth, |size| size, true);
     let mut m = meter(u64::MAX);
-    let layouts = ObjectLayouts::of(&structs, &mut m).expect("layouts");
+    let layouts = ObjectLayouts::of(&structs, false, &mut m).expect("layouts");
     let contains = |s: StructRef| layouts.holds(s);
     let leaf = |mem: &Member| mem.handle().is_some_and(is_object);
     let size = 16u64 << depth;
@@ -127,11 +127,48 @@ fn overlapping_members_end_at_the_work_cap() {
     // partly covered paths per level. The meter ends the search instead of 2^60 visits.
     let structs = shared_graph(60, |_| 0, true);
     let mut m = meter(1 << 20);
-    let layouts = ObjectLayouts::of(&structs, &mut m).expect("layouts");
+    let layouts = ObjectLayouts::of(&structs, false, &mut m).expect("layouts");
     let contains = |s: StructRef| layouts.holds(s);
     let leaf = |mem: &Member| mem.handle().is_some_and(is_object);
     let found = overlaps(&structs, &contains, &leaf, StructRef(0), (4, 8), 0, &mut m);
     assert!(matches!(found, Err(Error::LimitExceeded(Limit::WorkUnits))));
+}
+
+fn command(offset: u32) -> Member {
+    member(
+        offset,
+        8,
+        None,
+        indirect(ParamRole::CommandBuffer(ObjectArg {
+            location: slot(),
+            access: None,
+        })),
+    )
+}
+
+/// A command buffer's field is opaque only where it does not hold its word: `{ command_buffer c;
+/// uint w[2]; }` holds an object outside the identity domains and none under them, where an
+/// access of its first eight bytes is plain data; a pipeline state's field is opaque under both.
+#[test]
+fn a_command_buffers_field_is_opaque_only_without_its_word() {
+    let structs = vec![
+        StructInfo {
+            members: vec![command(0), word(8), word(12)],
+        },
+        StructInfo {
+            members: vec![pipeline(0), word(8)],
+        },
+    ];
+    for words in [false, true] {
+        let mut m = meter(u64::MAX);
+        let layouts = ObjectLayouts::of(&structs, words, &mut m).expect("layouts");
+        let holds: Vec<bool> = (0..2).map(|s| layouts.holds(StructRef(s))).collect();
+        assert_eq!(holds, [!words, true], "words {words}");
+        let leaf = |mem: &Member| layouts.opaque(mem);
+        let contains = |s: StructRef| layouts.holds(s);
+        let found = overlaps(&structs, &contains, &leaf, StructRef(0), (0, 8), 0, &mut m);
+        assert_eq!(found.expect("overlap"), !words, "words {words}");
+    }
 }
 
 #[test]
@@ -163,7 +200,7 @@ fn an_object_behind_a_pointer_member_is_behind() {
         },
     ];
     let mut m = meter(u64::MAX);
-    let layouts = ObjectLayouts::of(&structs, &mut m).expect("layouts");
+    let layouts = ObjectLayouts::of(&structs, false, &mut m).expect("layouts");
     let holds: Vec<bool> = (0..3).map(|s| layouts.holds(StructRef(s))).collect();
     let behind: Vec<bool> = (0..3).map(|s| layouts.behind(StructRef(s))).collect();
     assert_eq!(holds, [false, true, false]);
@@ -199,7 +236,7 @@ fn an_access_as_wide_as_its_step_is_one_test() {
     let n = 8192;
     let (structs, buffer) = data_then_object(n);
     let mut m = meter(u64::MAX);
-    let layouts = ObjectLayouts::of(&structs, &mut m).expect("layouts");
+    let layouts = ObjectLayouts::of(&structs, false, &mut m).expect("layouts");
     let words = crate::memory::alloca::Strides::one(4).expect("stride");
     let data_end = 4 * i64::from(n);
     for shape in [

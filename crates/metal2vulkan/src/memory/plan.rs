@@ -60,7 +60,7 @@ use crate::air::ir::{
 };
 use crate::air::Entry;
 use crate::budget::{tree_bytes, vec_bytes, Meter};
-use crate::device::profile::BufferAccess;
+use crate::device::profile::{BufferAccess, PointerDomain};
 use crate::device::DeviceProfile;
 use crate::error::{Error, Feature, InternalError, InternalKind, Limit, LowerFamily, Unsupported};
 use crate::pipeline::interface::{AccessSet, Window};
@@ -680,7 +680,8 @@ pub fn analyze_memory(e: &Entry, p: &DeviceProfile, m: &mut Meter) -> Result<Mem
 
 fn analyze(e: &Entry, p: &DeviceProfile, m: &mut Meter) -> Result<MemoryPlan, Error> {
     let layouts = TypeLayouts::new(&e.layout, e.module.types(), m)?;
-    let prov = provenance::analyze(e, &layouts, m)?;
+    let words = p.fields().pointer_domain == PointerDomain::Identity;
+    let prov = provenance::analyze(e, &layouts, words, m)?;
     if let (Some((b, id)), BufferAccess::Floor) = (prov.dynamic_deref, p.fields().buffer_access) {
         let err: Error =
             Unsupported::needs_any_of(Feature::DereferenceLoadedPointer, vec![p.addressed_needs()])

@@ -1467,7 +1467,7 @@ fn verifying_the_cells_returns_its_tables_to_the_ledger() {
         let mut m = meter();
         let layouts = TypeLayouts::new(&e.layout, e.module.types(), &mut m).expect("layouts");
         let before = m.ledger();
-        let prov = provenance::analyze(&e, &layouts, &mut m).expect("provenance");
+        let prov = provenance::analyze(&e, &layouts, true, &mut m).expect("provenance");
         assert!(
             prov.dynamic_deref.is_none(),
             "the cell forwards its pointer"

@@ -7,6 +7,10 @@
 //!   validate on every profile with device addresses.
 //! - A kernel's plain draw (`engine/icb_merged_draws.ll`'s `icb_merged_triangles`) is refused,
 //!   `Unsupported{GpuEncodedIndirectCommands, NotImplemented}`.
+//! - An access past an argument buffer whose first member is a command buffer, by a signed
+//!   run-time index that may reach the command buffer's field (`engine/icb_encoder_tail.ll`), is a
+//!   plain access of the field's word: it compiles and validates; under the resident-table domains
+//!   it is refused, `Unsupported{ArgumentBufferObjects, NotImplemented}`.
 //! - The vertex function of a state made with `supportIndirectCommandBuffers` pushes the execution
 //!   range's address and its command (`PushField::IndirectRange`, `PushField::IndirectSequence`,
 //!   `PushField::IndirectBase`)
@@ -89,6 +93,35 @@ fn a_kernels_plain_draw_into_commands_is_refused_under_the_identity_domains() {
                 "{stem}"
             ),
             other => panic!("{stem}: {other:?}"),
+        }
+    }
+}
+
+/// The words past an argument buffer whose first member is a command buffer, indexed by a signed
+/// run-time index, which a negative index takes back into the command buffer's field: a vertex
+/// function binds each command's buffers from the addresses there, and a kernel reads and writes
+/// words there. Under the identity domains the field holds the command buffer's word, so each
+/// access is a plain access and both compile and validate; under the resident-table domains,
+/// where the field holds no value a translation defines, both are refused.
+#[test]
+fn an_access_past_an_encoder_is_a_plain_access_of_its_command_buffers_word() {
+    let Some(bc) = assemble("icb_encoder_tail") else {
+        return;
+    };
+    for entry in ["tail_bind", "tail_count"] {
+        for stem in PROFILES {
+            let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
+            let a = compile(&bc, entry, &p).unwrap_or_else(|e| panic!("{stem}: {entry}: {e:?}"));
+            link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: {entry}: {e}"));
+            let p = profile(stem, DevicePolicy::RESIDENT_TABLES).unwrap_or_else(|e| panic!("{e}"));
+            match compile(&bc, entry, &p) {
+                Err(Error::Unsupported(u)) => assert_eq!(
+                    (u.feature, u.needs),
+                    (Feature::ArgumentBufferObjects, Needs::NotImplemented),
+                    "{stem}: {entry}"
+                ),
+                other => panic!("{stem}: {entry}: {other:?}"),
+            }
         }
     }
 }

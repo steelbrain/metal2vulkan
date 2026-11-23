@@ -1,12 +1,16 @@
 //! The bytes of an argument buffer's indirect-command objects.
 //!
 //! Metal's encoder writes an object's resource id into a command-buffer or compute or render
-//! pipeline-state member of an argument buffer, and the binder has no class for these objects, so
-//! the field holds no value a translation defines. Only the handle load reads it: a pointer load
-//! of exactly one such field, at a translation-time constant offset in the buffer's first element,
-//! which `Walk::seed_loaded` classes as the object's handle and whose every use its family
-//! refuses. Any other access that may reach an object's bytes is `ArgumentBufferObjects`, not
-//! implemented:
+//! pipeline-state member of an argument buffer. Under the identity domains a command buffer's
+//! field holds its word, the `gpuResourceID` the program or the host wrote there: the device
+//! address of its records (`lower::access::icb`). Metal lays a Tier 2 argument buffer out as the
+//! equivalent C structure, whose contents the GPU and the CPU may both modify, so an access to
+//! those bytes is a plain access of the buffer's memory, as an access to any other member's is.
+//! Any other object's field, and a command buffer's under the resident-table domains, holds no
+//! value a translation defines. Only the handle load reads it: a pointer load of exactly one such
+//! field, at a translation-time constant offset in the buffer's first element, which
+//! `Walk::seed_loaded` classes as the object's handle (`lower::access::object`). Any other access
+//! that may reach such an object's bytes is `ArgumentBufferObjects`, not implemented:
 //!
 //! - **The offsets an access may take** are its shape's (a constant, or a constant plus multiples
 //!   of its strides) within its range. An access at least as wide as its step touches one
@@ -50,6 +54,13 @@ pub(super) fn is_object(h: AbiHandle) -> bool {
     )
 }
 
+/// Whether the field of an object of handle `h` holds no value a translation defines, so that
+/// only its handle load reads it: a pipeline state's, and a command buffer's unless its field
+/// holds its word (`words`, the identity domains).
+fn opaque(h: AbiHandle, words: bool) -> bool {
+    is_object(h) && !(words && matches!(h, AbiHandle::CommandBuffer))
+}
+
 /// The most offsets (or residues) one access is checked at; an access that may take more is
 /// refused.
 const OBJECT_OFFSETS: u32 = 4096;
@@ -82,9 +93,11 @@ fn edge(mem: &Member, n: usize) -> Option<(u32, bool)> {
         .filter(|(t, _)| (*t as usize) < n)
 }
 
-/// Which layouts hold an indirect-command object.
+/// Which layouts hold an indirect-command object whose field is opaque.
 #[derive(Debug, Default)]
 pub(super) struct ObjectLayouts {
+    /// A command buffer's field holds its word, plain data (the identity domains).
+    words: bool,
     /// By value, at any nesting depth.
     holds: Vec<bool>,
     /// Behind a pointer member at any nesting depth, whose pointee holds an object or is itself
@@ -93,10 +106,14 @@ pub(super) struct ObjectLayouts {
 }
 
 impl ObjectLayouts {
-    /// Both tables for `structs`: one pass up the reverse nesting and pointer edges from the
-    /// layouts that hold an object directly. Each member and edge is a unit of work, and the
-    /// edge table is charged to the ledger.
-    pub(super) fn of(structs: &[StructInfo], m: &mut Meter) -> Result<ObjectLayouts, Error> {
+    /// Both tables for `structs`, with a command buffer's field its word where `words`: one pass
+    /// up the reverse nesting and pointer edges from the layouts that hold an object directly.
+    /// Each member and edge is a unit of work, and the edge table is charged to the ledger.
+    pub(super) fn of(
+        structs: &[StructInfo],
+        words: bool,
+        m: &mut Meter,
+    ) -> Result<ObjectLayouts, Error> {
         let n = structs.len();
         let work = |units: usize, m: &mut Meter| m.tick(u32::try_from(units).unwrap_or(u32::MAX));
         // Reverse edges, sorted by the layout they lead to: `(child or pointee, the layout that
@@ -133,7 +150,7 @@ impl ObjectLayouts {
         holds.extend(structs.iter().map(|info| {
             info.members
                 .iter()
-                .any(|mem| mem.handle().is_some_and(is_object))
+                .any(|mem| mem.handle().is_some_and(|h| opaque(h, words)))
         }));
         let mut queue: Vec<u32> = Vec::new();
         m.reserve(&mut queue, n)?;
@@ -174,7 +191,11 @@ impl ObjectLayouts {
         }
         // The edge table and the worklist are dropped here; the two tables stay charged.
         m.release(count * std::mem::size_of::<(u32, u32, bool)>() + n * std::mem::size_of::<u32>());
-        Ok(ObjectLayouts { holds, behind })
+        Ok(ObjectLayouts {
+            words,
+            holds,
+            behind,
+        })
     }
 
     fn holds(&self, s: StructRef) -> bool {
@@ -183,6 +204,11 @@ impl ObjectLayouts {
 
     fn behind(&self, s: StructRef) -> bool {
         self.behind.get(s.0 as usize).copied().unwrap_or(false)
+    }
+
+    /// Whether member `mem` is an object whose field is opaque.
+    fn opaque(&self, mem: &Member) -> bool {
+        mem.handle().is_some_and(|h| opaque(h, self.words))
     }
 
     /// Whether a pointer member loads the address of an object's memory.
@@ -357,7 +383,7 @@ impl ObjectBuffer {
         if !self.holds {
             return Ok(false);
         }
-        let leaf = |mem: &Member| mem.handle().is_some_and(is_object);
+        let leaf = |mem: &Member| layouts.opaque(mem);
         self.touches(structs, &|s| layouts.holds(s), &leaf, fact, reach, m)
     }
 

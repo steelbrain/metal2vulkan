@@ -267,7 +267,11 @@ and so do the command line, the compile worker and every validation tool. It hol
   first lowers an argument buffer's sampler masks its index the same way.
   A function writes an indirect command buffer's render commands, under the identity domains
   alone, through the `gpuResourceID` an argument buffer's `command_buffer` member holds: the
-  device address of the buffer's records, laid out as `pipeline::IndirectDrawLayout` states. A
+  device address of the buffer's records, laid out as `pipeline::IndirectDrawLayout` states. Any
+  other access that may reach the member's 8 bytes, such as an index past the structure that
+  runs back into it, is a plain access of the argument buffer's memory there, reading or writing
+  that word, as Metal's Tier 2 argument buffer is laid out as the equivalent C structure; under
+  the resident-table domains it is `Unsupported{ArgumentBufferObjects}`. A
   command's `set_vertex_buffer` and `set_fragment_buffer`, its `draw_indexed_primitives` of
   triangles and its `reset` write them, each only where the command's index is below the
   buffer's capacity; any other indirect-command operation is
