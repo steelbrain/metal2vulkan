@@ -7,7 +7,8 @@
 use super::floor::{at_the_floor, table};
 use crate::floor::{
     creation_extensions, decide, enable_set, shader_enables, shader_extension, vulkan_name,
-    Capabilities, Queried, DEVICE_EXTENSIONS, ENABLED, SAMPLER_ARRAYS, SAMPLER_ELEMENTS, TEXTURES,
+    Capabilities, Queried, DEVICE_EXTENSIONS, ENABLED, LEVEL_ELEMENTS, SAMPLER_ARRAYS,
+    SAMPLER_ELEMENTS, TEXTURES,
 };
 use ash::vk;
 use metal2vulkan::device::{
@@ -144,10 +145,12 @@ fn the_enable_set_is_what_creation_enables_on_a_device_with_everything() {
     let descriptors = &mut device.vulkan12;
     descriptors.max_per_stage_descriptor_update_after_bind_sampled_images = 3 * TEXTURES;
     descriptors.max_descriptor_set_update_after_bind_sampled_images = 3 * TEXTURES;
+    // The sampled array with its second elements, and the storage array with its level elements.
+    let images = 3 * TEXTURES + 2 * TEXTURES + LEVEL_ELEMENTS;
     descriptors.max_per_stage_update_after_bind_resources =
-        5 * TEXTURES + device.limits.max_color_attachments;
+        images + device.limits.max_color_attachments;
     descriptors.max_update_after_bind_descriptors_in_all_pools =
-        5 * TEXTURES + SAMPLER_ARRAYS * SAMPLER_ELEMENTS;
+        images + SAMPLER_ARRAYS * SAMPLER_ELEMENTS;
     let capabilities = decide(&device).unwrap_or_else(|below| panic!("{below}"));
     assert!(capabilities.feedback_loop, "the attachment reads' room");
     assert_eq!(shader_enables(&capabilities), enable_set());
