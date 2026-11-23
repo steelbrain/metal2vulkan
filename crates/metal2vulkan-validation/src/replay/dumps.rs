@@ -274,11 +274,14 @@ pub(super) fn words(a: &[u8], b: &[u8], covered: &[(u64, u64)]) -> (u64, u64, Op
     if a == b {
         return (differing, under, first);
     }
+    /// The word of `bytes` at byte `at`: none past its end, fewer than 4 bytes at a short end.
+    fn side(bytes: &[u8], at: usize) -> Option<&[u8]> {
+        bytes.get(at..(at + 4).min(bytes.len()))
+    }
     let longest = a.len().max(b.len()).div_ceil(4);
     for word in 0..longest {
         let at = word * 4;
-        let side = |bytes: &[u8]| bytes.get(at..(at + 4).min(bytes.len()));
-        if side(a) == side(b) {
+        if side(a, at) == side(b, at) {
             continue;
         }
         differing += 1;
