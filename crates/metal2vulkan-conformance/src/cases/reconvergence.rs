@@ -161,14 +161,6 @@ fn pipeline_spec(draw: &Draw) -> RenderPipelineSpec<'static> {
     )
 }
 
-/// The fixtures' hash of `(x, y)`.
-fn hash(x: u32, y: u32) -> u32 {
-    let mut h = x.wrapping_mul(0x9E37_79B1) ^ y.wrapping_mul(0x85EB_CA77);
-    h ^= h >> 15;
-    h = h.wrapping_mul(0x2C1B_3C6D);
-    h ^ (h >> 12)
-}
-
 /// The 256 data words every fragment reads at buffer 0: word i a hash of i, and words 250 to 252
 /// the uniform loops' trip count (2), sampling iteration (1) and continuing iteration (0).
 fn words() -> Vec<u32> {
@@ -549,6 +541,14 @@ impl Case for Reconvergence {
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+
+    /// The fixtures' hash of `(x, y)`.
+    fn hash(x: u32, y: u32) -> u32 {
+        let mut h = x.wrapping_mul(0x9E37_79B1) ^ y.wrapping_mul(0x85EB_CA77);
+        h ^= h >> 15;
+        h = h.wrapping_mul(0x2C1B_3C6D);
+        h ^ (h >> 12)
+    }
 
     /// The value of half `bits`, for the halves these targets hold (no NaN or infinity).
     fn half(bits: u16) -> f32 {
