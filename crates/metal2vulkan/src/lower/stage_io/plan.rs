@@ -1112,7 +1112,7 @@ fn amplified_output(cx: &mut SelectCx<'_>, index: AmplifiedIndex) -> Result<(), 
             PushField::ViewportCount,
         ),
     };
-    let store = index_store(cx, raw, true, true)?;
+    let store = index_store(cx, raw, true)?;
     if store == IndexStore::Nowhere {
         return Ok(());
     }
@@ -1397,28 +1397,24 @@ enum IndexStore {
     Nowhere,
 }
 
-/// Where a vertex function on `cx`'s profile stores index `index`, which it writes the same at
-/// every vertex of a primitive where `uniform` ([`uniform_index`]): to its builtin where the
-/// profile enables `shaderOutputLayer` (`shaderOutputViewportIndex` for a viewport index) and
-/// the function writes the index alike, and nowhere, a viewport index on a profile without
-/// `multiViewport`. Otherwise refused, as `VertexAmplification` for an index the function stores
-/// from the amplification's offset alone (`amplification`), else as `LayeredRendering`: one
-/// written alike needing the output feature, one not shown alike as not implemented on any
-/// device.
+/// Where a vertex function on `cx`'s profile stores index `index`: to its builtin, as the function
+/// writes it, where the profile enables `shaderOutputLayer` (`shaderOutputViewportIndex` for a
+/// viewport index), and nowhere, a viewport index on a profile without `multiViewport`. Otherwise
+/// refused as needing the output feature, as `VertexAmplification` for an index the function
+/// stores from the amplification's offset alone (`amplification`), else as `LayeredRendering`.
 ///
-/// An index not shown alike is refused because Metal gives it no answer to match: "You must
-/// return the same value of `[[render_target_array_index]]` for every vertex in a primitive. If
-/// values differ, the behavior and value passed to the fragment function are undefined." (the
-/// Metal Shading Language specification, and the same of `[[viewport_array_index]]`). It is not
-/// stored to its builtin as written because Vulkan asks a stage that writes `Layer` to "write the
-/// same value to Layer for all vertices of a given primitive"
+/// Metal and Vulkan ask the same of the value: "You must return the same value of
+/// `[[render_target_array_index]]` for every vertex in a primitive. If values differ, the behavior
+/// and value passed to the fragment function are undefined." (the Metal Shading Language
+/// specification, and the same of `[[viewport_array_index]]`); a stage that writes `Layer` must
+/// "write the same value to Layer for all vertices of a given primitive"
 /// (VUID-VkPipelineShaderStageCreateInfo-stage-02596), and the same of `ViewportIndex`
-/// (VUID-VkPipelineShaderStageCreateInfo-stage-02597), which the function's structure does not
-/// show of it.
+/// (VUID-VkPipelineShaderStageCreateInfo-stage-02597). A function that keeps Metal's rule keeps
+/// Vulkan's with the index stored as written; where it breaks it, Metal gives no answer, and the
+/// slice or viewport is the device's choice.
 fn index_store(
     cx: &SelectCx<'_>,
     index: RawIndex,
-    uniform: bool,
     amplification: bool,
 ) -> Result<IndexStore, Error> {
     let f = cx.profile.fields();
@@ -1429,7 +1425,7 @@ fn index_store(
             VkFeature::ShaderOutputViewportIndex,
         ),
     };
-    if native && uniform {
+    if native {
         return Ok(IndexStore::Builtin);
     }
     if matches!(index, RawIndex::Viewport)
@@ -1437,29 +1433,11 @@ fn index_store(
     {
         return Ok(IndexStore::Nowhere);
     }
-    // An index stored from the amplification's offset alone is the same at every vertex.
-    if amplification {
-        return Err(
-            Unsupported::needs(Feature::VertexAmplification, Capability::Feature(output)).into(),
-        );
-    }
-    Err(match uniform {
-        true => Unsupported::needs(Feature::LayeredRendering, Capability::Feature(output)),
-        false => Unsupported::not_implemented(Feature::LayeredRendering),
+    Err(match amplification {
+        true => Unsupported::needs(Feature::VertexAmplification, Capability::Feature(output)),
+        false => Unsupported::needs(Feature::LayeredRendering, Capability::Feature(output)),
     }
     .into())
-}
-
-/// Whether vertex function `cx` writes index `index` the same at every vertex of a primitive
-/// (its raw varying is among `StageIo::uniform_outputs`).
-fn uniform_index(cx: &SelectCx<'_>, index: RawIndex) -> bool {
-    let key = match index {
-        RawIndex::Layer => VaryingKey::render_target_array_index(),
-        RawIndex::Viewport => VaryingKey::viewport_index(),
-    };
-    (cx.families.stage_io.interface.uniform_outputs)
-        .binary_search(&key)
-        .is_ok()
 }
 
 /// Whether the profile can declare fragment input builtin `b`: one of its enabling
@@ -2180,12 +2158,7 @@ pub fn entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         // time, it holds the index plus the amplification's offset.
         if matches!(o.role, OutputRole::ViewportArrayIndex)
             && cx.stage == Stage::Vertex
-            && index_store(
-                cx,
-                RawIndex::Viewport,
-                uniform_index(cx, RawIndex::Viewport),
-                false,
-            )? == IndexStore::Nowhere
+            && index_store(cx, RawIndex::Viewport, false)? == IndexStore::Nowhere
         {
             let f = io_form(cx, ty)?;
             int_scalar(f)?;
@@ -2750,8 +2723,7 @@ fn output(cx: &mut SelectCx<'_>, o: &OutputBinding, ty: AirTypeId) -> Result<Lin
                     StageBuiltin::ViewportIndex,
                 ),
             };
-            let uniform = uniform_index(cx, index);
-            let store = index_store(cx, index, uniform, false)?;
+            let store = index_store(cx, index, false)?;
             let f = io_form(cx, ty)?;
             int_scalar(f)?;
             match store {

@@ -41,7 +41,7 @@ use crate::pipeline::link::{link, LinkInputs};
 use crate::pipeline::lower_inputs::LoweringInputs;
 use crate::pipeline::relocate::relocate;
 use crate::pipeline::stage_io::StageBuiltin;
-use crate::pipeline::sym::{PushField, ResourceKind, ResourceSlot, SpecKey, Stage, VaryingKey};
+use crate::pipeline::sym::{PushField, ResourceKind, ResourceSlot, SpecKey, Stage};
 use crate::pipeline::testing::{
     compile, engine_dir, fixtures_dir, llvm_assemble, moltenvk_msl_compile, profile, typed_module,
     typed_module_with, AssembleError,
@@ -191,8 +191,8 @@ fn amplification_id_needs_multiview() {
 /// 0, not `ViewIndex`: SPIRV-Cross gives a vertex function that reads `ViewIndex` a second
 /// `[[render_target_array_index]]` output, which Metal refuses (authored case 013406ac failed
 /// MoltenVK pipeline creation so). Without `ViewIndex` it needs neither `MultiView` nor
-/// `multiview`. Each fixture's slice is the same at every vertex of a primitive, so it is stored
-/// to `Layer`, and its `moltenvk-m3` module compiles as MoltenVK's MSL.
+/// `multiview`. Each fixture's slice is stored to `Layer`, and its `moltenvk-m3` module compiles
+/// as MoltenVK's MSL.
 #[test]
 fn a_vertex_function_writing_its_slice_reads_amplification_id_zero() {
     let Some(bc) = fixture() else { return };
@@ -224,15 +224,6 @@ fn a_vertex_function_writing_its_slice_reads_amplification_id_zero() {
                 !a.interface.io.builtins.contains(&StageBuiltin::ViewIndex),
                 "{entry}: {:?}",
                 a.interface.io.builtins
-            );
-            // Each slice (`slices[iid & 1]`, and the other's) is the same at every vertex of a
-            // primitive, and is stored to `Layer`.
-            assert!(
-                a.interface
-                    .io
-                    .uniform_outputs
-                    .contains(&VaryingKey::render_target_array_index()),
-                "{entry}"
             );
             assert!(
                 a.interface.io.builtins.contains(&StageBuiltin::Layer),

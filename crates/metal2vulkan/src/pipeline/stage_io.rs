@@ -266,17 +266,12 @@ pub struct StageIo {
     /// answers a stage whose mode is not the pipeline's `NeedsInput(ColorWrites)`.
     #[cfg_attr(feature = "serde", serde(default))]
     pub texture_write_rounding: Option<crate::metal::TextureWriteRoundingMode>,
-    /// The varyings a vertex function writes the same value at every vertex of a primitive,
+    /// The user varyings a vertex function writes the same value at every vertex of a primitive,
     /// sorted: computed only from constants, `constant` memory read through uniform pointers, the
     /// draw's instance, base vertex, base instance, amplification and patch, and the attributes
     /// it fetches per instance or at a constant step, never from `[[vertex_id]]` or another
-    /// per-vertex input. A fragment function of its pipeline reads those of its user varyings it
-    /// interpolates flat ([`uniform_inputs`](StageIo::uniform_inputs)). The raw varyings of the
-    /// slice and viewport indices it writes are among them so
-    /// (`VaryingKey::render_target_array_index`, `VaryingKey::viewport_index`): Vulkan takes
-    /// `Layer` and `ViewportIndex` from a vertex function only where every vertex of a primitive
-    /// stores the same, so an index that is not among them is refused. Empty for every other
-    /// function.
+    /// per-vertex input. A fragment function of its pipeline reads those it interpolates flat
+    /// ([`uniform_inputs`](StageIo::uniform_inputs)). Empty for every other function.
     #[cfg_attr(feature = "serde", serde(default))]
     pub uniform_outputs: Vec<VaryingKey>,
     /// The `float` and `half` varyings the fragment function reads flat although it states an

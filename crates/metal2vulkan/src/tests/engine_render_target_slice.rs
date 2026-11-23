@@ -123,7 +123,7 @@ fn a_fragment_reads_the_slice_index_its_vertex_function_wrote() {
         VaryingKey::render_target_array_index(),
         "{what}"
     );
-    // Its slice is the same at every vertex of a primitive: the function stores it as `Layer`.
+    // The function stores its slice as `Layer`.
     assert!(io.builtins.contains(&StageBuiltin::Layer), "{what}");
 
     let keys = dev

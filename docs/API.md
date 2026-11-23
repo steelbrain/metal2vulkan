@@ -908,20 +908,17 @@ Where Metal's rules differ from Vulkan's, the pipeline gives Metal's answer:
   first two weights and computes the third as `1 - (x + y)` in `float`, as Metal does, not the
   device's own third lane. On a device without `fragmentShaderBarycentric` the function is
   refused, `Unsupported{Barycentrics}` needing the feature.
-- A vertex function stores `Layer` or `ViewportIndex` only where it writes the index the same at
-  every vertex of a primitive, decided from its structure (computed from constants, `constant`
-  memory, the instance, the amplification and per-instance attributes, as
-  `StageIo::uniform_outputs` lists), on a device with `shaderOutputLayer` or
-  `shaderOutputViewportIndex`. Metal leaves a primitive whose vertices write different indices
-  undefined ("If values differ, the behavior and value passed to the fragment function are
-  undefined.", the Metal Shading Language specification), and Vulkan asks every vertex of a
-  primitive to write the same `Layer` and `ViewportIndex`
-  (VUID-VkPipelineShaderStageCreateInfo-stage-02596 and -02597), so a vertex function whose index
-  is not shown the same is refused, `NotImplemented(LayeredRendering)`. One shown the same on a
-  device without the output is refused needing it, as `Unsupported(LayeredRendering)`, or as
-  `Unsupported(VertexAmplification)` for an index the amplification's offset alone sets. An index
-  the function declares and never writes (`undef` in every value it returns), which Metal gives no
-  value, is stored as 0, the same at every vertex. The stored `Layer` is 0 at or past the pass's
+- A vertex function stores `Layer` or `ViewportIndex` as it writes the index, on a device with
+  `shaderOutputLayer` or `shaderOutputViewportIndex`; on a device without the output it is
+  refused needing it, as `Unsupported(LayeredRendering)`, or as
+  `Unsupported(VertexAmplification)` for an index the amplification's offset alone sets. Metal
+  requires the same value at every vertex of a primitive ("If values differ, the behavior and
+  value passed to the fragment function are undefined.", the Metal Shading Language
+  specification), and Vulkan the same of `Layer` and `ViewportIndex`
+  (VUID-VkPipelineShaderStageCreateInfo-stage-02596 and -02597); where a program breaks that, the
+  layer or viewport is the device's choice (section 10). An index the function declares and never
+  writes (`undef` in every value it returns), which Metal gives no value, is stored as 0, the same
+  at every vertex. The stored `Layer` is 0 at or past the pass's
   length, which each draw pushes, so in a pass of one layer every index renders slice 0, as
   Metal's does. A device without `multiViewport` draws through one viewport, so there the vertex
   function stores no viewport index at all; a draw that selects among more than one viewport
@@ -2389,6 +2386,12 @@ named states the rule in full.
 
 **Draws**
 
+- **A vertex function's `[[render_target_array_index]]` and `[[viewport_array_index]]` are stored
+  as the function writes them.** Metal requires the same value at every vertex of a primitive;
+  where a program breaks that, the layer or viewport is the device's choice. Metal leaves such a
+  primitive undefined (the Metal Shading Language specification), and Vulkan asks the same value
+  of `Layer` and `ViewportIndex` at every vertex of a primitive
+  (VUID-VkPipelineShaderStageCreateInfo-stage-02596 and -02597).
 - **A point near the viewport's edge or the clip volume is clipped or culled by the device's own
   rule**: its `pointClippingBehavior` and the driver's handling of the viewport. Metal states no
   clipping rule for a point (`MTLPrimitiveType.point`; the MSL specification's `[[point_size]]`).

@@ -39,7 +39,7 @@ Columns:
 
 | Kind | `metal-measured` | `metal-documented` | `metal-takes` | `device` | `ours` | `unknown` | `delegated` | `-` |
 |---|---|---|---|---|---|---|---|---|
-| Translator and front-end refusals | 0 | 0 | 0 | 44 | 70 | 0 | 0 | 5 |
+| Translator and front-end refusals | 0 | 0 | 0 | 45 | 69 | 0 | 0 | 5 |
 | Translation caps | 0 | 0 | 0 | 0 | 14 | 0 | 0 | 0 |
 | Rate maps the compile layer does not compile | 0 | 0 | 0 | 0 | 5 | 0 | 0 | 0 |
 | The translation deadline | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 |
@@ -112,7 +112,7 @@ Columns:
 | `PrimitiveId` | `[[primitive_id]]` in a fragment function | devices without a capability the site computes; every device (not implemented) | `ours` | 2: `crates/metal2vulkan/src/lower/stage_io/plan.rs (finish)`, `crates/metal2vulkan/src/pipeline/link/varyings.rs (check_primitive_id)` | `rare`: primitive_id on a device without geometry or tessellation shaders, in an indexed draw or behind a mesh function |
 | `PrivatePrimitives` | One of Metal's private primitive types (a line loop, a triangle fan, quads, a quad strip) drawn in the pulled list form... | devices without buffer device addresses (`addressed_needs`); every device (not implemented) | `ours` | via a helper: 1: `crates/metal2vulkan/src/lower/stage_io/plan.rs (indices_feature)` | `rare`: a private primitive type drawn in the pulled list form (a vertex function that writes memory or the primitive_id varying, a vertex start past 2^31) on a device without device addresses |
 | `VertexAmplification` | Vertex amplification | devices short of a Vulkan feature the site names; devices without VkFeature::Multiview; devices without VkFeature::MultiviewTessellationShader; every device (not implemented) | `ours` | 4: `crates/metal2vulkan/src/lower/stage_io/plan.rs (index_store)`, `crates/metal2vulkan/src/lower/tessellation/mod.rs (select_param)` (+2) | `rare`: vertex amplification |
-| `LayeredRendering` | Layered rendering (`render_target_array_index`, `viewport_array_index`) | devices short of a Vulkan feature the site names; devices without VkFeature::ShaderOutputLayer; devices without VkFeature::ShaderOutputViewportIndex; every device (not implemented) | `ours` | 4: `crates/metal2vulkan/src/lower/mesh/mod.rs (target_index, 2 sites)`, `crates/metal2vulkan/src/lower/stage_io/plan.rs (index_store, 2 sites)` | `rare`: layered rendering on a device without its features |
+| `LayeredRendering` | Layered rendering (`render_target_array_index`, `viewport_array_index`) | devices short of a Vulkan feature the site names; devices without VkFeature::ShaderOutputLayer; devices without VkFeature::ShaderOutputViewportIndex | `device` | 3: `crates/metal2vulkan/src/lower/mesh/mod.rs (target_index, 2 sites)`, `crates/metal2vulkan/src/lower/stage_io/plan.rs (index_store)` | `rare`: layered rendering on a device without its features |
 | `ClipDistance` | Clip or cull distances | devices without VkFeature::ShaderClipDistance; devices without VkLimit::MaxClipDistances | `device` | 2: `crates/metal2vulkan/src/lower/mesh/mod.rs (select, 2 sites)` | `rare`: clip distances on a device without them |
 | `DualSourceBlending` | Dual-source blending | devices without VkFeature::DualSrcBlend; devices without VkLimit::MaxFragmentDualSrcAttachments | `device` | 3: `crates/metal2vulkan/src/metal/state.rs (blend_factor)`, `crates/metal2vulkan/src/pipeline/link/graphics.rs (check_outputs)` (+1) | `rare`: dual-source blending on a device without it |
 | `Barycentrics` | Barycentric coordinates | devices without VkFeature::FragmentShaderBarycentric | `device` | 2: `crates/metal2vulkan/src/device/metal.rs (unsupported_features)`, `crates/metal2vulkan/src/lower/stage_io/plan.rs (param)` | `rare`: barycentric coordinates |
@@ -430,7 +430,7 @@ Each refusal's sites, with the function that builds it.
 - `feature::PrimitiveId`: `crates/metal2vulkan/src/lower/stage_io/plan.rs (finish)`; `crates/metal2vulkan/src/pipeline/link/varyings.rs (check_primitive_id)`
 - `feature::PrivatePrimitives`: `crates/metal2vulkan/src/lower/stage_io/plan.rs (indices_feature)`
 - `feature::VertexAmplification`: `crates/metal2vulkan/src/lower/stage_io/plan.rs (index_store)`; `crates/metal2vulkan/src/lower/tessellation/mod.rs (select_param)`; `crates/metal2vulkan/src/pipeline/link/graphics.rs (vertex_amplification)`; `crates/metal2vulkan/src/pipeline/link/tessellation/mod.rs (control_plan)`
-- `feature::LayeredRendering`: `crates/metal2vulkan/src/lower/mesh/mod.rs (target_index, 2 sites)`; `crates/metal2vulkan/src/lower/stage_io/plan.rs (index_store, 2 sites)`
+- `feature::LayeredRendering`: `crates/metal2vulkan/src/lower/mesh/mod.rs (target_index, 2 sites)`; `crates/metal2vulkan/src/lower/stage_io/plan.rs (index_store)`
 - `feature::ClipDistance`: `crates/metal2vulkan/src/lower/mesh/mod.rs (select, 2 sites)`
 - `feature::DualSourceBlending`: `crates/metal2vulkan/src/metal/state.rs (blend_factor)`; `crates/metal2vulkan/src/pipeline/link/graphics.rs (check_outputs)`; `crates/metal2vulkan/src/pipeline/rotated_blend.rs (rotated_blend)`
 - `feature::Barycentrics`: `crates/metal2vulkan/src/device/metal.rs (unsupported_features)`; `crates/metal2vulkan/src/lower/stage_io/plan.rs (param)`

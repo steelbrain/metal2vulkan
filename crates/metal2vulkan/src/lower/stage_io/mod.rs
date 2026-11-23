@@ -79,12 +79,13 @@
 //!   `uint` varying (`IoRole::ViewportIndex`), which a fragment function compiled under
 //!   `LoweringInputs::viewport_index_varying` reads as its `[[viewport_array_index]]`; any other
 //!   fragment function reads `ViewportIndex` (0 when no stage writes it).
-//! - A vertex function stores `Layer` or `ViewportIndex` only where it writes the index the same at
-//!   every vertex of a primitive, as its structure shows (`StageIo::uniform_outputs`), and the
-//!   device stores the builtin from a vertex function (`shaderOutputLayer`,
-//!   `shaderOutputViewportIndex`). One written alike on a device without the output is refused
-//!   needing it; one not shown alike is refused as not implemented (`plan::index_store`). An index
-//!   the function declares and never writes (`undef` or `poison` at every return,
+//! - A vertex function stores `Layer` or `ViewportIndex` as it writes the index, where the device
+//!   stores the builtin from a vertex function (`shaderOutputLayer`, `shaderOutputViewportIndex`);
+//!   on a device without the output it is refused needing it (`plan::index_store`). Metal requires
+//!   the same value at every vertex of a primitive, and Vulkan the same of `Layer` and
+//!   `ViewportIndex` (VUID-VkPipelineShaderStageCreateInfo-stage-02596 and -02597); where a
+//!   function breaks that, Metal gives no answer, and the slice or viewport is the device's choice.
+//!   An index the function declares and never writes (`undef` or `poison` at every return,
 //!   [`returns_undefined`]) has no value in Metal; it is stored as 0, the same at every vertex
 //!   (`PlannedOutput::unwritten`). On a device without `multiViewport` a draw has one viewport, so
 //!   every index selects viewport 0 and no `ViewportIndex` is stored at all: the raw varying alone.
@@ -750,17 +751,13 @@ fn returned_member(
     None
 }
 
-/// The varyings vertex function `e`, compiled under `inputs`, writes the same value at every
-/// vertex of a primitive (`StageIo::uniform_outputs`), sorted: its user varyings, and the raw
-/// varyings of the slice and viewport indices it writes (`VaryingKey::render_target_array_index`,
-/// `VaryingKey::viewport_index`), which decide where it stores those indices. At each return, in
-/// a block every vertex of a primitive reaches alike, the varying's field of the returned value is
-/// uniform
+/// The user varyings vertex function `e`, compiled under `inputs`, writes the same value at every
+/// vertex of a primitive (`StageIo::uniform_outputs`), sorted. At each return, in a block every
+/// vertex of a primitive reaches alike, the varying's field of the returned value is uniform
 /// among those vertices (`simd::uniform::Among::Primitive`), computed only from constants,
 /// `constant` memory read through uniform pointers, the draw's instance, base vertex, base
 /// instance, amplification and patch, and the vertex attributes `inputs` fetches per instance or
-/// at a constant step; or the field is an index the function never writes ([`returns_undefined`]),
-/// which is stored as 0. Decided from the structure of the specialized entry alone, never from a
+/// at a constant step. Decided from the structure of the specialized entry alone, never from a
 /// name. Empty for every other stage.
 pub(crate) fn uniform_varyings(
     e: &crate::air::Entry,
@@ -782,10 +779,6 @@ pub(crate) fn uniform_varyings(
             .iter()
             .filter_map(|o| match &o.role {
                 OutputRole::VertexOutput(key) => Some((o.field, VaryingKey::user(&key.0))),
-                OutputRole::RenderTargetArrayIndex => {
-                    Some((o.field, VaryingKey::render_target_array_index()))
-                }
-                OutputRole::ViewportArrayIndex => Some((o.field, VaryingKey::viewport_index())),
                 _ => None,
             })
             .collect();
@@ -881,14 +874,9 @@ pub(crate) fn uniform_varyings(
         false
     };
     for (field, key) in fields {
-        // An index the function never writes is stored as 0 at every return
-        // (`PlannedOutput::unwritten`).
-        let index =
-            key == VaryingKey::render_target_array_index() || key == VaryingKey::viewport_index();
         if returns
             .iter()
             .all(|&(b, v)| u.is_uniform(b) && member(v, field))
-            || (index && returns_undefined(e, field))
         {
             out.insert(key);
         }

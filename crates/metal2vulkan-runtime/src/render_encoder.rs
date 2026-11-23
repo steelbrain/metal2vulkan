@@ -1573,9 +1573,9 @@ impl RenderCommandEncoder {
     /// floor's `multiViewport` and `shaderOutputViewportIndex`), viewport 0 for an index at or past
     /// the count, as Metal draws it; a draw of any other function takes viewport 0. Each viewport's
     /// scissor is the rectangle of its index, the one rectangle where one is set, and none past the
-    /// rectangles set where several are, each cut to the pixels its viewport covers. An index that
-    /// is not one value across a primitive is the translator's refusal at the state's creation (a
-    /// geometry stage, which device creation does not enable).
+    /// rectangles set where several are, each cut to the pixels its viewport covers. Metal requires
+    /// one index at every vertex of a primitive; where a function writes several, the viewport is
+    /// the device's choice.
     ///
     /// Err: as [`set_viewport`](Self::set_viewport) for any of them, the encoder's viewports
     /// unchanged; [`Gap::Draw`] of [`DrawKind::Viewports`] for none or more than 16.

@@ -1265,9 +1265,8 @@ fn select_entry(
     widest_pin: simd::WidestPin,
     m: &mut Meter,
 ) -> Result<Plan, Error> {
-    // The varyings a vertex function writes the same at every vertex of a primitive, which a
-    // fragment function of its pipeline reads flat where it interpolates them, and which decide
-    // where it stores the slice and viewport indices it writes.
+    // The user varyings a vertex function writes the same at every vertex of a primitive, which
+    // a fragment function of its pipeline reads flat where it interpolates them.
     if cx.stage == Stage::Vertex {
         cx.families.stage_io.interface.uniform_outputs =
             stage_io::uniform_varyings(cx.entry, cx.inputs, m)?

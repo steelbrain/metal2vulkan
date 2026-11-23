@@ -4139,9 +4139,8 @@ cache is answered compile-required on both.
   the encoder's count, which a draw pushes, as Metal draws it through viewport 0. A draw of any
   other function draws through viewport 0. Vulkan takes as many scissors as viewports: each
   viewport's is the rectangle of its index, the one rectangle where one is set, and none past
-  the rectangles set where several are, each cut to the pixels its viewport covers. An index
-  that is not one value across a primitive is the translator's refusal at creation, as a layer
-  index is: its form is a geometry stage, which device creation does not enable.
+  the rectangles set where several are, each cut to the pixels its viewport covers. The index is
+  stored as the function writes it, as a layer index is (Layered rendering, below).
 - A draw may read an attachment of its own pass through a texture, as Metal reads a render
   target, where the device reads attachments (Floor, Attachment reads): through the attachment
   feedback loop where the device has it, else through a copy. The texture reaches the
@@ -4440,18 +4439,11 @@ cache is answered compile-required on both.
   depth planes, which are no attachment's layers (`Gap::RenderPass`, `TextureType`, as for any 3D
   attachment), and a draw that reads one of its pass's attachments through a texture on a device
   without the attachment feedback loop (`Gap::Draw`, `AttachmentRead`: an attachment's shadow
-  holds one layer); and, at creation on every device, whatever pass it would draw in, a vertex
-  function whose `[[render_target_array_index]]` the translator cannot show the same at every
-  vertex of a primitive, an `Error::Translation` naming `LayeredRendering` as not implemented.
-  Vulkan requires one `Layer` at every vertex of a primitive
-  (`VUID-VkPipelineShaderStageCreateInfo-stage-02596`), so such a function cannot store its index
-  as written, and Metal documents a differing index as undefined (the Metal Shading Language
-  specification). The translator shows an index
-  the same where it is computed from constants, `constant` memory, the draw's instance, base
-  vertex and base instance, and attributes fetched per instance, never from `[[vertex_id]]` or
-  another per-vertex input (`StageIo::uniform_outputs`): `constant uint *layers` read at
-  `[[instance_id]]` is, a `device` buffer read at `[[vertex_id]]` is not. An index the function
-  declares and never writes, which Metal gives no value, is stored as 0, the same at every vertex.
+  holds one layer). A vertex function's `[[render_target_array_index]]` and
+  `[[viewport_array_index]]` are stored as the function writes them. Metal requires the same value
+  at every vertex of a primitive; where a program breaks that, the layer or viewport is the
+  device's choice. An index the function declares and never writes, which Metal gives no value,
+  is stored as 0, the same at every vertex.
 - A `Clear` pass of one layer that encodes no draw clears Metal's render area rounded up to 32
   pixels a side, where a Mac clears the whole level and slice of a texture it keeps losslessly
   compressed, which no Vulkan query tells. A pass whose attachments differ in size reaches the
