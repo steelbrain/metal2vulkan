@@ -1286,6 +1286,41 @@ fn frames_releases_and_splits() {
     assert!(kept.calls.contains(&"#4 = #2 commandBuffer".to_string()));
 }
 
+/// Metal's objects keep their device: a program may release its device first and then what it
+/// made. The device's release drops what it made, and the program's own release of one of them
+/// later plays as nothing: the backend releases it once, with the device. An object no call
+/// made still stops the play.
+#[test]
+fn an_object_released_after_its_device_plays_as_released_with_it() {
+    let mut kept = Kept::default();
+    let (_, ended) = played(&mut kept, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newSamplerStateWithDescriptor:", 1, 2, &[], &[])?;
+        w.call("newSamplerStateWithDescriptor:", 1, 3, &[], &[])?;
+        w.call("release", 1, 0, &[], &[])?;
+        w.call("release", 3, 0, &[], &[])?;
+        w.call("release", 2, 0, &[], &[])
+    });
+    ended.unwrap();
+    let released: Vec<&str> = (kept.calls.iter())
+        .filter(|call| call.ends_with(" release"))
+        .map(String::as_str)
+        .collect();
+    assert_eq!(released, ["#3 release", "#2 release", "#1 release"]);
+
+    let (_, ended) = played(&mut Kept::default(), |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newSamplerStateWithDescriptor:", 1, 2, &[], &[])?;
+        w.call("release", 1, 0, &[], &[])?;
+        w.call("release", 2, 0, &[], &[])?;
+        w.call("release", 2, 0, &[], &[])
+    });
+    match ended {
+        Err(PlayError::Invalid(why)) => assert!(why.contains("#2, made by no call"), "{why}"),
+        other => panic!("a second release of a dropped object played: {other:?}"),
+    }
+}
+
 /// A draw the backend skips is counted, and the play is no verdict past the first: the frame and
 /// stream position of the call at which the backend's skips first grew, which it was told before
 /// it played that call. A play with no skip has no such point.
