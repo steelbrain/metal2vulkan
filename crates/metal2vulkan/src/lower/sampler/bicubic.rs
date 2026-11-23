@@ -1254,6 +1254,30 @@ pub(super) fn word_field(
     fb.binary(BinOp::BitwiseAnd, f, m)
 }
 
+/// The bound format's treatment of texture slot `texture` under the bicubic filter: the slot's
+/// `BicubicTexels` specialization, or under the identity domains its push field, which the
+/// consumer writes from the bound texture, read in the open block.
+pub(super) fn format_bits(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    texture: u32,
+) -> BResult<Bits> {
+    if let Some(&spec) = cx.decl.families.sampler.bicubic.get(&texture) {
+        return Ok(Bits::Spec(spec));
+    }
+    if !cx.plan.families.access.identity {
+        return Err(cx.fail(format!(
+            "texture slot {texture} has no bicubic specialization"
+        )));
+    }
+    let Some(slot) = cx.plan.families.texture.slots.get(&texture) else {
+        return Err(cx.fail(format!("texture slot {texture} is not planned")));
+    };
+    Ok(Bits::Value(
+        cx.push_field(fb, PushField::BicubicTexels(slot.slot))?,
+    ))
+}
+
 /// The `vec4` texel the bicubic sample `s` of sampled image `si` (image facts `image`) reads
 /// (module docs), its `half` result the device's narrowing of the `f32` sum.
 pub(super) fn emit(
@@ -1264,23 +1288,7 @@ pub(super) fn emit(
     image: CombinedImage,
     b: &Bicubic,
 ) -> BResult<SValue> {
-    let bits = match cx.decl.families.sampler.bicubic.get(&b.texture) {
-        Some(&spec) => Bits::Spec(spec),
-        // Under the identity domains the slot's push field, which the consumer writes from the
-        // bound texture.
-        None if cx.plan.families.access.identity => {
-            let Some(slot) = cx.plan.families.texture.slots.get(&b.texture) else {
-                return Err(cx.fail(format!("texture slot {} is not planned", b.texture)));
-            };
-            Bits::Value(cx.push_field(fb, PushField::BicubicTexels(slot.slot))?)
-        }
-        None => {
-            return Err(cx.fail(format!(
-                "texture slot {} has no bicubic specialization",
-                b.texture
-            )))
-        }
-    };
+    let bits = format_bits(cx, fb, b.texture)?;
     let half = half_result(cx, s)?;
     let t = Tys::new(fb)?;
     let span = b.span();

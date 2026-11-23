@@ -15,6 +15,10 @@
 //! - the emulation on those facts (its footprint, weights and routine calls once), whose taps a
 //!   dispatch reads from each arm's image (the null arm's are zero).
 //!
+//! Under the identity domains an arm's image is its texture slot's element of the set-1 array at
+//! the index its pushed resource ID holds, and its bits the slot's `PushField::BicubicTexels`, as
+//! a candidate's own sample reads them.
+//!
 //! Where a handle names a candidate the facts are that candidate's, so every value is the one its
 //! own arm computed; elsewhere the switch's null value is selected. The emulation of a null handle
 //! runs on a size of ones and zero taps, whose value is discarded.
@@ -23,11 +27,11 @@ use crate::lower::emit::EmitCx;
 use crate::lower::texture::{dispatch, with_word, NullLeaf};
 use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::error::BResult;
-use crate::spirv::ids::{ConstId, Value as SValue};
+use crate::spirv::ids::Value as SValue;
 use crate::spirv::ir::{ConstBits, Constant, ImageQuery, Type as SType};
 
 use super::bicubic::Bicubic;
-use super::{Binding, CombinedImage, SampleOp, Sampling, Source};
+use super::{BindingKey, CombinedImage, SampleOp, Sampling, Source};
 
 /// The candidates of a switch-at-use that emulates once: the handles' values dispatched on,
 /// outermost first, and each arm's case literals and sampling.
@@ -51,26 +55,43 @@ impl Candidates<'_> {
         dispatch(cx, fb, &self.sels, &self.arms, &leaf, null)
     }
 
-    /// The image of arm sampling `a`'s binding, loaded in the open block.
+    /// The image of arm sampling `a`'s binding, loaded in the open block: its combined binding's,
+    /// or under the identity domains its texture slot's element of the set-1 array
+    /// (`emit::identity_image`).
     pub(super) fn image(
         &self,
         cx: &mut EmitCx<'_>,
         fb: &mut FunctionBuilder<'_>,
         a: &Sampling,
     ) -> BResult<SValue> {
-        binding(cx, a)?.0.image(fb)
+        let key = key(cx, a)?;
+        if cx.plan.families.access.identity {
+            return Ok(super::emit::identity_image(cx, fb, key)?.0);
+        }
+        match cx.decl.families.sampler.combined.get(&key) {
+            Some(&(b, _)) => b.image(fb),
+            None => Err(cx.fail(format!("combined binding {key:?} is not declared"))),
+        }
     }
 }
 
-/// The combined binding sampling `a` reads, and its image facts.
-fn binding(cx: &mut EmitCx<'_>, a: &Sampling) -> BResult<(Binding, CombinedImage)> {
-    let Source::Combined(key) = a.source else {
-        return Err(cx.fail("a shared sampling of a heap element"));
-    };
-    match cx.decl.families.sampler.combined.get(&key) {
-        Some(&b) => Ok(b),
-        None => Err(cx.fail(format!("combined binding {key:?} is not declared"))),
+/// The combined binding sampling `a` reads.
+fn key(cx: &mut EmitCx<'_>, a: &Sampling) -> BResult<BindingKey> {
+    match a.source {
+        Source::Combined(key) => Ok(key),
+        _ => Err(cx.fail("a shared sampling of a heap element")),
     }
+}
+
+/// The image facts of the binding sampling `a` reads: its combined binding's, or under the
+/// identity domains its identity sampling's.
+fn image_facts(cx: &mut EmitCx<'_>, a: &Sampling) -> BResult<CombinedImage> {
+    let key = key(cx, a)?;
+    let image = match cx.plan.families.access.identity {
+        true => (cx.plan.families.sampler.identity.get(&key)).map(|i| i.combined()),
+        false => (cx.decl.families.sampler.combined.get(&key)).map(|&(_, image)| image),
+    };
+    image.ok_or_else(|| cx.fail(format!("combined binding {key:?} is not declared")))
 }
 
 /// The bicubic sample every arm of a shared switch takes ([`Sampling::shared_shape`]).
@@ -81,16 +102,13 @@ fn bicubic(s: &Sampling) -> Option<&Bicubic> {
     }
 }
 
-/// The specialization holding the bound format's bits of arm sampling `a`'s slot, its bicubic
-/// sample's `BicubicTexels`.
-fn bits(cx: &mut EmitCx<'_>, a: &Sampling) -> BResult<ConstId> {
+/// The bound format's bits of arm sampling `a`'s slot, its bicubic sample's, read in the open
+/// block (`bicubic::format_bits`).
+fn bits(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, a: &Sampling) -> BResult<SValue> {
     let Some(b) = bicubic(a) else {
         return Err(cx.fail("a shared switch's arm without its bicubic sample"));
     };
-    match cx.decl.families.sampler.bicubic.get(&b.texture) {
-        Some(&c) => Ok(c),
-        None => Err(cx.fail("a shared switch's arm without its format specialization")),
-    }
+    super::bicubic::format_bits(cx, fb, b.texture)?.value(fb)
 }
 
 /// The value of the shared switch over `c` (module docs): its sampling's value where a handle
@@ -107,9 +125,9 @@ pub(crate) fn shared_value(
     let Some(b) = bicubic(first) else {
         return Err(cx.fail("a shared switch without an emulation"));
     };
-    let (_, image) = binding(cx, first)?;
+    let image = image_facts(cx, first)?;
     for &(_, a) in &c.arms {
-        if binding(cx, a)?.1 != image {
+        if image_facts(cx, a)? != image {
             return Err(cx.fail("a shared switch's candidates of different images"));
         }
     }
@@ -163,12 +181,8 @@ fn facts(
         let img = c.image(cx, fb, a)?;
         let level = fb.module().const_value(zero)?;
         let size = fb.query(ImageQuery::SizeLod(level), img)?;
-        let bits = bits(cx, a)?;
-        Ok(vec![
-            size,
-            fb.module().const_value(bits)?,
-            fb.module().const_value(yes)?,
-        ])
+        let bits = bits(cx, fb, a)?;
+        Ok(vec![size, bits, fb.module().const_value(yes)?])
     };
     let null_facts = |_: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>| {
         Ok(vec![

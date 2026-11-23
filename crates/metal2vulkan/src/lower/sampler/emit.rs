@@ -1381,15 +1381,14 @@ fn sampler_id(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, n: u32) -> BRes
     cx.push_field(fb, crate::pipeline::sym::PushField::SlotGuestBase(slot))
 }
 
-/// Under the identity domains, the sampled image of combined binding `key`
-/// ([`super::IdentitySampling`]): the texture slot's element of its class's set-1 array at the
-/// index its pushed resource ID holds, and its sampler ([`identity_sampler`]), joined by
-/// `OpSampledImage`.
-fn identity_sampled_image(
+/// Under the identity domains, the image of combined binding `key`, loaded in the open block: the
+/// texture slot's element of its class's set-1 array at the index its pushed resource ID holds,
+/// with the binding's identity sampling ([`super::IdentitySampling`]).
+pub(super) fn identity_image(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     key: super::BindingKey,
-) -> BResult<(SValue, CombinedImage)> {
+) -> BResult<(SValue, super::IdentitySampling)> {
     let Some(i) = cx.plan.families.sampler.identity.get(&key).copied() else {
         return Err(cx.fail(format!("combined binding {key:?} has no identity sampling")));
     };
@@ -1409,16 +1408,20 @@ fn identity_sampled_image(
     let base = fb.module().global_value(images)?;
     let p = fb.access_chain(base, &[element])?;
     let img = fb.load(p, MemAccess::default())?;
+    Ok((img, i))
+}
+
+/// Under the identity domains, the sampled image of combined binding `key`: its image
+/// ([`identity_image`]) and its sampler ([`identity_sampler`]), joined by `OpSampledImage`.
+fn identity_sampled_image(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    key: super::BindingKey,
+) -> BResult<(SValue, CombinedImage)> {
+    let (img, i) = identity_image(cx, fb, key)?;
     let sampler = identity_sampler(cx, fb, key.sampler, i.use_)?;
     let si = fb.sampled_image(img, sampler)?;
-    Ok((
-        si,
-        CombinedImage {
-            plane: super::plane_of(i.image.dim),
-            arrayed: i.image.arrayed,
-            texel: i.image.texel,
-        },
-    ))
+    Ok((si, i.combined()))
 }
 
 /// Under the identity domains, sampler `sampler` in use `use_`: the element of the set-1 sampler

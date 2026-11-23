@@ -1253,6 +1253,17 @@ pub struct IdentitySampling {
     pub use_: SamplerUse,
 }
 
+impl IdentitySampling {
+    /// The image facts emission reads of [`IdentitySampling::image`].
+    pub fn combined(&self) -> CombinedImage {
+        CombinedImage {
+            plane: plane_of(self.image.dim),
+            arrayed: self.image.arrayed,
+            texel: self.image.texel,
+        }
+    }
+}
+
 /// The image facts emission reads for a combined binding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CombinedImage {
