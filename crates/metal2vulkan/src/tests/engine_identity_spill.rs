@@ -245,16 +245,16 @@ fn a_vertex_function_past_its_share_spills_the_checks_fields_into_its_block() {
 }
 
 /// The loads through a parameter block's address in disassembly `text`: a `ulong` loaded from the
-/// push block (selected against null by the floor's tail's test where the function has the tail,
-/// `lower::push::fold_never_pushed`), plus a constant (none for the block's first line, where the
-/// sum may fold), made a
-/// pointer to a one-member block (`OpConvertUToPtr`), whose member is loaded. Their number, how
-/// many of them lie in a function's first block, and how many read a 16-byte line: a `uvec4`,
-/// `Aligned 16`, through a block whose member is `NonWritable`.
+/// push block (or that load selected against the `ulong` null by the floor's tail's test, the form
+/// `lower::push::fold_never_pushed` folds it in), plus a constant (none for the block's first
+/// line, where the sum may fold), made a pointer to a one-member block (`OpConvertUToPtr`), whose
+/// member is loaded. Their number, how many of them lie in a function's first block, and how many
+/// read a 16-byte line: a `uvec4`, `Aligned 16`, through a block whose member is `NonWritable`.
 fn block_loads(text: &str) -> (usize, usize, usize) {
     use std::collections::{BTreeMap, BTreeSet};
     let (mut push, mut chains, mut bases) = (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
-    let (mut constants, mut blocks) = (BTreeSet::new(), BTreeSet::new());
+    let (mut constants, mut blocks, mut nulls) =
+        (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
     let (mut pointees, mut read_only, mut members) =
         (BTreeMap::new(), BTreeSet::new(), BTreeMap::new());
     let (mut loads, mut first, mut lines) = (0, 0, 0);
@@ -279,6 +279,9 @@ fn block_loads(text: &str) -> (usize, usize, usize) {
             [id, "=", "OpConstant", "%ulong", _] => {
                 constants.insert(id);
             }
+            [id, "=", "OpConstantNull", "%ulong"] => {
+                nulls.insert(id);
+            }
             [id, "=", "OpAccessChain" | "OpInBoundsAccessChain", _, var, ..]
                 if push.contains(var) =>
             {
@@ -287,7 +290,9 @@ fn block_loads(text: &str) -> (usize, usize, usize) {
             [id, "=", "OpLoad", "%ulong", chain, ..] if chains.contains(chain) => {
                 bases.insert(id);
             }
-            [id, "=", "OpSelect", "%ulong", _, _, base] if bases.contains(base) => {
+            [id, "=", "OpSelect", "%ulong", _, null, base]
+                if nulls.contains(null) && bases.contains(base) =>
+            {
                 bases.insert(id);
             }
             [id, "=", "OpIAdd", "%ulong", a, b]
