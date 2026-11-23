@@ -874,7 +874,9 @@ pub fn case_requirements(case: &AuthoredCase) -> BTreeSet<ToolingRequirement> {
             ToolingRequirement::SeparateDepthStencil,
         ),
         (
-            kernel && case.imageblock.is_some(),
+            kernel
+                && (case.imageblock.as_ref())
+                    .is_some_and(|imageblock| imageblock.implicit_coverage.is_some()),
             ToolingRequirement::KernelImageblock,
         ),
         (
@@ -2940,8 +2942,8 @@ entry:
             assert_eq!(requirement.stops(), [Executor::EngineCandidate]);
         };
 
-        // A kernel's imageblock, a tile function's implicit one or an explicit one, is the
-        // runtime's limit.
+        // A tile function's implicit imageblock is the runtime's limit; an explicit one, whose
+        // size the run sets, is none.
         let mut tile = kernel.clone();
         tile.imageblock = Some(ImageblockResource {
             dimensions: [1, 1],
@@ -2949,7 +2951,7 @@ entry:
         });
         only(&tile, ToolingRequirement::KernelImageblock);
         tile.imageblock.as_mut().unwrap().implicit_coverage = None;
-        only(&tile, ToolingRequirement::KernelImageblock);
+        assert!(case_requirements(&tile).is_empty());
 
         let opaque = IntersectionFunctionTableEntry::OpaqueTriangle {
             index: 0,

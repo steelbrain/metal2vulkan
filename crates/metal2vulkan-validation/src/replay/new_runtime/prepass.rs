@@ -11,13 +11,14 @@ use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 
-/// A dispatch to prepare: its state, its grid, its threadgroup size and the encoder's threadgroup
-/// memory lengths.
+/// A dispatch to prepare: its state, its grid, its threadgroup size, the encoder's threadgroup
+/// memory lengths and its imageblock size.
 pub(super) type Item = (
     rt::ComputePipelineState,
     rt::Dispatch,
     [u32; 3],
     Vec<(u32, u32)>,
+    [u32; 2],
 );
 
 /// The pre-pass's threads and their queue.
@@ -43,7 +44,7 @@ impl Pool {
                 let tally = Arc::clone(&tally);
                 let run = move || loop {
                     let next = (items.lock().unwrap_or_else(PoisonError::into_inner)).recv();
-                    let Ok((state, grid, size, lengths)) = next else {
+                    let Ok((state, grid, size, lengths, imageblock)) = next else {
                         return;
                     };
                     if stop.load(Relaxed) {
@@ -52,7 +53,7 @@ impl Pool {
                     tally[0].fetch_add(1, SeqCst);
                     // A kernel past the stage bound is refused at its dispatch too, which the
                     // player reports as the dispatch's own error.
-                    let _ = state.prepare_dispatch(grid, size, &lengths);
+                    let _ = state.prepare_dispatch(grid, size, &lengths, imageblock);
                     tally[1].fetch_add(1, SeqCst);
                 };
                 let named = std::thread::Builder::new().name(format!("m2v-prepass-{at}"));

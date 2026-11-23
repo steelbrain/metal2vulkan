@@ -100,12 +100,19 @@ fn the_case_maps_or_names_the_gap() {
     case.fuel = Some(9);
     assert_eq!(map_kernel(&case).unwrap(), mapped);
 
-    // An explicit imageblock is the runtime's limit.
+    // An explicit imageblock's size is the run's; a tile pass's implicit one is the runtime's
+    // limit.
     let mut imageblock = kernel_case();
     imageblock.imageblock = Some(crate::case::ImageblockResource {
         dimensions: [16, 8],
         implicit_coverage: None,
     });
+    let sized = map_kernel(&imageblock).expect("an explicit imageblock's case");
+    assert_eq!(sized.imageblock, Some([16, 8]));
+    if let Some(resource) = imageblock.imageblock.as_mut() {
+        resource.implicit_coverage =
+            Some(crate::case::ImplicitImageblockCoverage::FullSingleSample);
+    }
     assert_eq!(
         map_kernel(&imageblock),
         Err(NotSupported::Requirements(

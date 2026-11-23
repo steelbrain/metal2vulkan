@@ -452,9 +452,11 @@ fn run(
     let state = made_within(|numbered| {
         device.new_compute_pipeline_state(&descriptor, |samplers| numbered(samplers))
     })?;
-    // Every pipeline the dispatch runs, made before anything is submitted.
+    // Every pipeline the dispatch runs, made before anything is submitted, at the imageblock
+    // size the run sets, or Metal's 1 by 1 where it sets none.
+    let imageblock = case.imageblock.unwrap_or([1, 1]);
     state
-        .prepare_dispatch(dispatch, threads_per_group, &lengths)
+        .prepare_dispatch(dispatch, threads_per_group, &lengths, imageblock)
         .map_err(|error| ExecutorError::Failed(format!("the dispatch's pipeline: {error}")))?;
     let created = device
         .counters()
@@ -1008,6 +1010,11 @@ fn dispatched(
                 encoder
                     .set_threadgroup_memory_length(length, index)
                     .map_err(fail("a threadgroup memory length"))?;
+            }
+            if let Some([width, height]) = case.imageblock {
+                encoder
+                    .set_imageblock_size(width, height)
+                    .map_err(fail("the imageblock size"))?;
             }
             match dispatch {
                 rt::Dispatch::Threads(threads) => {

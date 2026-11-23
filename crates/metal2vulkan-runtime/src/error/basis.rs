@@ -40,6 +40,7 @@ impl Refusal {
             Refusal::SamplerIds { .. } => RefusalBasis::Ours,
             Refusal::NoBufferAtIndex { .. } => RefusalBasis::Ours,
             Refusal::ThreadgroupSize { .. } => RefusalBasis::MetalDocumented,
+            Refusal::ImageblockSize { .. } => RefusalBasis::MetalMeasured,
             Refusal::IndirectOffset { .. } => RefusalBasis::MetalDocumented,
             Refusal::IndirectArgumentsPastEnd { .. } => RefusalBasis::Ours,
             Refusal::BufferOffsetAlignment { .. } => RefusalBasis::MetalDocumented,

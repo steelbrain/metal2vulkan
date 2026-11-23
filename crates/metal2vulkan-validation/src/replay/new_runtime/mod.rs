@@ -2548,7 +2548,8 @@ impl Backend for NewRuntime {
                 AheadGrid::Threads(threads) => rt::Dispatch::Threads(threads),
                 AheadGrid::Threadgroups(groups) => rt::Dispatch::Threadgroups(groups),
             };
-            pool.give((state.clone(), grid, ahead.size, ahead.lengths));
+            let (size, lengths) = (ahead.size, ahead.lengths);
+            pool.give((state.clone(), grid, size, lengths, ahead.imageblock));
         }
     }
 

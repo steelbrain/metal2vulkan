@@ -132,6 +132,9 @@ pub struct ComputeCase {
     pub samplers: BTreeMap<u32, SamplerResource>,
     /// `setThreadgroupMemoryLength:atIndex:`.
     pub threadgroup_lengths: BTreeMap<u32, u32>,
+    /// `setImageblockWidth:height:`: the size of the case's explicit imageblock, none where it
+    /// sets none.
+    pub imageblock: Option<[u32; 2]>,
     pub dispatch: Dispatch,
     pub output: ComputeOutput,
     /// The case's out-of-bounds targets: each buffer target is allocated inside a guard of its
@@ -389,6 +392,12 @@ pub fn compute_case(case: &AuthoredCase) -> Result<ComputeCase, NotSupported> {
         textures,
         samplers,
         threadgroup_lengths,
+        // An implicit imageblock's coverage is `KernelImageblock`, which the requirements refused
+        // above: what is left is an explicit imageblock's size.
+        imageblock: case
+            .imageblock
+            .as_ref()
+            .map(|imageblock| imageblock.dimensions),
         // `dispatch.grid` is in threads: the Metal oracle calls
         // `dispatchThreads:threadsPerThreadgroup:`.
         dispatch: Dispatch::Threads {

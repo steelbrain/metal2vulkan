@@ -200,14 +200,10 @@ pub enum ToolingRequirement {
     /// structure, so no census row carries it. The Metal oracle draws it, so a case of it stays
     /// Metal-qualified ([`Self::qualifies_on_metal`]).
     SeparateDepthStencil,
-    /// A compute kernel's explicit imageblock (`executor_contract::case_requirements`), a tile
-    /// pass's tile size included. The runtime's compute encoder has no
-    /// `setImageblockWidth:height:`: it makes the pipeline state of a kernel that reaches an
-    /// imageblock, and refuses its dispatch as `metal2vulkan_runtime::Gap::KernelInput` of
-    /// `KernelInputKind::RuntimeFact` naming `ImageblockSize`, held on lavapipe by the runtime's
-    /// device test in `tests::kernel_input`
-    /// `an_explicit_imageblock_kernel_is_made_and_its_dispatch_refused_as_its_named_runtime_fact`;
-    /// it builds no tile function. Both are known gaps its README states.
+    /// A compute kernel's implicit imageblock, a tile pass's coverage of it
+    /// (`ImageblockResource::implicit_coverage`, `executor_contract::case_requirements`): the
+    /// runtime builds no tile function, a known gap its README states. An explicit imageblock is
+    /// none: the run sets its size (`ComputeCommandEncoder::set_imageblock_size`).
     KernelImageblock,
     /// A fragment function's imageblock, the case's cells of it
     /// (`executor_contract::case_requirements`). The runtime refuses a fragment function with an

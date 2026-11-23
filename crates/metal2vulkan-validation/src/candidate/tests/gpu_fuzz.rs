@@ -151,6 +151,7 @@ pub(super) mod device {
             textures: BTreeMap::new(),
             samplers: BTreeMap::new(),
             threadgroup_lengths: BTreeMap::new(),
+            imageblock: None,
             dispatch: Dispatch::Threads {
                 threads: [kernel.threads, 1, 1],
                 threads_per_group: [kernel.threads, 1, 1],

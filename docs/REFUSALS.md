@@ -31,7 +31,7 @@ Columns:
 | Rate maps the compile layer does not compile | 5 | 5 | 0 | 0 | 4 | 1 | 0 |
 | The translation deadline | 1 | 1 | 0 | 0 | 0 | 1 | 0 |
 | Devices below the runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
-| The runtime's `Refusal` | 84 | 84 | 0 | 0 | 0 | 0 | 0 |
+| The runtime's `Refusal` | 85 | 85 | 0 | 0 | 0 | 0 | 0 |
 | The runtime's `Limit` | 17 | 17 | 0 | 0 | 0 | 0 | 0 |
 | The runtime's `Gap` | 32 | 32 | 0 | 0 | 0 | 0 | 0 |
 
@@ -44,7 +44,7 @@ Columns:
 | Rate maps the compile layer does not compile | 0 | 0 | 0 | 0 | 5 | 0 | 0 | 0 |
 | The translation deadline | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 |
 | Devices below the runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
-| The runtime's `Refusal` | 22 | 25 | 0 | 0 | 37 | 0 | 0 | 0 |
+| The runtime's `Refusal` | 23 | 25 | 0 | 0 | 37 | 0 | 0 | 0 |
 | The runtime's `Limit` | 0 | 0 | 0 | 13 | 4 | 0 | 0 | 0 |
 | The runtime's `Gap` | 0 | 0 | 0 | 3 | 29 | 0 | 0 | 0 |
 
@@ -256,6 +256,7 @@ Columns:
 | `SamplerIds` | A consumer's answer to `Device::new_compute_pipeline_state`'s numbered samplers with another count of indices | every device (a public call's own check of its arguments) | `ours`: each numbered sampler takes one index | 1: `crates/metal2vulkan-runtime/src/pipeline.rs (number_samplers)` | `-` |
 | `NoBufferAtIndex` | `setBufferOffset` at an index where no buffer is bound, or a draw whose vertex descriptor reads a vertex buffer index where none is bound | every device (a public call's own check of its arguments) | `ours`: there is no buffer whose offset to change, and none whose vertices the draw reads; Metal's validation stops such a draw | 3: `crates/metal2vulkan-runtime/src/encoder.rs (set_buffer_offset)`, `crates/metal2vulkan-runtime/src/render_encoder.rs (find)` (+1) | `-` |
 | `ThreadgroupSize` | A threadgroup of no threads, or of more than Metal's `maxTotalThreadsPerThreadgroup` for the kernel (a required size's threads, where the... | every device (a public call's own check of its arguments) | `metal-documented`: a threadgroup's threads total at most the state's `maxTotalThreadsPerThreadgroup` | 2: `crates/metal2vulkan-runtime/src/encoder.rs (dispatch)`, `crates/metal2vulkan-runtime/src/encoder.rs (size_checked)` | `-` |
+| `ImageblockSize` | An imageblock size (`ComputeCommandEncoder::set_imageblock_size`) whose width or height is not a power of two, 0 included, or whose cells are more... | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1, probe `imageblock_size_rules.m` in the conformance crate, job m3-max-70002: Metal's validation layer stops each at the call, `width(24) must be a power of 2.`, `height(12) must be a power of 2.`, `width(0) must be a power of 2.` and `width(64)*height(32) must be less than or equal to 1024`; it takes 16 by 16, 1024 by 1, 1 by 1024, 16 by 16 for a state of 64 threads, and a size set before the pipeline state | 1: `crates/metal2vulkan-runtime/src/encoder.rs (imageblock_checked)` | `-` |
 | `IndirectOffset` | An indirect dispatch's or draw's argument offset that is not a multiple of 4, which Metal's `indirectBufferOffset` must be... | every device (a public call's own check of its arguments) | `metal-documented`: MTLComputeCommandEncoder.h for `dispatchThreadgroupsWithIndirectBuffer:indirectBufferOffset:threadsPerThreadgroup:`, and MTLRenderCommandEncoder.h for the indirect `drawPrimitives` and `drawIndexedPrimitives`: "indirectBufferOffset must be a multiple of 4"; Apple's page for the indirect `drawPatches` sends its offset to the feature set tables, whose minimum constant buffer offset alignment is 4 bytes | 2: `crates/metal2vulkan-runtime/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)`, `crates/metal2vulkan-runtime/src/render_encoder.rs (indirect)` | `-` |
 | `IndirectArgumentsPastEnd` | An indirect dispatch's or draw's arguments, at an offset that is a multiple of 4, that run past the buffer's end | every device (a public call's own check of its arguments) | `ours`: `vkCmdDispatchIndirect`, `vkCmdDrawIndirect` and `vkCmdDrawIndexedIndirect` read their arguments inside the buffer, `VUID-vkCmdDispatchIndirect-offset-00407`, `VUID-vkCmdDrawIndirect-drawCount-00487` and `VUID-vkCmdDrawIndexedIndirect-drawCount-00539` | 2: `crates/metal2vulkan-runtime/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)`, `crates/metal2vulkan-runtime/src/render_encoder.rs (indirect)` | `-` |
 | `BufferOffsetAlignment` | A dispatch whose kernel, or a draw whose vertex or fragment function, reaches a buffer bound where its address, the buffer's `gpuAddress` plus the... | every device (a public call's own check of its arguments) | `metal-documented`: Metal's API validation refuses the bind offset: "must be a multiple of 4 but was set to 2" for a `uint *` argument bound at offset 2, an Apple M3 Max, macOS 27.0.1, `probes/vector_access_placement.m` in the conformance crate | 1: `crates/metal2vulkan-runtime/src/encoder.rs (check_alignment)` | `-` |
@@ -546,6 +547,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Refusal::SamplerIds`: `crates/metal2vulkan-runtime/src/pipeline.rs (number_samplers)`
 - `rt:Refusal::NoBufferAtIndex`: `crates/metal2vulkan-runtime/src/encoder.rs (set_buffer_offset)`; `crates/metal2vulkan-runtime/src/render_encoder.rs (find)`; `crates/metal2vulkan-runtime/src/render_encoder.rs (set_buffer_offset)`
 - `rt:Refusal::ThreadgroupSize`: `crates/metal2vulkan-runtime/src/encoder.rs (dispatch)`; `crates/metal2vulkan-runtime/src/encoder.rs (size_checked)`
+- `rt:Refusal::ImageblockSize`: `crates/metal2vulkan-runtime/src/encoder.rs (imageblock_checked)`
 - `rt:Refusal::IndirectOffset`: `crates/metal2vulkan-runtime/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)`; `crates/metal2vulkan-runtime/src/render_encoder.rs (indirect)`
 - `rt:Refusal::IndirectArgumentsPastEnd`: `crates/metal2vulkan-runtime/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)`; `crates/metal2vulkan-runtime/src/render_encoder.rs (indirect)`
 - `rt:Refusal::BufferOffsetAlignment`: `crates/metal2vulkan-runtime/src/encoder.rs (check_alignment)`

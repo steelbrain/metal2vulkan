@@ -61,7 +61,8 @@ use crate::cache;
 use crate::counters::{Counters, FirstUse, Gauge, Metric, VariantMake, VariantStart};
 use crate::device::{lock, Core};
 use crate::encoder::{
-    decide, size_checked, threadgroup_memory, Dispatch, Lengths, Module, BUFFER_SLOTS,
+    decide, imageblock_checked, size_checked, threadgroup_memory, Dispatch, Lengths, Module, Sizes,
+    BUFFER_SLOTS,
 };
 use crate::error::{Error, Gap, IndirectCommandsKind, KernelInputKind, Refusal, StageInKind};
 use crate::hazard::Access;
@@ -107,8 +108,9 @@ pub struct ComputePipelineState {
 /// No Metal counterpart: the `VkPipeline` a dispatch of a compute state runs, as a key for a
 /// consumer's pre-pass beside [`ComputePipelineState::prepare_dispatch`]
 /// ([`ComputePipelineState::dispatch_variant`]). Two keys are equal exactly when their
-/// dispatches run the same `VkPipeline`: of one compiled content, the same module, workgroup size
-/// and threadgroup memory lengths. The states of one content share its `VkPipeline`s, so their
+/// dispatches run the same `VkPipeline`: of one compiled content, the same module, workgroup size,
+/// threadgroup memory lengths and, for a kernel that reaches an explicit imageblock, imageblock
+/// size. The states of one content share its `VkPipeline`s, so their
 /// keys compare equal; keys of different contents never do, on any device, even once one content
 /// is gone, so one memo serves every state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -122,11 +124,7 @@ pub struct DispatchVariant {
 impl DispatchVariant {
     /// Its `VkPipeline`'s key among its kernel's variants.
     fn key(&self) -> Key<'_> {
-        (
-            self.local,
-            self.lengths.as_slice(),
-            self.module == Module::Tiles,
-        )
+        (self.local, &self.lengths, self.module == Module::Tiles)
     }
 }
 
@@ -476,8 +474,9 @@ impl More {
 }
 
 impl Variants {
-    /// The pipeline of the variant of `size`, threadgroup memory `lengths` and `tiles`, where its
-    /// cell holds it, read with no lock; `more`, the list past the cells, where they are all full.
+    /// The pipeline of the variant of `size`, threadgroup memory `lengths` (the imageblock's size
+    /// with them) and `tiles`, where its cell holds it, read with no lock; `more`, the list past
+    /// the cells, where they are all full.
     fn in_cells(&self, (size, lengths, tiles): Key<'_>) -> Result<vk::Pipeline, bool> {
         for cell in &self.cells {
             match cell.get() {
@@ -564,9 +563,9 @@ impl Drop for Pending<'_> {
     }
 }
 
-/// A variant's key: its threadgroup size, its threadgroup memory lengths, whether it runs a
-/// kernel's grid tiles.
-pub(crate) type Key<'a> = ([u32; 3], &'a [u32], bool);
+/// A variant's key: its threadgroup size, its threadgroup memory lengths and imageblock size,
+/// whether it runs a kernel's grid tiles.
+pub(crate) type Key<'a> = ([u32; 3], &'a Lengths, bool);
 
 /// What the runtime needs of a kernel, from the translator.
 pub(crate) struct Interface {
@@ -616,9 +615,8 @@ pub(crate) struct Interface {
     /// dispatch of it takes the runtime's arena (`crate::arena`, [`FieldValue::PrivateArena`]).
     pub(crate) private_arena: Option<u32>,
     /// The bytes of each cell of the kernel's explicit imageblock (`RuntimeFact::ImageblockSize`),
-    /// where it reaches one. Its extent is what `setImageblockWidth:height:` sets, which the
-    /// encoder does not have: the state is made, and its dispatches are refused
-    /// (`encoder::decide`).
+    /// where it reaches one. Its extent is what `setImageblockWidth:height:` sets, which each
+    /// `VkPipeline` specializes (`Lengths::imageblock`).
     pub(crate) imageblock: Option<u32>,
     /// The kernel's specialization constants: each one's id and what sets it.
     pub(crate) constants: Vec<(u32, Constant)>,
@@ -668,11 +666,12 @@ pub(crate) enum OwnMemory {
 
 impl Memory {
     /// The threadgroup memory a threadgroup of `threads` threads takes with the lengths `lengths`
-    /// set, each rounded up to 16 bytes.
-    pub(crate) fn bytes(&self, lengths: &[u32], threads: u64) -> u64 {
-        let regions = lengths
-            .iter()
-            .map(|&length| u64::from(length).next_multiple_of(16))
+    /// set and an imageblock of `imageblock` bytes after them (0 where the kernel reaches none),
+    /// each rounded up to 16 bytes.
+    pub(crate) fn bytes(&self, lengths: &[u32], imageblock: u64, threads: u64) -> u64 {
+        let regions = (lengths.iter().map(|&length| u64::from(length)))
+            .chain([imageblock])
+            .map(|bytes| bytes.next_multiple_of(16))
             .sum::<u64>();
         let own = match self.own {
             OwnMemory::Static(bytes) => u64::from(bytes) + regions,
@@ -695,6 +694,9 @@ pub(crate) enum Constant {
     /// The length of the threadgroup memory argument at this position of
     /// [`Interface::threadgroups`].
     ThreadgroupLength(usize),
+    /// The explicit imageblock's width (0) or height (1), as the encoder set it
+    /// (`Lengths::imageblock`).
+    Imageblock(usize),
     /// `MultiRegion`: 1 for a kernel's grid tiles ([`Variant::tiles`]), whose regions carry the
     /// tile; 0 for every other launch, whose region states the pipeline's own threadgroup size,
     /// so the kernel takes `L` from its workgroup size and reads no decode.
@@ -811,18 +813,19 @@ pub(crate) enum FieldValue {
 }
 
 /// A `VkPipeline`'s specialization: the threadgroup size, the threadgroup memory lengths in the
-/// order of [`Interface::threadgroups`], and whether it runs a kernel's grid tiles.
+/// order of [`Interface::threadgroups`] with the imageblock's size, and whether it runs a kernel's
+/// grid tiles.
 pub(crate) struct Variant {
     pub(crate) size: [u32; 3],
-    pub(crate) threadgroup_lengths: Vec<u32>,
+    pub(crate) lengths: Lengths,
     /// The launches are a kernel's grid tiles (`MultiRegion` 1).
     pub(crate) tiles: bool,
 }
 
 impl Variant {
     /// Whether this is the variant of `size`, threadgroup memory `lengths` and `tiles`.
-    fn is(&self, size: [u32; 3], lengths: &[u32], tiles: bool) -> bool {
-        self.size == size && self.threadgroup_lengths == lengths && self.tiles == tiles
+    fn is(&self, size: [u32; 3], lengths: &Lengths, tiles: bool) -> bool {
+        self.size == size && self.lengths == *lengths && self.tiles == tiles
     }
 }
 
@@ -864,8 +867,8 @@ impl crate::Device {
     /// makes its main pipeline here (Err below). Where the device has a cache directory
     /// ([`DeviceOptions::pipeline_cache_dir`]), a lowering a device made before is read from it
     /// in place of lowering again, and every `VkPipeline` is made through the pipeline cache it
-    /// keeps there. The content's other `VkPipeline`s, of a threadgroup size and threadgroup
-    /// memory lengths only a dispatch gives, are made by a
+    /// keeps there. The content's other `VkPipeline`s, of a threadgroup size, threadgroup
+    /// memory lengths and an imageblock size only a dispatch gives, are made by a
     /// [`prepare_dispatch`](ComputePipelineState::prepare_dispatch) call or by the first encoding
     /// call of any of its states that needs each ([`ComputePipelineState`]), which waits for it.
     ///
@@ -892,10 +895,7 @@ impl crate::Device {
     /// naming the kernel; [`Gap::IndirectCommandBuffers`] of
     /// [`IndirectCommandsKind::ComputeCommands`] for a descriptor that sets
     /// `supportIndirectCommandBuffers`; [`Gap::KernelInput`] for a kernel that reads what the
-    /// compute encoder does not supply yet, but for an explicit imageblock's extent: a kernel that
-    /// reaches one is made, and its dispatches are refused
-    /// ([`ComputeCommandEncoder::dispatch_threadgroups`](crate::ComputeCommandEncoder::dispatch_threadgroups));
-    /// [`Gap::StageIn`] for a `[[stage_in]]` attribute the kernel reads through a layout of a
+    /// compute encoder does not supply yet; [`Gap::StageIn`] for a `[[stage_in]]` attribute the kernel reads through a layout of a
     /// dynamic stride ([`StageInKind::DynamicStride`]) or of an indexed step at a step rate past 1
     /// ([`StageInKind::IndexedStepRate`]); [`Refusal::SamplerIds`] where
     /// `sampler_ids` answers another count; [`Refusal::IndicesNotGranted`] for a constexpr
@@ -1162,8 +1162,8 @@ impl Compiled {
     /// partial-threadgroups variant's, which runs whole grids, ragged and indirect ones alike, or
     /// the whole module's where the content has no such variant or the variant's threadgroup
     /// memory, a predicated walk's vote word with it, is past the device's (`encoder::decide`);
-    /// none where the module takes a threadgroup memory length from the encoder, or where
-    /// `encoder::decide` refuses the dispatch (a kernel's explicit imageblock).
+    /// none where the module takes a threadgroup memory length or an imageblock size from the
+    /// encoder.
     fn main_key(&self, descriptor: &ComputePipelineDescriptor) -> Option<DispatchVariant> {
         let (module, size) = match &self.form {
             Form::Tiled => (Module::Tiles, [GRID_TILE_THREADS, 1, 1]),
@@ -1175,8 +1175,13 @@ impl Compiled {
                 let bound = declared.then_some([interface.max_total_threads, 1, 1]);
                 let size = descriptor.required_threads_per_threadgroup.or(bound)?;
                 let dispatch = Dispatch::Threadgroups([1; 3]);
-                let (kernel, module, local, lengths) = self.dispatched(dispatch, size, &[])?;
-                return (kernel.interface.threadgroups.is_empty())
+                let set = Sizes {
+                    lengths: &[],
+                    imageblock: [1, 1],
+                };
+                let (kernel, module, local, lengths) = self.dispatched(dispatch, size, set)?;
+                let interface = &kernel.interface;
+                return (interface.threadgroups.is_empty() && interface.imageblock.is_none())
                     .then(|| self.dispatch_key(module, local, lengths));
             }
         };
@@ -1342,12 +1347,15 @@ fn made(
 /// Whether an observing kernel's state keeps its plain module beside its partial-threadgroups
 /// variant, whose module's interface is `variant`: where the variant's predicated walk takes a
 /// vote word of threadgroup memory the plain module does not ([`Memory::vote`]), and the kernel
-/// takes a threadgroup memory length from the encoder or its own memory with the word is past the
-/// device's `max` bytes, so that a dispatch the plain module takes may find the variant past the
-/// limit (`encoder::decide`). Every other dispatch either module takes, the variant takes.
+/// takes a threadgroup memory length or an imageblock size from the encoder or its own memory
+/// with the word is past the device's `max` bytes, so that a dispatch the plain module takes may
+/// find the variant past the limit (`encoder::decide`). Every other dispatch either module takes,
+/// the variant takes.
 fn keeps_plain(variant: &Interface, max: u32) -> bool {
     variant.memory.vote != 0
-        && (!variant.threadgroups.is_empty() || variant.memory.bytes(&[], 0) > u64::from(max))
+        && (!variant.threadgroups.is_empty()
+            || variant.imageblock.is_some()
+            || variant.memory.bytes(&[], 0, 0) > u64::from(max))
 }
 
 /// The lowering of `FunctionCompileKey` digest `key` a device kept in the cache directory, where
@@ -1515,7 +1523,7 @@ pub(crate) fn interface(
             // Each invocation's slot of the private arena, which the encoder places
             // (`FieldValue::PrivateArena`).
             RuntimeFact::PrivateArena { slot_bytes } => private_arena = Some(slot_bytes),
-            // The explicit imageblock's extent, which no dispatch supplies.
+            // The explicit imageblock's cells, whose extent the encoder sets.
             RuntimeFact::ImageblockSize { cell_bytes } => imageblock = Some(cell_bytes),
             // The emulated tier's arena and scratch, in place of Metal's static part.
             RuntimeFact::SimdgroupEmulation {
@@ -1723,9 +1731,8 @@ pub(crate) fn interface(
             // (true) for every dispatch: one pipeline, whose fetch reads an element past the first
             // 2^32 bytes from its bind offset as zero.
             SpecKey::StageInReach => continue,
-            // The explicit imageblock's extent, kept at the module's default (0 by 0): no
-            // dispatch runs a module that reaches an imageblock (`encoder::decide`).
-            SpecKey::ImageblockWidth | SpecKey::ImageblockHeight => continue,
+            SpecKey::ImageblockWidth => Constant::Imageblock(0),
+            SpecKey::ImageblockHeight => Constant::Imageblock(1),
             _ => return Err(KernelInputKind::Specialization),
         };
         constants.push((constant.id, set));
@@ -1910,14 +1917,18 @@ impl ComputePipelineState {
     /// `threadgroup_memory_lengths` is what
     /// [`set_threadgroup_memory_length`](crate::ComputeCommandEncoder::set_threadgroup_memory_length)
     /// set on the encoder before it, as (index, length) pairs, each index once, an index not
-    /// listed at 0.
+    /// listed at 0; `imageblock_size` is what
+    /// [`set_imageblock_size`](crate::ComputeCommandEncoder::set_imageblock_size) set on it before
+    /// the dispatch, `[1, 1]` where it set none, which only a kernel that reaches an explicit
+    /// imageblock reads.
     ///
     /// It decides what the dispatch runs as the dispatch decides it, then makes the `VkPipeline`
-    /// of the dispatch's module, workgroup size, threadgroup memory lengths and grid tiles. It
-    /// returns at once where that is made, or another thread is making it: a dispatch that needs
-    /// it then waits for that thread alone. It makes nothing where the dispatch would refuse its
-    /// threadgroup size, its variant, its threadgroup memory or its kernel's explicit imageblock,
-    /// or records nothing (a grid with no threads, a kernel that writes no memory), and it reports
+    /// of the dispatch's module, workgroup size, threadgroup memory lengths, imageblock size and
+    /// grid tiles. It returns at once where that is made, or another thread is making it: a
+    /// dispatch that needs it then waits for that thread alone. It makes nothing where the
+    /// dispatch would refuse its threadgroup size, its variant or its threadgroup memory, where
+    /// the encoder would refuse the imageblock size of a kernel that reaches one, or where it
+    /// records nothing (a grid with no threads, a kernel that writes no memory), and it reports
     /// no other error than a kernel's past the stage bound: every other is the dispatch's own.
     /// What the dispatch checks of the encoder's bindings is not checked here. A make that failed
     /// is made again by the next call or dispatch that needs it.
@@ -1932,9 +1943,14 @@ impl ComputePipelineState {
         dispatch: Dispatch,
         threads_per_threadgroup: [u32; 3],
         threadgroup_memory_lengths: &[(u32, u32)],
+        imageblock_size: [u32; 2],
     ) -> Result<(), Error> {
         let compiled = &self.inner.compiled;
-        let (size, set) = (threads_per_threadgroup, threadgroup_memory_lengths);
+        let size = threads_per_threadgroup;
+        let set = Sizes {
+            lengths: threadgroup_memory_lengths,
+            imageblock: imageblock_size,
+        };
         let Some((kernel, module, local, lengths)) = compiled.dispatched(dispatch, size, set)
         else {
             return Ok(());
@@ -1966,18 +1982,23 @@ impl ComputePipelineState {
     /// reads false until its [`finish_pipeline`](Self::finish_pipeline), a `prepare_dispatch`
     /// call or a dispatch has made it. The key does not move.
     ///
-    /// None where the dispatch would refuse its threadgroup size, its variant, its threadgroup
-    /// memory or its kernel's explicit imageblock, or records nothing (a grid with no threads, a
-    /// kernel that writes no memory): where `prepare_dispatch` makes nothing whatever was made
-    /// before. It makes nothing and allocates nothing where it answers a key.
+    /// None where the dispatch would refuse its threadgroup size, its variant or its threadgroup
+    /// memory, where the encoder would refuse the imageblock size of a kernel that reaches one, or
+    /// where it records nothing (a grid with no threads, a kernel that writes no memory): where
+    /// `prepare_dispatch` makes nothing whatever was made before. It makes nothing and allocates nothing where it answers a key.
     pub fn dispatch_variant(
         &self,
         dispatch: Dispatch,
         threads_per_threadgroup: [u32; 3],
         threadgroup_memory_lengths: &[(u32, u32)],
+        imageblock_size: [u32; 2],
     ) -> Option<(DispatchVariant, bool)> {
         let compiled = &self.inner.compiled;
-        let (size, set) = (threads_per_threadgroup, threadgroup_memory_lengths);
+        let size = threads_per_threadgroup;
+        let set = Sizes {
+            lengths: threadgroup_memory_lengths,
+            imageblock: imageblock_size,
+        };
         let (kernel, module, local, lengths) = compiled.dispatched(dispatch, size, set)?;
         let variant = compiled.dispatch_key(module, local, lengths);
         Some((variant, kernel.is_made(variant.key())))
@@ -2236,18 +2257,22 @@ impl Compiled {
     }
 
     /// What a dispatch of `dispatch` at threadgroup size `size`, with the encoder's threadgroup
-    /// memory lengths `set`, runs, decided as the dispatch decides it: its kernel, its module, its
-    /// workgroup size and its kernel's threadgroup memory lengths. None where the dispatch refuses
-    /// its threadgroup size, its variant, its threadgroup memory or its kernel's explicit
-    /// imageblock, or records nothing (a grid with no threads, a kernel that writes no memory).
+    /// memory lengths and imageblock size `set`, runs, decided as the dispatch decides it: its
+    /// kernel, its module, its workgroup size and its kernel's threadgroup memory lengths and
+    /// imageblock size. None where the dispatch refuses its threadgroup size, its variant or its
+    /// threadgroup memory, where the encoder refuses the imageblock size of a kernel that reaches
+    /// one, or where it records nothing (a grid with no threads, a kernel that writes no memory).
     fn dispatched(
         &self,
         dispatch: Dispatch,
         size: [u32; 3],
-        set: &[(u32, u32)],
+        set: Sizes<'_>,
     ) -> Option<(&Kernel, Module, [u32; 3], Lengths)> {
         let interface = &self.whole.interface;
         if size_checked(interface, size).is_err() || !interface.has_effects {
+            return None;
+        }
+        if interface.imageblock.is_some() && imageblock_checked(set.imageblock).is_err() {
             return None;
         }
         let max = self.core.limits.max_shared_memory;
@@ -2453,7 +2478,7 @@ impl Kernel {
         let (size, lengths, tiles) = variant.key();
         let made = Variant {
             size,
-            threadgroup_lengths: lengths.to_vec(),
+            lengths: *lengths,
             tiles,
         };
         let pipeline = self.make(core, &made)?;
@@ -2477,7 +2502,8 @@ impl Kernel {
             .map(|&(_, set)| match set {
                 Constant::Size(axis) => variant.size[axis],
                 Constant::Threads => variant.size.iter().product(),
-                Constant::ThreadgroupLength(at) => variant.threadgroup_lengths[at],
+                Constant::ThreadgroupLength(at) => variant.lengths.as_slice()[at],
+                Constant::Imageblock(axis) => variant.lengths.imageblock[axis],
                 Constant::MultiRegion => u32::from(variant.tiles),
                 Constant::Deep => u32::from(variant.size[2] > DEEP_THREADGROUP),
             })

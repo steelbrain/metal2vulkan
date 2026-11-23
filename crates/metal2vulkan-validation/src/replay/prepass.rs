@@ -1,24 +1,25 @@
 //! The pre-pass a consumer that holds a whole command buffer runs before it encodes it, read
-//! ahead: each compute dispatch's state, grid, threadgroup size and threadgroup memory lengths,
-//! due at the stream position where such a consumer could first prepare it, once its command
+//! ahead: each compute dispatch's state, grid, threadgroup size, threadgroup memory lengths and
+//! imageblock size, due at the stream position where such a consumer could first prepare it, once its command
 //! buffer and its state are both made. The player hands each position's dispatches to the
 //! backend once that position's call has played (`Backend::prepare`), in stream order. A
-//! dispatch the same as an earlier one of its state (the same grid, size and lengths) is not due
-//! again: what it needs is prepared once.
+//! dispatch the same as an earlier one of its state (the same grid, size, lengths and imageblock
+//! size) is not due again: what it needs is prepared once.
 
 use super::stream::Call;
 use super::value::Value;
 use std::collections::{HashMap, HashSet};
 
 /// A compute dispatch to prepare: its compute pipeline state's id, its grid as its call took it,
-/// its threadgroup size, and the encoder's threadgroup memory lengths as (index, length) pairs,
-/// each index once, in index order.
+/// its threadgroup size, the encoder's threadgroup memory lengths as (index, length) pairs, each
+/// index once, in index order, and the encoder's imageblock size (1 by 1 where it set none).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Ahead {
     pub state: u64,
     pub grid: AheadGrid,
     pub size: [u32; 3],
     pub lengths: Vec<(u32, u32)>,
+    pub imageblock: [u32; 2],
 }
 
 /// A direct dispatch's grid, as its call took it. The player plays no indirect dispatch.
@@ -54,6 +55,8 @@ struct Encoder {
     state: u64,
     /// The threadgroup memory lengths it set, as (index, length) pairs in index order.
     lengths: Vec<(u32, u32)>,
+    /// The imageblock size it set, 1 by 1 until it sets one.
+    imageblock: [u32; 2],
 }
 
 /// A size argument's three extents.
@@ -93,6 +96,7 @@ impl Prepass {
                         buffer,
                         state: 0,
                         lengths,
+                        imageblock: [1, 1],
                     };
                     self.encoders.insert(call.result, encoder);
                 }
@@ -120,6 +124,16 @@ impl Prepass {
                     }
                 }
             }
+            "setImageblockWidth:height:" => {
+                let get = |at: usize| {
+                    (call.args.get(at))
+                        .and_then(Value::as_uint)
+                        .and_then(|v| u32::try_from(v).ok())
+                };
+                if let (Some(width), Some(height)) = (get(0), get(1)) {
+                    encoder.imageblock = [width, height];
+                }
+            }
             "dispatchThreads:threadsPerThreadgroup:"
             | "dispatchThreadgroups:threadsPerThreadgroup:" => {
                 let (Some(grid), Some(size)) = (size(call.args.first()), size(call.args.get(1)))
@@ -127,7 +141,7 @@ impl Prepass {
                     return;
                 };
                 let (buffer, state) = (encoder.buffer, encoder.state);
-                let lengths = encoder.lengths.clone();
+                let (lengths, imageblock) = (encoder.lengths.clone(), encoder.imageblock);
                 let Some(&made) = self.states.get(&state) else {
                     return;
                 };
@@ -140,6 +154,7 @@ impl Prepass {
                     grid,
                     size,
                     lengths,
+                    imageblock,
                 };
                 if self.seen.insert((made, ahead.clone())) {
                     self.due.entry(buffer.max(made)).or_default().push(ahead);

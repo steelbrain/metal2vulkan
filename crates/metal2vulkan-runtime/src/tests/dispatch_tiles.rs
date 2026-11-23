@@ -383,7 +383,7 @@ mod on_device {
             ];
             let keys: Vec<_> = (table.iter())
                 .map(|&(dispatch, size, pipeline)| {
-                    (state.dispatch_variant(dispatch, size, &[]))
+                    (state.dispatch_variant(dispatch, size, &[], [1, 1]))
                         .map(|(variant, _)| variant)
                         .unwrap_or_else(|| panic!("{name}: {pipeline}: {dispatch:?} by {size:?}"))
                 })
@@ -395,7 +395,7 @@ mod on_device {
             }
             for &(dispatch, size, _) in &table {
                 state
-                    .prepare_dispatch(dispatch, size, &[])
+                    .prepare_dispatch(dispatch, size, &[], [1, 1])
                     .expect("made ahead");
             }
             let after = counters.metrics();
@@ -442,7 +442,7 @@ mod on_device {
             state.finish_pipeline().expect("finished");
             assert_eq!(form(&state), "tiled", "{name}: the form");
             let made = |dispatch: Dispatch| {
-                (state.dispatch_variant(dispatch, REQUIRED, &[]))
+                (state.dispatch_variant(dispatch, REQUIRED, &[], [1, 1]))
                     .map(|(_, made)| made)
                     .unwrap_or_else(|| panic!("{name}: {dispatch:?}: a key"))
             };
@@ -456,7 +456,8 @@ mod on_device {
             );
             let counters = device.counters();
             let before = counters.metrics();
-            (state.prepare_dispatch(Dispatch::Indirect, REQUIRED, &[])).expect("made ahead");
+            (state.prepare_dispatch(Dispatch::Indirect, REQUIRED, &[], [1, 1]))
+                .expect("made ahead");
             assert_eq!(
                 counters.metrics().made_ahead_variants - before.made_ahead_variants,
                 1,

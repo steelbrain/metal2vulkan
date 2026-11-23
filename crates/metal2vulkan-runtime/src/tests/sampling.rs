@@ -1012,7 +1012,7 @@ mod on_device {
                 if prepared {
                     let ahead = counters.metrics();
                     let threads = crate::Dispatch::Threads([grid[0], grid[1], depth]);
-                    down.prepare_dispatch(threads, [4, 4, 1], &[])
+                    down.prepare_dispatch(threads, [4, 4, 1], &[], [1, 1])
                         .expect("made ahead");
                     let made = counters.metrics().made_ahead_variants - ahead.made_ahead_variants;
                     assert_eq!(

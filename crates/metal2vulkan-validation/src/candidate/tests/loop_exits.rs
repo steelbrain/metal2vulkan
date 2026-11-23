@@ -78,6 +78,7 @@ fn run(entry: &str, bitcode: &[u8], n: u32, limits: [u32; 2]) -> (Vec<u32>, usiz
         textures: BTreeMap::new(),
         samplers: BTreeMap::new(),
         threadgroup_lengths: BTreeMap::new(),
+        imageblock: None,
         dispatch: Dispatch::Threads {
             threads: [n, 1, 1],
             threads_per_group: [n, 1, 1],

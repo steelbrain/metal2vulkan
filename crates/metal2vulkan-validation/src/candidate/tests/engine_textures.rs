@@ -76,6 +76,7 @@ fn kernel(
             .collect(),
         samplers: BTreeMap::new(),
         threadgroup_lengths: BTreeMap::new(),
+        imageblock: None,
         dispatch: Dispatch::Threads {
             threads,
             threads_per_group: [1, 1, 1],

@@ -5,7 +5,7 @@ use crate::buffer::{Buffer, BufferInner, BufferObject};
 use crate::command::{Building, CommandBuffer};
 use crate::counters::Metric;
 use crate::device::Core;
-use crate::error::{Error, Gap, KernelInputKind, Limit, Refusal, StageInKind};
+use crate::error::{Error, Gap, Limit, Refusal, StageInKind};
 use crate::fence::Fence;
 use crate::floor;
 use crate::function_table::VisibleFunctionTable;
@@ -15,7 +15,7 @@ use crate::kept::{Handle, Lent, Uncounted};
 use crate::memory::BlockId;
 use crate::over::{self, Reached, Span};
 use crate::pipeline::{
-    address_word, gap, Compiled, ComputePipelineState, FieldValue, Form, Interface, Kernel, Place,
+    address_word, Compiled, ComputePipelineState, FieldValue, Form, Interface, Kernel, Place,
     Which, PUSH_STAGES, SQUARE,
 };
 use crate::record::Reach;
@@ -26,8 +26,7 @@ use ash::vk;
 use metal2vulkan::metal::format::{integer_channels_word, BICUBIC_TEXELS_UNBOUND};
 use metal2vulkan::metal::PixelFormat;
 use metal2vulkan::pipeline::{
-    grid_tile, nonuniform_region_bytes, region_bytes, RuntimeFact, DEEP_THREADGROUP,
-    GRID_TILE_THREADS,
+    grid_tile, nonuniform_region_bytes, region_bytes, DEEP_THREADGROUP, GRID_TILE_THREADS,
 };
 use std::ops::BitOr;
 use std::sync::Arc;
@@ -242,6 +241,9 @@ pub struct ComputeCommandEncoder {
     samplers: Vec<Option<Lent<SamplerState>>>,
     /// Threadgroup memory lengths by index, as set.
     threadgroup_lengths: Vec<(u32, u32)>,
+    /// The imageblock size set ([`ComputeCommandEncoder::set_imageblock_size`]): 1 by 1 until a
+    /// call sets one, the size Metal's dispatches of an encoder that never sets one run.
+    imageblock: [u32; 2],
     /// `use_resource` declarations.
     declared: Vec<Declared>,
     /// A `use_resource` declaration writes a Shared buffer.
@@ -249,8 +251,8 @@ pub struct ComputeCommandEncoder {
     /// The pixel format of the first texture a `use_resource` declaration writes that has no
     /// storage element ([`Texture::unstored`]).
     declared_unstored_write: Option<PixelFormat>,
-    /// The module, workgroup size and `VkPipeline` of the last dispatch, while the state and the
-    /// threadgroup memory lengths are unchanged.
+    /// The module, workgroup size and `VkPipeline` of the last dispatch, while the state, the
+    /// threadgroup memory lengths and the imageblock size are unchanged.
     last: Option<Last>,
     /// The parameters being filled, kept to reuse their bytes.
     parameters: Parameters,
@@ -471,6 +473,7 @@ impl CommandBuffer {
             copied: 0,
             samplers: vec![None; SAMPLER_SLOTS as usize],
             threadgroup_lengths: Vec::new(),
+            imageblock: [1, 1],
             declared: Vec::new(),
             declared_shared_write: false,
             declared_unstored_write: None,
@@ -752,6 +755,27 @@ impl ComputeCommandEncoder {
         Ok(())
     }
 
+    /// `setImageblockWidth:height:`: the size of the explicit imageblock each threadgroup of a
+    /// later dispatch takes, `width` by `height` cells of its kernel's layout in its threadgroup
+    /// memory, which [`Limit::ThreadgroupMemory`] counts with the threadgroup memory lengths. An
+    /// encoder that never calls it runs 1 by 1, as Metal's does; a dispatch of a kernel that
+    /// reaches no imageblock does not read it. The size is a specialization constant of the
+    /// pipeline, as a threadgroup memory length is: a kernel's first dispatch at a size it has
+    /// not run makes its `VkPipeline` and waits for it
+    /// ([`Metrics::first_use_variant_waits`](crate::Metrics::first_use_variant_waits)), where
+    /// Metal's makes nothing.
+    ///
+    /// Err: [`Refusal::ImageblockSize`] for a width or a height that is not a power of two, or
+    /// more than 1024 cells.
+    pub fn set_imageblock_size(&mut self, width: u32, height: u32) -> Result<(), Error> {
+        imageblock_checked([width, height])?;
+        if self.imageblock != [width, height] {
+            self.imageblock = [width, height];
+            self.last = None;
+        }
+        Ok(())
+    }
+
     /// `useResource:usage:` (`useResources:count:usage:` is a loop of it): the resource joins every
     /// later dispatch's accesses. The command buffer keeps the buffer or the texture until it
     /// retires.
@@ -898,12 +922,10 @@ impl ComputeCommandEncoder {
     /// kernel; [`Limit::ThreadgroupThreads`] within it and past this device's;
     /// [`Refusal::BufferOffsetAlignment`] for a buffer the kernel reaches bound off its argument's
     /// alignment, which nothing records; [`Gap::SwizzledReadWrite`]; [`Gap::BicubicTexels`];
-    /// [`Limit::ThreadgroupMemory`]; [`Gap::PartialSimdgroups`] for a threadgroup that is not
-    /// whole SIMD groups of a kernel whose tier needs them and that has no emulated module;
-    /// [`Gap::KernelInput`] naming `RuntimeFact::ImageblockSize` for a kernel that reaches an
-    /// explicit imageblock and writes memory: its extent is what Metal's
-    /// `setImageblockWidth:height:` sets, which this encoder does not have;
-    /// [`Limit::MemoryAllocations`] where the parameter ring needs a block past the device's
+    /// [`Limit::ThreadgroupMemory`], the imageblock's cells at the size
+    /// [`set_imageblock_size`](Self::set_imageblock_size) set counted with the lengths;
+    /// [`Gap::PartialSimdgroups`] for a threadgroup that is not whole SIMD groups of a kernel
+    /// whose tier needs them and that has no emulated module; [`Limit::MemoryAllocations`] where the parameter ring needs a block past the device's
     /// allocation count; [`Error::Vulkan`] where the pipeline's compile, the ring or recording
     /// fails.
     pub fn dispatch_threadgroups(
@@ -1087,7 +1109,11 @@ impl ComputeCommandEncoder {
             &Grid::Direct(direct) => Some(direct),
             Grid::Indirect(..) => None,
         };
-        let memory = (&self.threadgroup_lengths[..], limits.max_shared_memory);
+        let set = Sizes {
+            lengths: &self.threadgroup_lengths,
+            imageblock: self.imageblock,
+        };
+        let memory = (set, limits.max_shared_memory);
         let (choice, module, kernel) = decide(inner, direct, size, memory)?;
         let Choice {
             local,
@@ -1104,8 +1130,7 @@ impl ComputeCommandEncoder {
         let vk_pipeline = match self.last {
             Some(last) if last.module == module && last.local == local => last.pipeline,
             _ => {
-                let (set, max) = (&self.threadgroup_lengths, limits.max_shared_memory);
-                let lengths = threadgroup_memory(kernel, set, local, max)?;
+                let lengths = threadgroup_memory(kernel, set, local, limits.max_shared_memory)?;
                 let variant = inner.dispatch_key(module, local, lengths);
                 kernel.pipeline(core, variant, inner.first_use(variant))?
             }
@@ -1326,8 +1351,8 @@ pub(crate) fn size_checked(interface: &Interface, size: [u32; 3]) -> Result<(), 
 }
 
 /// What a dispatch at threadgroup size `size`, direct over `direct` or indirect, of the content
-/// `compiled` runs, with the encoder's threadgroup memory lengths `set` against the device's
-/// `max` bytes, decided once for the dispatch and for
+/// `compiled` runs, with the encoder's threadgroup memory lengths and imageblock size `set`
+/// against the device's `max` bytes, decided once for the dispatch and for
 /// [`ComputePipelineState::prepare_dispatch`]: [`choose`]'s choice, then its module, an
 /// observer's partial-threadgroups variant for a ragged grid, and the emulated variant for a
 /// threadgroup that is not whole groups of a module that runs only whole ones (the
@@ -1339,19 +1364,13 @@ pub(crate) fn size_checked(interface: &Interface, size: [u32; 3]) -> Result<(), 
 /// dispatch of it the variant takes. The variant is the state's module itself where its make
 /// lowered no plain module beside it (`pipeline::Partial::Alone`). An indirect dispatch states no
 /// grid in its region, so the variant runs it in the single-region form, every invocation live,
-/// as the translator's dispatch regions say (`lower::dispatch`). A kernel that reaches an
-/// explicit imageblock runs nothing: its extent is `setImageblockWidth:height:`'s, which the
-/// encoder does not have ([`Gap::KernelInput`] naming `RuntimeFact::ImageblockSize`).
+/// as the translator's dispatch regions say (`lower::dispatch`).
 pub(crate) fn decide<'a>(
     compiled: &'a Compiled,
     direct: Option<Direct>,
     size: [u32; 3],
-    (set, max): (&[(u32, u32)], u32),
+    (set, max): (Sizes<'_>, u32),
 ) -> Result<(Choice, Module, &'a Kernel), Error> {
-    if let Some(cell_bytes) = compiled.whole.interface.imageblock {
-        let fact = RuntimeFact::ImageblockSize { cell_bytes }.name();
-        return Err(gap(KernelInputKind::RuntimeFact { fact }));
-    }
     let choice = choose(&compiled.form, direct, size);
     let partial_threadgroups = || {
         Error::Unsupported(Gap::PartialThreadgroups {
@@ -1404,13 +1423,40 @@ pub(crate) fn decide<'a>(
     }
 }
 
-/// The threadgroup memory lengths of a kernel's threadgroup arguments, in the order of
-/// `Interface::threadgroups`, held inline: a kernel takes at most [`BUFFER_SLOTS`], the indices
-/// `setThreadgroupMemoryLength:atIndex:` takes, as its state's make refuses a module with more.
+/// What an encoder sets that sizes its dispatches' threadgroup memory: the threadgroup memory
+/// lengths by index (`setThreadgroupMemoryLength:atIndex:`), and the imageblock size
+/// (`setImageblockWidth:height:`).
+#[derive(Clone, Copy)]
+pub(crate) struct Sizes<'a> {
+    pub(crate) lengths: &'a [(u32, u32)],
+    pub(crate) imageblock: [u32; 2],
+}
+
+/// Metal's most cells of an imageblock (`setImageblockWidth:height:`), whatever the state.
+const IMAGEBLOCK_CELLS: u64 = 1024;
+
+/// An imageblock size as Metal's `setImageblockWidth:height:` takes it: each side a power of two,
+/// at most [`IMAGEBLOCK_CELLS`] cells; else [`Refusal::ImageblockSize`].
+pub(crate) fn imageblock_checked([width, height]: [u32; 2]) -> Result<(), Error> {
+    let cells = u64::from(width) * u64::from(height);
+    if width.is_power_of_two() && height.is_power_of_two() && cells <= IMAGEBLOCK_CELLS {
+        Ok(())
+    } else {
+        Err(Error::Refused(Refusal::ImageblockSize { width, height }))
+    }
+}
+
+/// What a kernel's `VkPipeline` specializes of its threadgroup memory beside its own: the lengths
+/// of its threadgroup arguments, in the order of `Interface::threadgroups`, held inline (a kernel
+/// takes at most [`BUFFER_SLOTS`], the indices `setThreadgroupMemoryLength:atIndex:` takes, as
+/// its state's make refuses a module with more), and its explicit imageblock's size.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub(crate) struct Lengths {
     words: [u32; BUFFER_SLOTS as usize],
     count: u8,
+    /// The imageblock's width and height where the kernel reaches an explicit imageblock, else 0
+    /// by 0: a kernel that reaches none has one pipeline whatever size the encoder set.
+    pub(crate) imageblock: [u32; 2],
 }
 
 impl Lengths {
@@ -1419,6 +1465,7 @@ impl Lengths {
         Lengths {
             words: [0; BUFFER_SLOTS as usize],
             count: count.min(BUFFER_SLOTS as usize) as u8,
+            imageblock: [0; 2],
         }
     }
 
@@ -1429,20 +1476,29 @@ impl Lengths {
 }
 
 /// The threadgroup memory lengths of `kernel`'s threadgroups, from the encoder's `set` (0 for an
-/// index it set none at), checked at workgroup `local` against the device's `max` bytes.
+/// index it set none at), with its imageblock's size where it reaches one, checked at workgroup
+/// `local` against the device's `max` bytes, the imageblock's cells included.
 pub(crate) fn threadgroup_memory(
     kernel: &Kernel,
-    set: &[(u32, u32)],
+    set: Sizes<'_>,
     local: [u32; 3],
     max: u32,
 ) -> Result<Lengths, Error> {
     let mut lengths = Lengths::default();
     for (word, &index) in (lengths.words.iter_mut()).zip(&kernel.interface.threadgroups) {
-        *word = threadgroup_length(set, index);
+        *word = threadgroup_length(set.lengths, index);
         lengths.count += 1;
     }
+    let imageblock = match kernel.interface.imageblock {
+        Some(cell_bytes) => {
+            lengths.imageblock = set.imageblock;
+            let [width, height] = set.imageblock.map(u64::from);
+            width * height * u64::from(cell_bytes)
+        }
+        None => 0,
+    };
     let threads = local.iter().map(|&axis| u64::from(axis)).product::<u64>();
-    let length = kernel.interface.memory.bytes(lengths.as_slice(), threads);
+    let length = (kernel.interface.memory).bytes(lengths.as_slice(), imageblock, threads);
     if length > u64::from(max) {
         return Err(Error::Limit(Limit::ThreadgroupMemory { length, max }));
     }

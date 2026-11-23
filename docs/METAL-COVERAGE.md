@@ -10,12 +10,12 @@ Every public item of the macOS 27.2 SDK (Xcode 27.2, 27B52)'s Metal headers, by 
 
 | Status | Items | Of which deprecated |
 |---|---|---|
-| implemented | 636 | 29 |
-| missing | 1075 | 34 |
+| implemented | 637 | 29 |
+| missing | 1074 | 34 |
 | out of scope | 424 | 5 |
 | all | 2135 | 68 |
 
-Implemented by the runtime: 279; by the translator's values: 357. Missing by size: S 182, M 204, L 313, XL 376.
+Implemented by the runtime: 280; by the translator's values: 357. Missing by size: S 182, M 203, L 313, XL 376.
 
 ## Missing, in build order
 
@@ -33,7 +33,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | a buffer made with bytes | S | 1 | `MTLDevice.newBufferWithBytes:length:options:` |
 | pipeline creation forms (from a function, with a completion handler) | S | 6 | `MTLDevice.newRenderPipelineStateWithDescriptor:options:completionHandler:`, `MTLDevice.newComputePipelineStateWithFunction:error:`, `MTLDevice.newComputePipelineStateWithFunction:options:reflection:error:`, ... |
 | render pass descriptor fields | S/M/L | 8 | `MTLRenderPassAttachmentDescriptor.depthPlane`, `MTLRenderPassAttachmentDescriptor.storeActionOptions`, `MTLRenderPassDescriptor.imageblockSampleLength`, ... |
-| encoder calls (stride setters, indirect draws, store action options, a render encoder's heap uses) | S/M/L | 24 | `MTLBlitCommandEncoder.synchronizeTexture:slice:level:`, `MTLBlitCommandEncoder.copyFromTexture:sourceSlice:sourceLevel:toTexture:destinationSlice:destinationLevel:sliceCount:levelCount:`, `MTLBlitCommandEncoder.copyFromTexture:toTexture:`, ... |
+| encoder calls (stride setters, indirect draws, store action options, a render encoder's heap uses) | S/M/L | 23 | `MTLBlitCommandEncoder.synchronizeTexture:slice:level:`, `MTLBlitCommandEncoder.copyFromTexture:sourceSlice:sourceLevel:toTexture:destinationSlice:destinationLevel:sliceCount:levelCount:`, `MTLBlitCommandEncoder.copyFromTexture:toTexture:`, ... |
 | `textureBarrier` and queue-stage barriers | S/M | 2 | `MTLCommandEncoder.barrierAfterQueueStages:beforeStages:`, `MTLRenderCommandEncoder.textureBarrier` |
 | a pipeline state's reflection after creation | S | 2 | `MTLComputePipelineState.reflection`, `MTLRenderPipelineState.reflection` |
 | function handles by name, and a handle's type and ID | S | 6 | `MTLComputePipelineState.functionHandleWithName:`, `MTLFunctionHandle.functionType`, `MTLFunctionHandle.name`, ... |
@@ -1243,7 +1243,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLComputeCommandEncoder.setSamplerState:lodMinClamp:lodMaxClamp:atIndex:` | method | implemented | `ComputeCommandEncoder::set_sampler_state` (runtime) |
 | `MTLComputeCommandEncoder.setSamplerStates:lodMinClamps:lodMaxClamps:withRange:` | method | implemented | `ComputeCommandEncoder::set_sampler_state_with_lod_clamps` (runtime): a loop of it |
 | `MTLComputeCommandEncoder.setThreadgroupMemoryLength:atIndex:` | method | implemented | `ComputeCommandEncoder::set_threadgroup_memory_length` (runtime) |
-| `MTLComputeCommandEncoder.setImageblockWidth:height:` | method | missing | M: explicit imageblocks; a kernel that reaches one is made and its dispatch refused (`Gap::KernelInput`) |
+| `MTLComputeCommandEncoder.setImageblockWidth:height:` | method | implemented | `ComputeCommandEncoder::set_imageblock_size` (runtime): a specialization: a new size makes a pipeline at its first dispatch |
 | `MTLComputeCommandEncoder.setStageInRegion:` | method | implemented | `ComputeCommandEncoder::set_stage_in_region` (runtime) |
 | `MTLComputeCommandEncoder.setStageInRegionWithIndirectBuffer:indirectBufferOffset:` | method | implemented | `ComputeCommandEncoder::set_stage_in_region_with_indirect_buffer` (runtime): always refused: a stage-in region the GPU reads is not built (`Gap::StageIn`) |
 | `MTLComputeCommandEncoder.dispatchThreadgroups:threadsPerThreadgroup:` | method | implemented | `ComputeCommandEncoder::dispatch_threadgroups` (runtime) |

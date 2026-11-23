@@ -141,17 +141,15 @@ fn a_full_subgroup_kernel_row_is_made_through_the_runtime() {
     }
 }
 
-/// A kernel with an explicit imageblock is the runtime's typed refusal at its dispatch, as a
-/// guest's is: its compute encoder does not set an imageblock's extent
-/// (`setImageblockWidth:height:`).
+/// A kernel with an explicit imageblock is made and its representative threadgroup's pipeline
+/// created, as a guest's is: a dispatch of an encoder that sets no imageblock size runs it 1 by 1,
+/// as Metal's does.
 #[cfg(target_os = "linux")]
 #[test]
-fn an_imageblock_kernel_row_is_the_runtimes_refusal() {
-    let made = made(&[("a4_imageblock_extent.ll", "a4_imageblock_extent")]).remove(0);
-    assert!(
-        matches!(&made, Acceptance::RuntimeRefused(why) if why.contains("mageblock")),
-        "{made:?}"
-    );
+fn an_imageblock_kernel_row_is_created_through_the_runtime() {
+    for made in made(&[("a4_imageblock_extent.ll", "a4_imageblock_extent")]) {
+        accepted(Ok(made));
+    }
 }
 
 /// A post-tessellation vertex function's row is a tessellation pipeline (the synthesized vertex

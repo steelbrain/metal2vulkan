@@ -480,15 +480,15 @@ mod on_device {
             // A later variant, an indirect dispatch's at its own threadgroup size, asks for a
             // fill of its own, and once filled is made from its entry, with a module of its own.
             let (dispatch, size) = (Dispatch::Indirect, [8, 1, 1]);
-            let later = match state.prepare_dispatch(dispatch, size, &[]) {
+            let later = match state.prepare_dispatch(dispatch, size, &[], [1, 1]) {
                 Err(Error::StageUnfilled(later)) => later,
                 other => panic!("{name}: {other:?}"),
             };
             assert_ne!(later, request, "{name}: the later variant's pipeline");
             fill(&later);
-            (state.prepare_dispatch(dispatch, size, &[]))
+            (state.prepare_dispatch(dispatch, size, &[], [1, 1]))
                 .unwrap_or_else(|error| panic!("{name}: the later variant: {error}"));
-            let made = state.dispatch_variant(dispatch, size, &[]);
+            let made = state.dispatch_variant(dispatch, size, &[], [1, 1]);
             assert_eq!(made.map(|(_, made)| made), Some(true), "{name}");
             let metrics = counters.metrics();
             assert_eq!(metrics.stage_fills, 2, "{name}");

@@ -90,6 +90,7 @@ pub(crate) fn case(entry: &str, buffer: Vec<u8>, dispatch: Dispatch) -> ComputeC
         textures: BTreeMap::new(),
         samplers: BTreeMap::new(),
         threadgroup_lengths: BTreeMap::new(),
+        imageblock: None,
         dispatch,
         output: ComputeOutput::Buffer {
             binding: 0,

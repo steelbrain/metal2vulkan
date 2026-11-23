@@ -423,6 +423,23 @@ pub enum Refusal {
         /// The state's `maxTotalThreadsPerThreadgroup`.
         max: u32,
     },
+    /// An imageblock size
+    /// ([`ComputeCommandEncoder::set_imageblock_size`](crate::ComputeCommandEncoder::set_imageblock_size))
+    /// whose width or height is not a power of two, 0 included, or whose cells are more than 1024,
+    /// whatever the state's `maxTotalThreadsPerThreadgroup`.
+    ///
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1, probe `imageblock_size_rules.m` in
+    /// the conformance crate, job m3-max-70002: Metal's validation layer stops each at the call,
+    /// `width(24) must be a power of 2.`, `height(12) must be a power of 2.`,
+    /// `width(0) must be a power of 2.` and
+    /// `width(64)*height(32) must be less than or equal to 1024`; it takes 16 by 16, 1024 by 1,
+    /// 1 by 1024, 16 by 16 for a state of 64 threads, and a size set before the pipeline state).
+    ImageblockSize {
+        /// The width asked for.
+        width: u32,
+        /// The height asked for.
+        height: u32,
+    },
     /// An indirect dispatch's or draw's argument offset that is not a multiple of 4, which Metal's
     /// `indirectBufferOffset` must be
     /// ([`ComputeCommandEncoder::dispatch_threadgroups_with_indirect_buffer`](crate::ComputeCommandEncoder::dispatch_threadgroups_with_indirect_buffer)
@@ -1069,19 +1086,16 @@ pub enum Gap {
         kind: IndirectCommandsKind,
     },
     /// A kernel that reads something the compute encoder does not supply yet, `kind` naming what:
-    /// an intersection-function table, a visible-function table an argument buffer holds, an
-    /// explicit imageblock, a parameter the runtime does not fill, or a specialization the runtime
-    /// does not set, among others. Buffers, `setBytes` data, textures and sampler states by their
-    /// resource IDs, visible-function tables at buffer indices, constexpr samplers by their
-    /// indices, an integer write's channel widths, threadgroup memory lengths, the dispatch's grid,
-    /// the stage-in region, `[[stage_in]]` attributes of a fixed layout stride and a pinned
-    /// subgroup size are supplied.
+    /// an intersection-function table, a visible-function table an argument buffer holds, a
+    /// parameter the runtime does not fill, or a specialization the runtime does not set, among
+    /// others. Buffers, `setBytes` data, textures and sampler states by their resource IDs,
+    /// visible-function tables at buffer indices, constexpr samplers by their indices, an integer
+    /// write's channel widths, threadgroup memory lengths, an explicit imageblock's size, the
+    /// dispatch's grid, the stage-in region, `[[stage_in]]` attributes of a fixed layout stride
+    /// and a pinned subgroup size are supplied.
     /// Metal's counterpart is the compute pipeline state's make
     /// (`newComputePipelineStateWithDescriptor:options:reflection:error:` and its siblings), which
-    /// makes each. An explicit imageblock's extent is refused at the dispatch instead
-    /// (`dispatchThreadgroups:threadsPerThreadgroup:` and its siblings), the state being made:
-    /// Metal's dispatch runs the extent `setImageblockWidth:height:` set, which the encoder does
-    /// not have.
+    /// makes each.
     ///
     /// Basis: ours (the encoder supplies only those).
     KernelInput {
@@ -1657,12 +1671,11 @@ pub enum KernelInputKind {
     StageFlags,
     /// A fact of the module the encoder does not supply: a `RuntimeFact` the runtime does not
     /// name, such as a resource's presence or a sampler's coordinates, or an address alignment of
-    /// a slot that is not a kernel's buffer or that is not a power of two, at the state's make;
-    /// an explicit imageblock's size (`RuntimeFact::ImageblockSize`) at a dispatch of the state.
-    /// Metal's counterpart is the dispatch's state the fact stands for:
-    /// `setImageblockWidth:height:`, or the bound resource's own state.
+    /// a slot that is not a kernel's buffer or that is not a power of two, at the state's make.
+    /// Metal's counterpart is the dispatch's state the fact stands for: the bound resource's own
+    /// state.
     RuntimeFact {
-        /// The fact's name (`RuntimeFact::name`), such as `"ImageblockSize"`.
+        /// The fact's name (`RuntimeFact::name`), such as `"ResourcePresence"`.
         fact: &'static str,
     },
     /// An argument slot the encoder does not bind: an intersection function table at a buffer
@@ -2412,6 +2425,10 @@ impl fmt::Display for Refusal {
             Refusal::ThreadgroupSize { size, max } => write!(
                 f,
                 "a threadgroup of {size:?} threads is empty or past the state's {max}"
+            ),
+            Refusal::ImageblockSize { width, height } => write!(
+                f,
+                "an imageblock of {width} by {height} is not powers of two of at most 1024 cells"
             ),
             Refusal::IndirectOffset { offset, length } => write!(
                 f,

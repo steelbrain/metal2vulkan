@@ -344,6 +344,10 @@ impl NewRuntime {
                     .encoder
                     .set_threadgroup_memory_length(length, at)
             }
+            "setImageblockWidth:height:" => {
+                let (width, height) = (index(call, 0)?, index(call, 1)?);
+                self.compute(id).encoder.set_imageblock_size(width, height)
+            }
             "setStageInRegion:" => {
                 let at = region(call, arg(call, 0)?)?;
                 self.compute(id).encoder.set_stage_in_region(at);
