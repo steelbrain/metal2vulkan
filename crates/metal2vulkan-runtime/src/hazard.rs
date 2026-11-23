@@ -5,7 +5,7 @@
 //! increment. They carry across the encoders of a command buffer until a barrier, so a write after
 //! an encoder that only read still finds the read.
 
-use crate::alias::Place;
+use crate::alias::Placement;
 use crate::device::Core;
 use crate::memory::BlockId;
 use metal2vulkan::metal::BindingAccess;
@@ -172,7 +172,7 @@ pub(crate) struct HeapId {
     core: Arc<Core>,
     id: u32,
     /// Its resources' placements, held weakly, whose bytes meeting link them (`crate::alias`).
-    places: Mutex<Vec<Weak<Place>>>,
+    places: Mutex<Vec<Weak<Placement>>>,
 }
 
 impl HeapId {
@@ -192,7 +192,7 @@ impl HeapId {
     }
 
     /// Its resources' placements.
-    pub(crate) fn places(&self) -> &Mutex<Vec<Weak<Place>>> {
+    pub(crate) fn places(&self) -> &Mutex<Vec<Weak<Placement>>> {
         &self.places
     }
 }

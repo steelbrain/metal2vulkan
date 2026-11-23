@@ -1,6 +1,6 @@
 //! Compute command encoders: their binding state, their dispatches, and where barriers go.
 
-use crate::alias::Place;
+use crate::alias::Placement;
 use crate::arena;
 use crate::buffer::{Buffer, BufferInner, BufferObject};
 use crate::command::{Building, CommandBuffer};
@@ -1814,7 +1814,7 @@ pub(crate) type Declared = (
     Access,
     Option<Lent<Texture>>,
     Option<Span>,
-    Option<Arc<Place>>,
+    Option<Arc<Placement>>,
 );
 
 /// What a dispatch touches besides its pipeline's own facts.
@@ -1896,7 +1896,7 @@ impl Accesses<'_> {
     pub(crate) fn places<'b>(
         &'b self,
         interface: &'b Interface,
-    ) -> impl Iterator<Item = (Option<&'b Arc<Place>>, Access)> + 'b {
+    ) -> impl Iterator<Item = (Option<&'b Arc<Placement>>, Access)> + 'b {
         let slots = (interface.buffers.iter()).filter_map(move |&(slot, access)| {
             match self.slots.get(slot as usize) {
                 Some(Slot::Buffer { buffer, .. }) => Some((buffer.object().place(), access)),

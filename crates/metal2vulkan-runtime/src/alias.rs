@@ -4,7 +4,7 @@
 //! (vkspec "Memory Aliasing"). A device that keeps a compression state beside an image's bytes
 //! needs the move, as a write through an alias leaves that state the alias's.
 //!
-//! Each resource placed in a heap is a [`Place`], linked at placement with the others of its heap
+//! Each resource placed in a heap is a [`Placement`], linked at placement with the others of its heap
 //! whose bytes meet its, both ways and weakly; a release drops its links. A heap with no meeting
 //! placements holds no links, and its resources' uses pay one test.
 //!
@@ -70,12 +70,12 @@ impl Moved {
 /// A link to a placement whose bytes meet another's: the placement, held weakly, and its
 /// staleness, which a write of the other sets.
 struct Link {
-    place: Weak<Place>,
+    place: Weak<Placement>,
     stale: Arc<AtomicBool>,
 }
 
 /// A resource's bytes in its heap: a heap texture's or a heap buffer's.
-pub(crate) struct Place {
+pub(crate) struct Placement {
     heap: Arc<HeapId>,
     /// Its first and past-last byte in the heap's block.
     start: u64,
@@ -91,7 +91,7 @@ pub(crate) struct Place {
     stale: Arc<AtomicBool>,
 }
 
-impl Place {
+impl Placement {
     /// A resource placed at bytes `[start, end)` of `heap`'s block, an image where `moved`,
     /// linked with the placements of the heap whose bytes meet those. A texture with links is
     /// stale from the start: its bytes may hold another's writes.
@@ -100,8 +100,8 @@ impl Place {
         start: u64,
         end: u64,
         moved: Option<Moved>,
-    ) -> Arc<Place> {
-        let place = Arc::new(Place {
+    ) -> Arc<Placement> {
+        let place = Arc::new(Placement {
             heap: Arc::clone(heap),
             start,
             end,
@@ -113,7 +113,7 @@ impl Place {
         let mut places = lock(heap.places());
         places.retain(|other| other.strong_count() > 0);
         // Held until the heap's lock is let go: the last handle of one dropped here would take it.
-        let met: Vec<Arc<Place>> = (places.iter())
+        let met: Vec<Arc<Placement>> = (places.iter())
             .filter_map(Weak::upgrade)
             .filter(|other| other.start < end && start < other.end)
             .collect();
@@ -157,10 +157,10 @@ impl Place {
     }
 }
 
-impl Drop for Place {
+impl Drop for Placement {
     fn drop(&mut self) {
-        let me: *const Place = self;
-        let met: Vec<Arc<Place>> = {
+        let me: *const Placement = self;
+        let met: Vec<Arc<Placement>> = {
             let mut places = lock(self.heap.places());
             places.retain(|other| other.strong_count() > 0);
             let links = self.links.get_mut().unwrap_or_else(PoisonError::into_inner);
@@ -180,8 +180,8 @@ impl Drop for Place {
 /// Of the uses `uses` of resources, the ones of placements with links, with their accesses: the
 /// uses a command's marks and moves look at. Empty, and nothing allocated, where none has links.
 pub(crate) fn uses<'a>(
-    uses: impl Iterator<Item = (Option<&'a Arc<Place>>, Access)>,
-) -> Vec<(&'a Arc<Place>, Access)> {
+    uses: impl Iterator<Item = (Option<&'a Arc<Placement>>, Access)>,
+) -> Vec<(&'a Arc<Placement>, Access)> {
     uses.filter_map(|(place, access)| Some((place.filter(|p| p.linked())?, access)))
         .collect()
 }
@@ -200,7 +200,7 @@ enum State {
 /// A placement's mark in a command buffer.
 struct Mark {
     /// Held so its address names no other placement while the mark lives.
-    _place: Weak<Place>,
+    _place: Weak<Placement>,
     state: State,
     /// The segment, from 1, whose commands last read it; 0 where none did.
     read: usize,
@@ -214,7 +214,7 @@ pub(crate) struct Marks {
 }
 
 impl Marks {
-    fn mark(&mut self, key: usize, place: impl FnOnce() -> Weak<Place>) -> &mut Mark {
+    fn mark(&mut self, key: usize, place: impl FnOnce() -> Weak<Placement>) -> &mut Mark {
         self.marks.entry(key).or_insert_with(|| Mark {
             _place: place(),
             state: State::Untouched,
@@ -222,7 +222,7 @@ impl Marks {
         })
     }
 
-    fn state(&self, place: &Place) -> State {
+    fn state(&self, place: &Placement) -> State {
         self.marks
             .get(&place.key())
             .map_or(State::Untouched, |mark| mark.state)
@@ -231,7 +231,7 @@ impl Marks {
     /// For a command whose uses of linked placements are `uses`, in segment `segment` (from 0):
     /// whether a check it adds must go at the head of a segment of its own, a link of the
     /// placement checked having been read in this one.
-    pub(crate) fn splits(&self, uses: &[(&Arc<Place>, Access)], segment: usize) -> bool {
+    pub(crate) fn splits(&self, uses: &[(&Arc<Placement>, Access)], segment: usize) -> bool {
         let read_here = |link: &Link| {
             (self.marks.get(&(link.place.as_ptr() as usize)))
                 .is_some_and(|mark| mark.read == segment + 1)
@@ -247,7 +247,7 @@ impl Marks {
     /// texture's once.
     pub(crate) fn used(
         &mut self,
-        uses: &[(&Arc<Place>, Access)],
+        uses: &[(&Arc<Placement>, Access)],
         segment: usize,
         part: &mut Aliased,
     ) -> Vec<vk::ImageMemoryBarrier2<'static>> {
@@ -290,8 +290,8 @@ impl Marks {
 /// A segment's part: the checks at its head and its writes of linked placements, in order.
 #[derive(Default)]
 pub(crate) struct Aliased {
-    checks: Vec<Arc<Place>>,
-    writes: Vec<Arc<Place>>,
+    checks: Vec<Arc<Placement>>,
+    writes: Vec<Arc<Placement>>,
 }
 
 impl Aliased {

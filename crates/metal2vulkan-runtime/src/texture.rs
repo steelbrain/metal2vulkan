@@ -38,7 +38,7 @@
 //! it moves it from home to the present layout at its end
 //! ([`CommandBuffer::present_drawable`](crate::CommandBuffer::present_drawable)).
 
-use crate::alias::{Moved, Place};
+use crate::alias::{Moved, Placement};
 use crate::arrays::{Owner, ResourceId};
 use crate::buffer::{Buffer, BufferInner, BufferObject};
 use crate::copy_out;
@@ -237,7 +237,7 @@ pub(crate) struct TextureInner {
     heap: Option<Arc<HeapId>>,
     /// Its image's bytes in its heap, where it was placed in one, which the placements whose
     /// bytes meet them link (`crate::alias`); a view's is its parent's.
-    place: Option<Arc<Place>>,
+    place: Option<Arc<Placement>>,
     /// The bytes the host reaches in a buffer: a Managed texture's, or a texture over a buffer's.
     named: Option<Named>,
     /// A view's parent and place in the image ([`Texture::new_texture_view`]); `None` for a
@@ -1739,7 +1739,7 @@ impl Device {
                 home,
                 aspects: plan.aspects,
             };
-            Place::new(heap, at, at.saturating_add(bytes), Some(moved))
+            Placement::new(heap, at, at.saturating_add(bytes), Some(moved))
         });
         let image = Arc::new(Image {
             core: Arc::clone(core),
@@ -3922,7 +3922,7 @@ impl TextureInner {
 
 impl TextureInner {
     /// Its image's placement in its heap, where it was placed in one (`crate::alias`).
-    pub(crate) fn place(&self) -> Option<&Arc<Place>> {
+    pub(crate) fn place(&self) -> Option<&Arc<Placement>> {
         self.place.as_ref()
     }
 

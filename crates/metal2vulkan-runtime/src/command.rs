@@ -1,7 +1,7 @@
 //! Command buffers: recorded at once into segments that event waits and signals split, and their
 //! states from creation to retirement.
 
-use crate::alias::{Aliased, Marks, Place};
+use crate::alias::{Aliased, Marks, Placement};
 use crate::buffer::{Buffer, BufferInner, BufferObject};
 use crate::complete::Completion;
 use crate::counters::{Metric, Stage, Tally};
@@ -1137,7 +1137,7 @@ impl Building {
     /// (`rendering`) nothing ends: the check goes at the head of the segment the pass is in.
     pub(crate) fn aliases(
         &mut self,
-        uses: &[(&Arc<Place>, Access)],
+        uses: &[(&Arc<Placement>, Access)],
         rendering: bool,
     ) -> Result<Vec<vk::ImageMemoryBarrier2<'static>>, Error> {
         if !rendering && !self.last().signals.is_empty() {
@@ -1157,7 +1157,7 @@ impl Building {
     /// with links.
     pub(crate) fn places<'a>(
         &mut self,
-        uses: impl Iterator<Item = (Option<&'a Arc<Place>>, Access)>,
+        uses: impl Iterator<Item = (Option<&'a Arc<Placement>>, Access)>,
     ) -> Result<(), Error> {
         let uses = crate::alias::uses(uses);
         if uses.is_empty() {
