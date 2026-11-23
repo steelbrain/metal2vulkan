@@ -12,9 +12,8 @@
 
 use super::*;
 use crate::acceptance::{
-    compile_row_in_worker, retained, Acceptance, RowCompile, RowPipeline, RowStage, RuntimeRow,
+    compile_row_in_worker, retained, Acceptance, RowCompile, RowPipeline, RowStage,
 };
-use metal2vulkan::library::FunctionConstantValues;
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 
 /// Compile `entry` of the owned fixture `file` as an L4 row for the device the
@@ -57,6 +56,8 @@ fn assert_accepted(pipeline: &RowPipeline) {
 /// with no function-constant values; the device finished with nothing logged at its teardown. A
 /// device lane has `llvm-as`, so a missing assembler fails the test.
 fn made(rows: &[(&str, &str)]) -> Vec<Acceptance> {
+    use crate::acceptance::RuntimeRow;
+    use metal2vulkan::library::FunctionConstantValues;
     let mut kernels = RuntimeKernels::open(crate::gpu::TEST_DEVICE)
         .unwrap_or_else(|error| panic!("open the lane's runtime device: {error}"));
     let constants = FunctionConstantValues::defaults();
