@@ -2,8 +2,9 @@
 //! `engine/rt6_layered` (a vertex function that chooses its slice per instance, and fragment
 //! functions that read it, one with the barycentric weights and the primitive ID),
 //! `engine/rt6_viewports` (a vertex function that selects its viewport per instance, and a
-//! fragment function that reads it) and `engine/rt6_first_vertex` (a vertex function whose slice
-//! and viewport differ among the vertices of a primitive):
+//! fragment function that reads it), `engine/rt6_first_vertex` (a vertex function whose slice
+//! and viewport differ among the vertices of a primitive) and `engine/rt6_unwritten` (a vertex
+//! function that declares both and writes neither):
 //!
 //! - An index written the same at every vertex of a primitive is stored to `Layer` or
 //!   `ViewportIndex` where the device stores the builtin from a vertex function; without
@@ -12,7 +13,7 @@
 //!   index at all.
 //! - An index not shown the same at every vertex of a primitive is refused as not implemented on
 //!   every device: Metal leaves its primitive undefined and Vulkan asks every vertex to write the
-//!   same.
+//!   same. An index declared and never written, which Metal gives no value, is stored as 0.
 //! - A fragment function that reads an index no stage writes, on a device that cannot declare its
 //!   builtin, reads 0 (`StageIo::zero_indices`).
 //!
@@ -35,7 +36,7 @@ use crate::pipeline::sym::VaryingKey;
 use crate::pipeline::testing::{compile, engine_dir, llvm_assemble, AssembleError};
 use crate::pipeline::RenderPipeline;
 use crate::spirv::testing::check_words_valid;
-use crate::spv::Capability as Cap;
+use crate::spv::{BuiltIn, Capability as Cap};
 
 fn assemble(name: &str) -> Option<Vec<u8>> {
     let path = engine_dir().join(name);
@@ -267,6 +268,107 @@ fn indices_that_differ_among_a_primitive_s_vertices_are_refused() {
             stem,
         );
     }
+}
+
+/// A vertex function that declares its slice and viewport and writes neither
+/// (`engine/rt6_unwritten`, both `undef` in its return) stores each as 0, the same at every vertex
+/// of a primitive: both are among its uniform outputs, its stage declares `Layer` and
+/// `ViewportIndex`, and no value it stores to either reads an `OpUndef`, in a pipeline with a
+/// fragment function that reads both, on a full device and on the floor.
+#[test]
+fn indices_a_vertex_function_never_writes_are_stored_as_zero() {
+    let Some(bc) = assemble("rt6_unwritten.ll") else {
+        return;
+    };
+    let d = render(
+        &bc,
+        "rt6_unwritten",
+        "rt6_unwritten_read",
+        PixelFormat::R32Uint,
+    );
+    for (stem, dev) in [
+        ("lavapipe", device("lavapipe", &[])),
+        ("runtime-floor", device("runtime-floor", &[])),
+    ] {
+        let a =
+            compile(&bc, "rt6_unwritten", dev.profile()).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let io = &a.interface.io;
+        for key in [
+            VaryingKey::render_target_array_index(),
+            VaryingKey::viewport_index(),
+        ] {
+            assert!(
+                io.uniform_outputs.contains(&key),
+                "{stem}: {:?}",
+                io.uniform_outputs
+            );
+        }
+        for b in [StageBuiltin::Layer, StageBuiltin::ViewportIndex] {
+            assert!(io.builtins.contains(&b), "{stem}: {:?}", io.builtins);
+        }
+        let p = dev
+            .compile_render_pipeline(&d, &Budget::standard())
+            .unwrap_or_else(|e| panic!("{stem}: {e}"));
+        validate(&p, &dev, stem);
+        let vertex = (p.stages.iter())
+            .find(|m| m.stage == crate::vk::ShaderStage::VERTEX)
+            .expect("vertex stage");
+        for b in [BuiltIn::Layer, BuiltIn::ViewportIndex] {
+            let stores = stores_read_undef(&vertex.spirv, b);
+            assert!(!stores.is_empty(), "{stem}: no store to {b:?}");
+            assert!(!stores.contains(&true), "{stem}: {b:?} stores {stores:?}");
+        }
+    }
+}
+
+/// For each `OpStore` of `words` through the variable builtin `b` decorates, whether its value
+/// reads an `OpUndef`: through the instructions that define every id it reads, transitively.
+fn stores_read_undef(words: &[u32], b: BuiltIn) -> Vec<bool> {
+    use crate::spirv_binary::{parse_bytes, Operand};
+    use crate::spv::{Decoration, Op};
+    let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+    let parsed = parse_bytes(&bytes).expect("parse");
+    let insts = &parsed.instructions;
+    let decorated: Vec<u32> = (insts.iter())
+        .filter(|i| i.opcode == Op::Decorate)
+        .filter_map(|i| match i.operands.as_slice() {
+            [Operand::IdRef(id), Operand::Word(d), Operand::Word(v)]
+                if *d == Decoration::BuiltIn as u32 && *v == b as u32 =>
+            {
+                Some(*id)
+            }
+            _ => None,
+        })
+        .collect();
+    let reads_undef = |value: u32| {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut stack = vec![value];
+        while let Some(id) = stack.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            let Some(def) = insts.iter().find(|i| i.result_id == Some(id)) else {
+                continue;
+            };
+            if def.opcode == Op::Undef {
+                return true;
+            }
+            stack.extend(def.operands.iter().filter_map(|o| match o {
+                Operand::IdRef(r) => Some(*r),
+                _ => None,
+            }));
+        }
+        false
+    };
+    (insts.iter())
+        .filter(|i| i.opcode == Op::Store)
+        .filter_map(|i| match i.operands.as_slice() {
+            [Operand::IdRef(pointer), Operand::IdRef(value), ..] if decorated.contains(pointer) => {
+                Some(reads_undef(*value))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// A fragment function that reads the slice or viewport no stage writes reads 0 on a device that
