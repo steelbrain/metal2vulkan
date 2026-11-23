@@ -29,6 +29,7 @@
 //! Nothing here can fault a GPU: one pass or one draw a row, every texture read-only and inside
 //! Metal's limits, no loop.
 
+use crate::allowance::Allowance;
 use crate::case::{
     call, drawn_or_refused, made, Abort, Case, Failure, Handle, Input, MetalSource, SamplerSpec,
     Side,
@@ -501,6 +502,13 @@ impl Case for KernelBinds {
         shader_refs(&[KERNEL])
     }
 
+    /// No value is loosened. The function samples through the runtime sampler at slot 0, which
+    /// the runtime's pipelines note as scaled (`replay::pixel_sampler_scaling_notice`); measured
+    /// firing on lavapipe through the rt side.
+    fn allowances(&self) -> Vec<Allowance> {
+        vec![crate::replay::pixel_sampler_scaling_notice()]
+    }
+
     fn inputs(&self) -> Result<Vec<Input>, String> {
         let mut inputs = shared_inputs(&[KERNEL])?;
         inputs.push(Input::bytes("buffer:params", &kernel_params()));
@@ -568,6 +576,13 @@ impl Case for FragmentBinds {
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
         shader_refs(&[VERTEX, FRAGMENT])
+    }
+
+    /// No value is loosened. The function samples through the runtime sampler at slot 0, which
+    /// the runtime's pipelines note as scaled (`replay::pixel_sampler_scaling_notice`); measured
+    /// firing on lavapipe through the rt side.
+    fn allowances(&self) -> Vec<Allowance> {
+        vec![crate::replay::pixel_sampler_scaling_notice()]
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

@@ -162,10 +162,10 @@ RUNTIME_FLOOR = {
             "maxDescriptorSetUpdateAfterBindSampledImages": 131072,
             "maxPerStageDescriptorUpdateAfterBindStorageImages": 131072,
             "maxDescriptorSetUpdateAfterBindStorageImages": 131072,
-            "maxPerStageDescriptorUpdateAfterBindSamplers": 12000,
-            "maxDescriptorSetUpdateAfterBindSamplers": 12000,
+            "maxPerStageDescriptorUpdateAfterBindSamplers": 24000,
+            "maxDescriptorSetUpdateAfterBindSamplers": 24000,
             "maxPerStageUpdateAfterBindResources": 262152,
-            "maxUpdateAfterBindDescriptorsInAllPools": 274144,
+            "maxUpdateAfterBindDescriptorsInAllPools": 286144,
         },
     },
 }

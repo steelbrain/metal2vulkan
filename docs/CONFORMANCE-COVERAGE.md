@@ -42,7 +42,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1328 |
 | distinct SDK items the Metal leg reaches, of any status | 812 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 7966 |
+| ledger rows (a case whose gap is recorded) | 7968 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2341,6 +2341,7 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `compressed-views-bc6h-rgb-ufloat` | An accepted difference: Metal documents no BC6H view between the format's signed and unsigned forms, and rt refuses it typed. MTLTexture.h makes a view "with a … |
 | `compute-inline-bytes` | The device's own answer (rule 1): the device converts an 8-bit code by the reciprocal product, so a code's value is one `f32` ulp off Metal's. Note `device-texe… |
 | `compute-imageblock-sizes` | refused: the consumer's own (dispatchType). rt takes the dispatch type as the encoder's argument and keeps no getter. |
+| `compute-plural-texture-and-sampler-binding` | The device's own answer (rule 1): the device converts an 8-bit code by the reciprocal product, so a code's value is one `f32` ulp off Metal's (the texture and k… |
 | `compute-threadgroup-memory-reads-zero` | refused: the consumer's own (dispatchType). rt takes the dispatch type as the encoder's argument and keeps no getter. |
 | `compute-threadgroup-past-metals-limit` | An accepted difference: Metal documents the dispatch as invalid, and rt refuses it typed. MTLComputePipeline.h: maxTotalThreadsPerThreadgroup is "The maximum to… |
 | `compute-threadgroup-past-metals-limit` | An accepted difference: Metal documents the dispatch as invalid, and rt refuses it typed. MTLComputePipeline.h: maxTotalThreadsPerThreadgroup is "The maximum to… |
@@ -5625,6 +5626,7 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `compute-resource-residency` | refused: the consumer's own (dispatchType). rt takes the dispatch type as the encoder's argument and keeps no getter. |
 | `compute-scope-barrier` | refused: the consumer's own (dispatchType). rt takes the dispatch type as the encoder's argument and keeps no getter. |
 | `compute-threadgroup-memory-and-grid` | refused: the consumer's own (dispatchType). rt takes the dispatch type as the encoder's argument and keeps no getter. |
+| `sampler-bind-lod-clamps-kernel` | refused: the consumer's own (dispatchType). rt takes the dispatch type as the encoder's argument and keeps no getter. |
 | `fragment-imageblock-reflection` | refused: the consumer's own (MTLComputePipelineReflection, MTLRenderPipelineReflection, MTLPipelineOptionFailOnBinaryArchiveMiss, MTLPipelineOptionArgumentInfo,… |
 | `fragment-imageblock-reflection` | refused: the consumer's own (MTLComputePipelineReflection, MTLRenderPipelineReflection, MTLPipelineOptionFailOnBinaryArchiveMiss, MTLPipelineOptionArgumentInfo,… |
 | `fragment-imageblock-reflection` | refused: the consumer's own (MTLComputePipelineReflection, MTLRenderPipelineReflection, MTLPipelineOptionFailOnBinaryArchiveMiss, MTLPipelineOptionArgumentInfo,… |
