@@ -3410,7 +3410,7 @@ fn the_dump_compare_reports_a_differing_word_outside_every_cover() {
         [
             "differs cb #20 obj #3: 1 words outside every cover, the first word 1536; 1 covered; \
              lengths 8192 and 8192",
-            "compared 1 buffers (0 as both plays' CPU copies, 0 as their device copies, read \
+            "compared 2 buffers (0 as both plays' CPU copies, 0 as their device copies, read \
              back): 1 differ, 1 words outside every cover, 1 covered; 0 dumps in one play only, 0 \
              unread, 0 of different copies: DIFFER",
         ]
