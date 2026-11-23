@@ -9,6 +9,8 @@
 //! - A read of an alias, then a write of a texture nothing earlier in the command buffer wrote:
 //!   the segment ends between them, and the check sits at the head of the second.
 //! - Writes of P, Q and P in one command buffer: the second and third move in place.
+//! - T written, then U placed over its bytes, written and released, which leaves T no link: T's
+//!   next write, of half its rows, still moves it.
 //! - A draw whose fragment writes P after a dispatch wrote Q: P moves through the pass's
 //!   interruption.
 //! - A heap whose two textures' bytes do not meet: no links, no check and no move.
@@ -23,10 +25,12 @@
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::buffer::BufferObject;
+    use crate::tests::command::on_device::within;
     use crate::tests::command::on_device::{each_device, finished};
     use crate::tests::draw::on_device::{library, pass, state};
     use crate::tests::heap_alias::on_device::{
-        input, kernels, libraries, place, place_at, read, write, Buffers, Kernels, Placed,
+        floats, input, kernels, libraries, place, place_at, read, write, write_rows, Buffers,
+        Kernels, Placed,
     };
     use crate::texture::TextureObject;
     use crate::{
@@ -204,6 +208,59 @@ mod on_device {
             drop((p, q, inputs, queue));
             (device.release_block(block)).unwrap_or_else(|error| panic!("{name}: {error}"));
             println!("heap checks: {name}: moves in place after an alias's write");
+        });
+    }
+
+    /// A texture's staleness outlives its links. T is written and read; U is placed over T's
+    /// bytes and written; then U is released, every command buffer that held it complete and
+    /// every handle of it dropped, which leaves T with no link. T's next write, of its first half
+    /// of rows, moves it from undefined first, one move, and T's read holds those rows.
+    #[test]
+    fn every_device_moves_a_heap_texture_written_over_by_an_alias_since_released() {
+        let Some(libraries) = libraries() else {
+            return;
+        };
+        each_device("alias_released", |name, _, device| {
+            let kernels = kernels(name, &device, &libraries);
+            let _grant = (device.grant_indices(IndexClass::Texture, FIRST, 4))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let (block, heap) = heap(name, &device);
+            let format = PixelFormat::RGBA16Float;
+            let t = place(name, &device, heap, (0, format, 64, 64), FIRST);
+            let mut buffers = Buffers::new(name, &device, 3);
+            let written = input(&t);
+            let t_input = buffers.of(name, &device, &written);
+            let out = buffers.of(name, &device, &vec![0.0; written.len()]);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let cb = queue.command_buffer().expect("a command buffer");
+            write(name, &cb, &kernels, &t, &t_input);
+            read(name, &cb, &kernels, &t, &out);
+            run(name, &cb);
+            assert_eq!(floats(&out), written, "{name}: T's first read");
+            let u = place(name, &device, heap, (1, format, 64, 64), FIRST + 2);
+            let u_input = buffers.of(name, &device, &input(&u));
+            let cb = queue.command_buffer().expect("a command buffer");
+            write(name, &cb, &kernels, &u, &u_input);
+            run(name, &cb);
+            drop((cb, u));
+            let place_t = Arc::clone((t.texture.object().placement()).expect("T's placement"));
+            within("U's release", || place_t.links() == 0);
+            let before = moves(&device);
+            let cb = queue.command_buffer().expect("a command buffer");
+            write_rows(name, &cb, &kernels, (&t, 32), &t_input);
+            read(name, &cb, &kernels, &t, &out);
+            run(name, &cb);
+            let moved = moves(&device) - before;
+            let half = written.len() / 2;
+            assert_eq!(
+                floats(&out)[..half],
+                written[..half],
+                "{name}: T's written rows after U's release"
+            );
+            assert_eq!(moved, 1, "{name}: T's write after U's release moves it");
+            drop((t, place_t, buffers, queue));
+            (device.release_block(block)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            println!("heap checks: {name}: a write after an alias's release moved {moved}");
         });
     }
 

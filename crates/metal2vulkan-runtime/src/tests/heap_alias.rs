@@ -156,7 +156,7 @@ pub(crate) mod on_device {
     }
 
     /// The floats `buffer` holds.
-    fn floats(buffer: &Buffer) -> Vec<f32> {
+    pub(crate) fn floats(buffer: &Buffer) -> Vec<f32> {
         let contents = buffer.contents().expect("Shared");
         let len = buffer.length() as usize / 4;
         // SAFETY: the buffer's bytes, which no command writes while the test reads them.
@@ -238,6 +238,17 @@ pub(crate) mod on_device {
         p: &Placed,
         input: &Buffer,
     ) {
+        write_rows(name, cb, kernels, (p, p.height), input);
+    }
+
+    /// As [`write`], of `p`'s first `rows` rows alone.
+    pub(crate) fn write_rows(
+        name: &str,
+        cb: &CommandBuffer,
+        kernels: &Kernels,
+        (p, rows): (&Placed, u32),
+        input: &Buffer,
+    ) {
         let done = |result: Result<(), crate::Error>| {
             result.unwrap_or_else(|error| panic!("{name}: texture {}: {error}", p.t))
         };
@@ -246,7 +257,7 @@ pub(crate) mod on_device {
         done(e.set_buffer(Some(input), 0, 0));
         done(e.set_bytes(&p.width.to_ne_bytes(), 1));
         done(e.set_texture(Some(&p.view), 0));
-        done(e.dispatch_threads([p.width, p.height, 1], [8, 8, 1]));
+        done(e.dispatch_threads([p.width, rows, 1], [8, 8, 1]));
         e.end_encoding();
     }
 
