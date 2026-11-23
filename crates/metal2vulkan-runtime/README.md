@@ -999,7 +999,9 @@ the Direct3D 11 texture's payload until it is freed.
   `Device::import_dma_buf` refuses with `Limit::ImportType`: the fd's query offers every memory
   type (0xffff), and the first, the only one the dma-buf rule takes (Imported blocks), is not
   host-visible and host-coherent. `Device::import_host_memory` of the same pages fails in the
-  driver, an `Error::Vulkan` of `vkAllocateMemory` with `VK_ERROR_INVALID_EXTERNAL_HANDLE`.
+  driver, an `Error::Vulkan` of `vkAllocateMemory` with `VK_ERROR_INVALID_EXTERNAL_HANDLE`:
+  both AMD Linux drivers on that card import a pointer to private anonymous pages only, and refuse
+  shared or file-backed pages such as the guest's.
   `Device::dma_buf_granule` is `None` there, so pages that span more than one dma-buf holds have
   no dma-buf route. Under RADV (Mesa 26.2.6) on the same card the same pages import as dma-bufs
   (`import_dma_buf`, and `import_dma_bufs` where they span more than one holds). In one guest run
