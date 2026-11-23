@@ -79,9 +79,9 @@ use metal2vulkan::metal::{BindingAccess, BindingType};
 use metal2vulkan::pipeline::{
     arena_bytes, AccessSet, Axis, BindingSource, BufferKind, CombinedSampler, ComputePipeline,
     ComputePipelineDescriptor, DescriptorSetLayout, FunctionDescriptor, KernelVariant,
-    LoweringInputs, NumberedSampler, PrecisionNote, PushField, PushLoc, RuntimeFact, SamplerRef,
-    SlotClass, SlotInterface, SlotRef, SpecKey, Stage, StageEntries, StageSource, TextureAccess,
-    DEEP_THREADGROUP, GRID_TILE_THREADS,
+    LinkedFunctions, LoweringInputs, NumberedSampler, PrecisionNote, PushField, PushLoc,
+    RuntimeFact, SamplerRef, SlotClass, SlotInterface, SlotRef, SpecKey, Stage, StageEntries,
+    StageSource, TextureAccess, DEEP_THREADGROUP, GRID_TILE_THREADS,
 };
 use metal2vulkan::Budget;
 use std::ffi::CString;
@@ -181,6 +181,9 @@ pub(crate) struct Compiled {
     notes: Vec<PrecisionNote>,
     /// What Metal's state answers of the content, beside its threads.
     answers: Answers,
+    /// The kernel's linked functions, which number its function handles
+    /// ([`ComputePipelineState::function_handle`]): none for a kernel the consumer compiled.
+    pub(crate) linked: LinkedFunctions,
     /// The key of the content's main pipeline ([`Compiled::main_key`]), which a state's
     /// [`ComputePipelineState::finish_pipeline`] makes, or its creation for a kernel past the
     /// stage bound; none where its descriptor holds no key of a `VkPipeline`.
@@ -1130,6 +1133,9 @@ impl Compiled {
         };
         let mut compiled = Compiled::new(core, whole, form, emulated, (notes, answers));
         compiled.main = compiled.main_key(descriptor);
+        if let StageSource::Function(function) = &descriptor.kernel {
+            compiled.linked = function.linked.clone();
+        }
         // A kernel past the stage bound makes its main pipeline here, so that a make the stage
         // bound refuses refuses the state's, which the consumer's helper then fills. Every other
         // error of the make is the dispatch's that makes it again, as a failed
@@ -1196,6 +1202,7 @@ impl Compiled {
             emulated,
             notes,
             answers,
+            linked: LinkedFunctions::new(),
             main: None,
         }
     }
@@ -1556,6 +1563,10 @@ pub(crate) fn interface(
             {
                 buffers.push((slot.index, access(buffer.access)));
             }
+            // A visible-function table, read as its words at the slot's pushed address: the
+            // table's own, which no command writes (`crate::function_table`).
+            (Stage::Kernel, SlotClass::Buffer, SlotInterface::Buffer(buffer))
+                if buffer.kind == BufferKind::VisibleFunctionTable => {}
             (Stage::Kernel, SlotClass::Texture, SlotInterface::Texture(texture)) => {
                 textures.push((slot.index, texture_access(texture.access)));
                 if texture.storage && texture.access.read {

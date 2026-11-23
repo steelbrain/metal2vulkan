@@ -907,6 +907,17 @@ impl Device {
         ArgumentBuffersTier::Tier2
     }
 
+    /// `supportsFunctionPointers`: true on every device above the floor. A kernel's call through
+    /// a visible-function table is a switch over the functions its pipeline state links, known
+    /// when the state is made, which needs no Vulkan feature
+    /// ([`VisibleFunctionTable`](crate::VisibleFunctionTable)); a call through a function pointer
+    /// the translator does not trace to a table entry or a function is its typed refusal
+    /// (`DynamicCall`). The render stages' answer (`supportsFunctionPointersFromRender`) is not
+    /// given: a render pipeline state of a function that reads a table is refused.
+    pub fn supports_function_pointers(&self) -> bool {
+        true
+    }
+
     /// `hasUnifiedMemory`: true where Vulkan's device type is integrated or CPU, false for a
     /// discrete or virtual GPU. On a discrete GPU, `Shared` memory is system memory the GPU reads
     /// across its bus, as on a Mac with a discrete GPU.

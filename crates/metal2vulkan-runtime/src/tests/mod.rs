@@ -33,6 +33,7 @@ mod fetch;
 mod filter_nest;
 mod first_use_sites;
 mod floor;
+mod function_tables;
 mod gpu_span;
 mod hazard;
 mod heap;

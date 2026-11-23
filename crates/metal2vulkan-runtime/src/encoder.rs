@@ -8,6 +8,7 @@ use crate::device::Core;
 use crate::error::{Error, Gap, KernelInputKind, Limit, Refusal, StageInKind};
 use crate::fence::Fence;
 use crate::floor;
+use crate::function_table::VisibleFunctionTable;
 use crate::hazard::Access;
 use crate::indirect::IndirectCommandBuffer;
 use crate::kept::{Handle, Lent, Uncounted};
@@ -552,6 +553,23 @@ impl ComputeCommandEncoder {
         self.slots[slot] = bound;
         self.changed();
         Ok(())
+    }
+
+    /// `setVisibleFunctionTable:atBufferIndex:` (`setVisibleFunctionTables:withBufferRange:` is a
+    /// loop of it): the table takes buffer argument `index`, which a kernel's
+    /// `visible_function_table` argument there reads, as a buffer bound there would. `None`
+    /// unbinds the slot, which then reads as a null table. The command buffer keeps the table's
+    /// words until it retires.
+    ///
+    /// Err: as [`set_buffer`](Self::set_buffer).
+    pub fn set_visible_function_table(
+        &mut self,
+        table: Option<&VisibleFunctionTable>,
+        index: u32,
+    ) -> Result<(), Error> {
+        let device = &self.building().device;
+        let words = table.map(|table| Buffer::of(Arc::clone(&table.words), device.clone()));
+        self.set_buffer(words.as_ref(), 0, index)
     }
 
     /// `setTexture:atIndex:` (`setTextures:withRange:` is a loop of it). `None` unbinds the slot.

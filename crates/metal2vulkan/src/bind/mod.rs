@@ -24,6 +24,8 @@
 //! - [`Dispatch`], [`DrawCall`], [`IndexBufferRef`] and [`StageInRegion`] state a dispatch, a
 //!   draw, its index buffer and the compute encoder's stage-in region in Metal's terms;
 //!   [`indirect_commands`] lays out an indirect command buffer's records.
+//! - [`function_table_header`] and [`function_table_entry_offset`] lay out the words of a
+//!   visible-function table's buffer, which a `visible_function_table` argument reads.
 //!
 //! The frozen surface is the items named at this root; the submodules are crate-private.
 
@@ -66,6 +68,7 @@ pub(crate) use replay::{merged_fragment_table, merged_vertex, MergedVertex};
 pub use state::{SamplerDescriptor, StageInRegion};
 #[cfg(test)]
 pub(crate) use table::FunctionTableWords;
+pub use table::{function_table_entry_offset, function_table_header};
 pub(crate) use texel_parts::part_texels;
 pub use ycbcr_convert::YCbCrPlanesSampler;
 pub(crate) use ycbcr_convert::{YCbCrCodes, YCbCrOutput};

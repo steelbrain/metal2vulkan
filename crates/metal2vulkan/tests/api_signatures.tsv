@@ -43,6 +43,8 @@ assoc-const	metal2vulkan-air::ir::FloatPredicate::ALL	pub const ALL: [FloatPredi
 assoc-const	metal2vulkan-air::ir::IntPredicate::ALL	pub const ALL: [IntPredicate; 10]
 assoc-const	metal2vulkan-air::metal::DataType::ALL	pub const ALL: [DataType; 17]
 assoc-const	metal2vulkan-runtime::BlitCommandEncoder::GENERATE_MIPMAPS_NOTE	pub const GENERATE_MIPMAPS_NOTE: PrecisionNote
+assoc-const	metal2vulkan-runtime::FunctionHandle::NULL_WORD	pub const NULL_WORD: u32
+assoc-const	metal2vulkan-runtime::FunctionHandle::RESERVED_WORD	pub const RESERVED_WORD: u32
 assoc-const	metal2vulkan-runtime::IndirectCommandType::CONCURRENT_DISPATCH	pub const CONCURRENT_DISPATCH: IndirectCommandType
 assoc-const	metal2vulkan-runtime::IndirectCommandType::CONCURRENT_DISPATCH_THREADS	pub const CONCURRENT_DISPATCH_THREADS: IndirectCommandType
 assoc-const	metal2vulkan-runtime::IndirectCommandType::DRAW	pub const DRAW: IndirectCommandType
@@ -192,6 +194,8 @@ assoc-const-value	metal2vulkan-air::ir::FloatPredicate::ALL	[FloatPredicate::Fal
 assoc-const-value	metal2vulkan-air::ir::IntPredicate::ALL	[IntPredicate::Eq, IntPredicate::Ne, IntPredicate::Ugt, IntPredicate::Uge, IntPredicate::Ult, IntPredicate::Ule, IntPredicate::Sgt, IntPredicate::Sge, IntPredicate::Slt, IntPredicate::Sle]
 assoc-const-value	metal2vulkan-air::metal::DataType::ALL	[DataType::Float32, DataType::Float16, DataType::BFloat16, DataType::Int2, DataType::Int4, DataType::Int8, DataType::Int16, DataType::Int32, DataType::UInt2, DataType::UInt4, DataType::UInt8, DataType::UInt16, DataType::UInt32, DataType::Fp4E2M1, DataType::Fp8E4M3, DataType::Fp8E5M2, DataType::Fp8UE8M0]
 assoc-const-value	metal2vulkan-runtime::BlitCommandEncoder::GENERATE_MIPMAPS_NOTE	PrecisionNote::DeviceFilteredMipmaps
+assoc-const-value	metal2vulkan-runtime::FunctionHandle::NULL_WORD	0
+assoc-const-value	metal2vulkan-runtime::FunctionHandle::RESERVED_WORD	1
 assoc-const-value	metal2vulkan-runtime::IndirectCommandType::CONCURRENT_DISPATCH	IndirectCommandType(1 <<5)
 assoc-const-value	metal2vulkan-runtime::IndirectCommandType::CONCURRENT_DISPATCH_THREADS	IndirectCommandType(1 <<6)
 assoc-const-value	metal2vulkan-runtime::IndirectCommandType::DRAW	IndirectCommandType(1 <<0)
@@ -1372,6 +1376,11 @@ field	metal2vulkan-runtime::IndirectCommandBufferDescriptor.inherit_pipeline_sta
 field	metal2vulkan-runtime::IndirectCommandBufferDescriptor.max_fragment_buffer_bind_count	pub max_fragment_buffer_bind_count: u32
 field	metal2vulkan-runtime::IndirectCommandBufferDescriptor.max_kernel_buffer_bind_count	pub max_kernel_buffer_bind_count: u32
 field	metal2vulkan-runtime::IndirectCommandBufferDescriptor.max_vertex_buffer_bind_count	pub max_vertex_buffer_bind_count: u32
+field	metal2vulkan-runtime::LinkedFunction.constants	pub constants: FunctionConstantValues
+field	metal2vulkan-runtime::LinkedFunction.function	pub function: Function
+field	metal2vulkan-runtime::LinkedFunction.precompiled	pub precompiled: bool
+field	metal2vulkan-runtime::LinkedFunction.specialized	pub specialized: bool
+field	metal2vulkan-runtime::LinkedFunction.specialized_name	pub specialized_name: Option<String>
 field	metal2vulkan-runtime::Metrics.accumulated_visibility_refused	pub accumulated_visibility_refused: u64
 field	metal2vulkan-runtime::Metrics.allocation_map_refusals	pub allocation_map_refusals: u64
 field	metal2vulkan-runtime::Metrics.allocations_freed	pub allocations_freed: u64
@@ -1761,6 +1770,7 @@ field	metal2vulkan-runtime::Viewport.origin_y	pub origin_y: f64
 field	metal2vulkan-runtime::Viewport.width	pub width: f64
 field	metal2vulkan-runtime::Viewport.zfar	pub zfar: f64
 field	metal2vulkan-runtime::Viewport.znear	pub znear: f64
+field	metal2vulkan-runtime::VisibleFunctionTableDescriptor.function_count	pub function_count: u64
 field	metal2vulkan-runtime::floor::BelowFloor.missing	pub missing: Vec<Missing>
 field	metal2vulkan-runtime::floor::Capabilities.attachment_reads	pub attachment_reads: bool
 field	metal2vulkan-runtime::floor::Capabilities.buffer_int64_atomics	pub buffer_int64_atomics: bool
@@ -2767,6 +2777,8 @@ fn	metal2vulkan-runtime::serve_stage	pub fn serve_stage(instance: &Instance, mut
 fn	metal2vulkan::ash_interop::sampler_create_info	pub fn sampler_create_info<'a>(desc: &vk::SamplerDesc, reduction: &'a mut ash::vk::SamplerReductionModeCreateInfo<'static>, border: &'a mut ash::vk::SamplerBorderColorComponentMappingCreateInfoEXT<'static>) -> ash::vk::SamplerCreateInfo<'a>
 fn	metal2vulkan::bind::alpha_test_code	pub fn alpha_test_code(reference: f32) -> u32
 fn	metal2vulkan::bind::clamped_depth	pub const fn clamped_depth(bits: u32) -> u32
+fn	metal2vulkan::bind::function_table_entry_offset	pub fn function_table_entry_offset(index: u32) -> u64
+fn	metal2vulkan::bind::function_table_header	pub fn function_table_header(size: u32) -> [u32; 2]
 fn	metal2vulkan::bind::indirect_commands::records_address	pub const fn records_address(id: u64) -> u64
 fn	metal2vulkan::bind::indirect_commands::written_flag_offset	pub const fn written_flag_offset(capacity: u32, index: u32) -> u64
 fn	metal2vulkan::device::vk_stage	pub fn vk_stage(stage: Stage) -> vk::ShaderStage
@@ -5903,6 +5915,7 @@ method	metal2vulkan-runtime::ComputeCommandEncoder::set_stage_in_region	pub fn s
 method	metal2vulkan-runtime::ComputeCommandEncoder::set_stage_in_region_with_indirect_buffer	pub fn set_stage_in_region_with_indirect_buffer(&mut self, _buffer: &Buffer, _offset: u64) -> Result<(), Error>
 method	metal2vulkan-runtime::ComputeCommandEncoder::set_texture	pub fn set_texture(&mut self, texture: Option<&Texture>, index: u32) -> Result<(), Error>
 method	metal2vulkan-runtime::ComputeCommandEncoder::set_threadgroup_memory_length	pub fn set_threadgroup_memory_length(&mut self, length: u32, index: u32) -> Result<(), Error>
+method	metal2vulkan-runtime::ComputeCommandEncoder::set_visible_function_table	pub fn set_visible_function_table(&mut self, table: Option<&VisibleFunctionTable>, index: u32) -> Result<(), Error>
 method	metal2vulkan-runtime::ComputeCommandEncoder::update_fence	pub fn update_fence(&mut self, fence: &Fence) -> Result<(), Error>
 method	metal2vulkan-runtime::ComputeCommandEncoder::use_heap	pub fn use_heap(&mut self, heap: BlockId) -> Result<(), Error>
 method	metal2vulkan-runtime::ComputeCommandEncoder::use_resource	pub fn use_resource(&mut self, resource: Resource<'_>, usage: ResourceUsage) -> Result<(), Error>
@@ -5914,8 +5927,10 @@ method	metal2vulkan-runtime::ComputePipelineDescriptor::slot_writes	pub fn slot_
 method	metal2vulkan-runtime::ComputePipelineState::buffer_accesses	pub fn buffer_accesses(&self) -> Vec<(u32, BindingAccess)>
 method	metal2vulkan-runtime::ComputePipelineState::dispatch_variant	pub fn dispatch_variant(&self, dispatch: Dispatch, threads_per_threadgroup: [u32; 3], threadgroup_memory_lengths: &[(u32, u32)]) -> Option<(DispatchVariant, bool)>
 method	metal2vulkan-runtime::ComputePipelineState::finish_pipeline	pub fn finish_pipeline(&self) -> Result<(), Error>
+method	metal2vulkan-runtime::ComputePipelineState::function_handle	pub fn function_handle(&self, function: &LinkedFunction) -> Option<FunctionHandle>
 method	metal2vulkan-runtime::ComputePipelineState::imageblock_memory_length_for_dimensions	pub fn imageblock_memory_length_for_dimensions(&self, _dimensions: [u32; 3]) -> Result<u64, Error>
 method	metal2vulkan-runtime::ComputePipelineState::max_total_threads_per_threadgroup	pub fn max_total_threads_per_threadgroup(&self) -> u32
+method	metal2vulkan-runtime::ComputePipelineState::new_visible_function_table	pub fn new_visible_function_table(&self, descriptor: &VisibleFunctionTableDescriptor) -> Result<VisibleFunctionTable, Error>
 method	metal2vulkan-runtime::ComputePipelineState::precision_notes	pub fn precision_notes(&self) -> Vec<PrecisionNote>
 method	metal2vulkan-runtime::ComputePipelineState::prepare_dispatch	pub fn prepare_dispatch(&self, dispatch: Dispatch, threads_per_threadgroup: [u32; 3], threadgroup_memory_lengths: &[(u32, u32)]) -> Result<(), Error>
 method	metal2vulkan-runtime::ComputePipelineState::required_threads_per_threadgroup	pub fn required_threads_per_threadgroup(&self) -> [u32; 3]
@@ -5972,6 +5987,7 @@ method	metal2vulkan-runtime::Device::read_write_texture_support	pub fn read_writ
 method	metal2vulkan-runtime::Device::record_stage_breach	pub fn record_stage_breach(&self, request: &StageRequest, breach: StageBreach)
 method	metal2vulkan-runtime::Device::release_block	pub fn release_block(&self, block: Block) -> Result<(), Error>
 method	metal2vulkan-runtime::Device::report_loss	pub fn report_loss(&self, loss: DeviceLoss)
+method	metal2vulkan-runtime::Device::supports_function_pointers	pub fn supports_function_pointers(&self) -> bool
 method	metal2vulkan-runtime::Device::supports_texture_sample_count	pub fn supports_texture_sample_count(&self, count: u32) -> bool
 method	metal2vulkan-runtime::Device::take_block	pub fn take_block(&self, class: MemoryClass, len: u64) -> Result<Block, Error>
 method	metal2vulkan-runtime::Device::texture_level_info	pub fn texture_level_info(&self, query: &TextureLevelQuery) -> TextureLevelInfo
@@ -5988,6 +6004,7 @@ method	metal2vulkan-runtime::FunctionDescriptor::new	pub fn new(function: Functi
 method	metal2vulkan-runtime::FunctionDescriptor::with_libraries	pub fn with_libraries(mut self, libraries: DynamicLibraries) -> FunctionDescriptor
 method	metal2vulkan-runtime::FunctionDescriptor::with_linked	pub fn with_linked(mut self, linked: LinkedFunctions) -> FunctionDescriptor
 method	metal2vulkan-runtime::FunctionDescriptor::with_specialized	pub fn with_specialized(mut self, specialized: bool) -> FunctionDescriptor
+method	metal2vulkan-runtime::FunctionHandle::word	pub fn word(self) -> u32
 method	metal2vulkan-runtime::Gap::basis	pub fn basis(self) -> RefusalBasis
 method	metal2vulkan-runtime::HostBytes::from_raw	pub unsafe fn from_raw(start: *const u8, len: usize) -> HostBytes<'a>
 method	metal2vulkan-runtime::HostBytes::is_empty	pub fn is_empty(&self) -> bool
@@ -6018,6 +6035,12 @@ method	metal2vulkan-runtime::Library::len	pub fn len(&self) -> u32
 method	metal2vulkan-runtime::Library::library_type	pub fn library_type(&self) -> LibraryType
 method	metal2vulkan-runtime::Library::parse	pub fn parse(bytes: &[u8]) -> Result<Library, Error>
 method	metal2vulkan-runtime::Limit::basis	pub fn basis(self) -> RefusalBasis
+method	metal2vulkan-runtime::LinkedFunction::name	pub fn name(&self) -> &str
+method	metal2vulkan-runtime::LinkedFunction::new	pub fn new(function: Function) -> LinkedFunction
+method	metal2vulkan-runtime::LinkedFunction::with_constants	pub fn with_constants(mut self, constants: FunctionConstantValues) -> LinkedFunction
+method	metal2vulkan-runtime::LinkedFunction::with_precompiled	pub fn with_precompiled(mut self, precompiled: bool) -> LinkedFunction
+method	metal2vulkan-runtime::LinkedFunction::with_specialized	pub fn with_specialized(mut self, specialized: bool) -> LinkedFunction
+method	metal2vulkan-runtime::LinkedFunction::with_specialized_name	pub fn with_specialized_name(mut self, name: impl Into<String>) -> LinkedFunction
 method	metal2vulkan-runtime::MemoryClass::block_len	pub const fn block_len(self) -> u64
 method	metal2vulkan-runtime::PhysicalDevice::check	pub fn check(&self) -> Result<floor::Capabilities, floor::BelowFloor>
 method	metal2vulkan-runtime::PhysicalDevice::raw	pub fn raw(&self) -> vk::PhysicalDevice
@@ -6119,6 +6142,10 @@ method	metal2vulkan-runtime::TextureSwizzleChannels::compose	pub fn compose(self
 method	metal2vulkan-runtime::TextureSwizzleChannels::is_default	pub fn is_default(self) -> bool
 method	metal2vulkan-runtime::TextureSwizzleChannels::new	pub fn new(red: TextureSwizzle, green: TextureSwizzle, blue: TextureSwizzle, alpha: TextureSwizzle) -> TextureSwizzleChannels
 method	metal2vulkan-runtime::VertexDescriptor::new	pub fn new() -> VertexDescriptor
+method	metal2vulkan-runtime::VisibleFunctionTable::gpu_resource_id	pub fn gpu_resource_id(&self) -> u64
+method	metal2vulkan-runtime::VisibleFunctionTable::set_function	pub fn set_function(&self, function: Option<FunctionHandle>, index: u32) -> Result<(), Error>
+method	metal2vulkan-runtime::VisibleFunctionTable::set_functions	pub fn set_functions(&self, functions: &[Option<FunctionHandle>], first: u32) -> Result<(), Error>
+method	metal2vulkan-runtime::VisibleFunctionTableDescriptor::new	pub fn new(function_count: u64) -> VisibleFunctionTableDescriptor
 method	metal2vulkan::Budget::standard	pub fn standard() -> Budget
 method	metal2vulkan::Budget::with_deadline	pub fn with_deadline(deadline: Option<Instant>) -> Budget
 method	metal2vulkan::CancelToken::cancel	pub fn cancel(&self)
@@ -6794,6 +6821,7 @@ struct	metal2vulkan-runtime::FaultPlace	#[derive(Clone, Debug, PartialEq, Eq)] #
 struct	metal2vulkan-runtime::FaultRange	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct FaultRange
 struct	metal2vulkan-runtime::Fence	#[derive(Clone)] pub struct Fence
 struct	metal2vulkan-runtime::FunctionDescriptor	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct FunctionDescriptor
+struct	metal2vulkan-runtime::FunctionHandle	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct FunctionHandle(u32)
 struct	metal2vulkan-runtime::Gauges	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] #[non_exhaustive] pub struct Gauges
 struct	metal2vulkan-runtime::HeapRange	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct HeapRange
 struct	metal2vulkan-runtime::HostBytes	#[derive(Clone, Copy, Debug)] pub struct HostBytes<'a>
@@ -6804,6 +6832,7 @@ struct	metal2vulkan-runtime::IndirectCommandBufferDescriptor	#[derive(Clone, Cop
 struct	metal2vulkan-runtime::IndirectCommandType	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct IndirectCommandType(u64)
 struct	metal2vulkan-runtime::Instance	#[derive(Clone)] pub struct Instance
 struct	metal2vulkan-runtime::Library	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct Library(Arc<LibraryInner>)
+struct	metal2vulkan-runtime::LinkedFunction	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct LinkedFunction
 struct	metal2vulkan-runtime::Metrics	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] #[non_exhaustive] pub struct Metrics
 struct	metal2vulkan-runtime::PhysicalDevice	#[derive(Clone)] pub struct PhysicalDevice
 struct	metal2vulkan-runtime::PixelFormatInfo	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct PixelFormatInfo
@@ -6843,6 +6872,8 @@ struct	metal2vulkan-runtime::Timed	#[derive(Clone, Copy, Debug, Default, Partial
 struct	metal2vulkan-runtime::VariantMake	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct VariantMake
 struct	metal2vulkan-runtime::VertexDescriptor	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct VertexDescriptor
 struct	metal2vulkan-runtime::Viewport	#[derive(Clone, Copy, Debug, PartialEq)] pub struct Viewport
+struct	metal2vulkan-runtime::VisibleFunctionTable	#[derive(Clone)] pub struct VisibleFunctionTable
+struct	metal2vulkan-runtime::VisibleFunctionTableDescriptor	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] #[non_exhaustive] pub struct VisibleFunctionTableDescriptor
 struct	metal2vulkan-runtime::floor::BelowFloor	#[derive(Clone, Debug, PartialEq, Eq)] pub struct BelowFloor
 struct	metal2vulkan-runtime::floor::Capabilities	pub struct Capabilities
 struct	metal2vulkan-runtime::floor::DgcFeatures	#[derive(Clone, Copy)] #[repr(C)] pub struct DgcFeatures
@@ -7087,6 +7118,7 @@ trait-impl	metal2vulkan-runtime::Gap impl fmt::Display	impl fmt::Display for Gap
 trait-impl	metal2vulkan-runtime::HostBytes impl From<&'a [u8]>	impl<'a> From<&'a [u8]> for HostBytes<'a>
 trait-impl	metal2vulkan-runtime::IndirectCommandType impl std::ops::BitOr	impl std::ops::BitOr for IndirectCommandType
 trait-impl	metal2vulkan-runtime::Limit impl fmt::Display	impl fmt::Display for Limit
+trait-impl	metal2vulkan-runtime::LinkedFunction impl From<Function>	impl From<Function> for LinkedFunction
 trait-impl	metal2vulkan-runtime::RangeKind impl fmt::Display	impl fmt::Display for RangeKind
 trait-impl	metal2vulkan-runtime::Refusal impl fmt::Display	impl fmt::Display for Refusal
 trait-impl	metal2vulkan-runtime::RenderCommandEncoder impl Drop	impl Drop for RenderCommandEncoder
@@ -8529,6 +8561,7 @@ variant	metal2vulkan-runtime::Refusal::DrawableUsage	DrawableUsage { missing: u3
 variant	metal2vulkan-runtime::Refusal::EmptyBuffer	EmptyBuffer
 variant	metal2vulkan-runtime::Refusal::EncoderOpen	EncoderOpen
 variant	metal2vulkan-runtime::Refusal::FillRange	FillRange { start: u64, end: u64, len: u64 }
+variant	metal2vulkan-runtime::Refusal::FunctionTableIndex	FunctionTableIndex { index: u64, count: u32 }
 variant	metal2vulkan-runtime::Refusal::HeapBufferPlace	HeapBufferPlace { offset: u64, length: u64, heap_len: u64 }
 variant	metal2vulkan-runtime::Refusal::HeapTexturePlace	HeapTexturePlace { offset: u64, size: u64, align: u64, heap_len: u64 }
 variant	metal2vulkan-runtime::Refusal::InScheduledHandler	InScheduledHandler

@@ -36,6 +36,7 @@ impl Refusal {
             Refusal::BufferIndex { .. } => RefusalBasis::MetalDocumented,
             Refusal::TextureArgumentIndex { .. } => RefusalBasis::MetalDocumented,
             Refusal::SamplerArgumentIndex { .. } => RefusalBasis::MetalDocumented,
+            Refusal::FunctionTableIndex { .. } => RefusalBasis::Ours,
             Refusal::SamplerIds { .. } => RefusalBasis::Ours,
             Refusal::NoBufferAtIndex { .. } => RefusalBasis::Ours,
             Refusal::ThreadgroupSize { .. } => RefusalBasis::MetalDocumented,

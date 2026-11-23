@@ -31,7 +31,7 @@ Columns:
 | Rate maps the compile layer does not compile | 5 | 5 | 0 | 0 | 4 | 1 | 0 |
 | The translation deadline | 1 | 1 | 0 | 0 | 0 | 1 | 0 |
 | Devices below the runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
-| The runtime's `Refusal` | 83 | 83 | 0 | 0 | 0 | 0 | 0 |
+| The runtime's `Refusal` | 84 | 84 | 0 | 0 | 0 | 0 | 0 |
 | The runtime's `Limit` | 17 | 17 | 0 | 0 | 0 | 0 | 0 |
 | The runtime's `Gap` | 33 | 33 | 0 | 0 | 0 | 0 | 0 |
 
@@ -44,7 +44,7 @@ Columns:
 | Rate maps the compile layer does not compile | 0 | 0 | 0 | 0 | 5 | 0 | 0 | 0 |
 | The translation deadline | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 |
 | Devices below the runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
-| The runtime's `Refusal` | 22 | 25 | 0 | 0 | 36 | 0 | 0 | 0 |
+| The runtime's `Refusal` | 22 | 25 | 0 | 0 | 37 | 0 | 0 | 0 |
 | The runtime's `Limit` | 0 | 0 | 0 | 13 | 4 | 0 | 0 | 0 |
 | The runtime's `Gap` | 0 | 0 | 0 | 3 | 30 | 0 | 0 | 0 |
 
@@ -225,7 +225,7 @@ Columns:
 | Variant | What it blocks | Where | Basis | Sites | Reach |
 |---|---|---|---|---|---|
 | `EmptyBuffer` | A buffer of no bytes (`Device::new_buffer` with a length of 0) | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max: newBufferWithLength:0 answers nil | 2: `crates/metal2vulkan-runtime/src/buffer.rs (new_managed_buffer)`, `crates/metal2vulkan-runtime/src/buffer.rs (placed_buffer)` | `-` |
-| `BufferTooLong` | A buffer longer than `MAX_BUFFER_LENGTH` (`Device::new_buffer`) | every device (a public call's own check of its arguments) | `ours`: this crate's cap: a buffer's every byte lies within 2^31 bytes of each bind address in it | 2: `crates/metal2vulkan-runtime/src/buffer.rs (new_managed_buffer)`, `crates/metal2vulkan-runtime/src/buffer.rs (placed_buffer)` | `-` |
+| `BufferTooLong` | A buffer longer than `MAX_BUFFER_LENGTH` (`Device::new_buffer`), or a visible-function table whose words are... | every device (a public call's own check of its arguments) | `ours`: this crate's cap: a buffer's every byte lies within 2^31 bytes of each bind address in it | 3: `crates/metal2vulkan-runtime/src/buffer.rs (new_managed_buffer)`, `crates/metal2vulkan-runtime/src/buffer.rs (placed_buffer)` (+1) | `-` |
 | `BufferPastBlock` | A buffer whose range leaves its block (`Device::new_buffer`) | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: a placement heap of 1 MiB answers nil for a 4096-byte buffer at offset 1,047,552 | 1: `crates/metal2vulkan-runtime/src/buffer.rs (placed)` | `-` |
 | `HeapBufferPlace` | A heap buffer whose range leaves its heap (`Device::new_heap_buffer`) | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: a placement heap of 1 MiB answers nil for a 4096-byte buffer at offset 1,047,552 | 1: `crates/metal2vulkan-runtime/src/buffer.rs (new_heap_buffer)` | `-` |
 | `ManagedBlockPrivate` | A Managed buffer whose bytes are in a Private block (`Device::new_managed_buffer`) | every device (a public call's own check of its arguments) | `metal-documented`: a Managed buffer has a CPU-side copy: `MTLBuffer.h` gives its `contents` as "the data pointer of this buffer's shared copy", and `didModifyRange:` names the ranges "the CPU has modified" | 1: `crates/metal2vulkan-runtime/src/buffer.rs (new_managed_buffer)` | `-` |
@@ -252,6 +252,7 @@ Columns:
 | `BufferIndex` | A buffer argument index past Metal's 31 entries (`setBuffer`, `setBytes`, `setBufferOffset`, `setThreadgroupMemoryLength`) | every device (a public call's own check of its arguments) | `metal-documented`: the buffer argument table has 31 entries per stage | 2: `crates/metal2vulkan-runtime/src/encoder.rs (slot)`, `crates/metal2vulkan-runtime/src/render_encoder.rs (slot)` | `-` |
 | `TextureArgumentIndex` | A texture argument index past Metal's 128 entries (`setTexture`) | every device (a public call's own check of its arguments) | `metal-documented`: the texture argument table has 128 entries per stage on Apple GPUs | 2: `crates/metal2vulkan-runtime/src/encoder.rs (set_texture)`, `crates/metal2vulkan-runtime/src/render_encoder.rs (set_texture)` | `-` |
 | `SamplerArgumentIndex` | A sampler argument index past Metal's 16 entries (`setSamplerState`) | every device (a public call's own check of its arguments) | `metal-documented`: the sampler argument table has 16 entries per stage | 2: `crates/metal2vulkan-runtime/src/encoder.rs (set_sampler_state)`, `crates/metal2vulkan-runtime/src/render_encoder.rs (set_sampler_state)` | `-` |
+| `FunctionTableIndex` | A visible-function table's entry at or past its size (`VisibleFunctionTable::set_function`, `set_functions`), which writes nothing | every device (a public call's own check of its arguments) | `ours`: the runtime writes no byte past a table's words | 1: `crates/metal2vulkan-runtime/src/function_table.rs (set_functions)` | `-` |
 | `SamplerIds` | A consumer's answer to `Device::new_compute_pipeline_state`'s numbered samplers with another count of indices | every device (a public call's own check of its arguments) | `ours`: each numbered sampler takes one index | 1: `crates/metal2vulkan-runtime/src/pipeline.rs (number_samplers)` | `-` |
 | `NoBufferAtIndex` | `setBufferOffset` at an index where no buffer is bound, or a draw whose vertex descriptor reads a vertex buffer index where none is bound | every device (a public call's own check of its arguments) | `ours`: there is no buffer whose offset to change, and none whose vertices the draw reads; Metal's validation stops such a draw | 3: `crates/metal2vulkan-runtime/src/encoder.rs (set_buffer_offset)`, `crates/metal2vulkan-runtime/src/render_encoder.rs (find)` (+1) | `-` |
 | `ThreadgroupSize` | A threadgroup of no threads, or of more than Metal's `maxTotalThreadsPerThreadgroup` for the kernel (a required size's threads, where the... | every device (a public call's own check of its arguments) | `metal-documented`: a threadgroup's threads total at most the state's `maxTotalThreadsPerThreadgroup` | 2: `crates/metal2vulkan-runtime/src/encoder.rs (dispatch)`, `crates/metal2vulkan-runtime/src/encoder.rs (size_checked)` | `-` |
@@ -515,7 +516,7 @@ Each refusal's sites, with the function that builds it.
 - `floor::TimeDomain`: `crates/metal2vulkan-runtime/src/floor.rs (decide)`
 - `floor::SetLayout`: `crates/metal2vulkan-runtime/src/arrays.rs (supported)`
 - `rt:Refusal::EmptyBuffer`: `crates/metal2vulkan-runtime/src/buffer.rs (new_managed_buffer)`; `crates/metal2vulkan-runtime/src/buffer.rs (placed_buffer)`
-- `rt:Refusal::BufferTooLong`: `crates/metal2vulkan-runtime/src/buffer.rs (new_managed_buffer)`; `crates/metal2vulkan-runtime/src/buffer.rs (placed_buffer)`
+- `rt:Refusal::BufferTooLong`: `crates/metal2vulkan-runtime/src/buffer.rs (new_managed_buffer)`; `crates/metal2vulkan-runtime/src/buffer.rs (placed_buffer)`; `crates/metal2vulkan-runtime/src/function_table.rs (new_visible_function_table)`
 - `rt:Refusal::BufferPastBlock`: `crates/metal2vulkan-runtime/src/buffer.rs (placed)`
 - `rt:Refusal::HeapBufferPlace`: `crates/metal2vulkan-runtime/src/buffer.rs (new_heap_buffer)`
 - `rt:Refusal::ManagedBlockPrivate`: `crates/metal2vulkan-runtime/src/buffer.rs (new_managed_buffer)`
@@ -542,6 +543,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Refusal::BufferIndex`: `crates/metal2vulkan-runtime/src/encoder.rs (slot)`; `crates/metal2vulkan-runtime/src/render_encoder.rs (slot)`
 - `rt:Refusal::TextureArgumentIndex`: `crates/metal2vulkan-runtime/src/encoder.rs (set_texture)`; `crates/metal2vulkan-runtime/src/render_encoder.rs (set_texture)`
 - `rt:Refusal::SamplerArgumentIndex`: `crates/metal2vulkan-runtime/src/encoder.rs (set_sampler_state)`; `crates/metal2vulkan-runtime/src/render_encoder.rs (set_sampler_state)`
+- `rt:Refusal::FunctionTableIndex`: `crates/metal2vulkan-runtime/src/function_table.rs (set_functions)`
 - `rt:Refusal::SamplerIds`: `crates/metal2vulkan-runtime/src/pipeline.rs (number_samplers)`
 - `rt:Refusal::NoBufferAtIndex`: `crates/metal2vulkan-runtime/src/encoder.rs (set_buffer_offset)`; `crates/metal2vulkan-runtime/src/render_encoder.rs (find)`; `crates/metal2vulkan-runtime/src/render_encoder.rs (set_buffer_offset)`
 - `rt:Refusal::ThreadgroupSize`: `crates/metal2vulkan-runtime/src/encoder.rs (dispatch)`; `crates/metal2vulkan-runtime/src/encoder.rs (size_checked)`

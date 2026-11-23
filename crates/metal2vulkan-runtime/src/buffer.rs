@@ -464,23 +464,40 @@ impl Device {
         copy: Option<Arc<DeviceCopy>>,
         heap: Option<Arc<HeapId>>,
     ) -> Buffer {
-        self.core().counters.rise(Gauge::Buffers);
-        let gauge = block.memory.class.buffer_gauge();
-        self.core().counters.rise_by(gauge, length);
         Buffer {
-            inner: Arc::new(BufferInner {
-                core: Arc::clone(self.core()),
-                id: self.core().ids.take(),
-                heap,
-                block,
-                offset,
-                length,
-                contents,
-                copy,
-                overs: Arc::default(),
-            }),
+            inner: BufferInner::new(self.core(), block, offset, length, contents, copy, heap),
             device: self.clone(),
         }
+    }
+}
+
+impl BufferInner {
+    /// A new buffer of `core`'s device, counted in [`Gauges::buffers`](crate::Gauges::buffers):
+    /// what [`Device::buffer`] makes a handle of, and a visible-function table's words
+    /// (`crate::function_table`).
+    pub(crate) fn new(
+        core: &Arc<Core>,
+        block: Arc<Block>,
+        offset: u64,
+        length: u64,
+        contents: Option<Mapping>,
+        copy: Option<Arc<DeviceCopy>>,
+        heap: Option<Arc<HeapId>>,
+    ) -> Arc<BufferInner> {
+        core.counters.rise(Gauge::Buffers);
+        let gauge = block.memory.class.buffer_gauge();
+        core.counters.rise_by(gauge, length);
+        Arc::new(BufferInner {
+            core: Arc::clone(core),
+            id: core.ids.take(),
+            heap,
+            block,
+            offset,
+            length,
+            contents,
+            copy,
+            overs: Arc::default(),
+        })
     }
 }
 

@@ -103,10 +103,12 @@ pub enum Refusal {
     /// Basis: metal-measured (an Apple M3 Max: newBufferWithLength:0 answers nil).
     EmptyBuffer,
     /// A buffer longer than [`MAX_BUFFER_LENGTH`](crate::MAX_BUFFER_LENGTH)
-    /// ([`Device::new_buffer`](crate::Device::new_buffer)): a shader reaches a buffer argument's
-    /// bytes by 32-bit offsets from its bind address, which the translator may read as signed.
-    /// Metal answers nil past a device's `maxBufferLength`, which the consumer states no larger
-    /// than this.
+    /// ([`Device::new_buffer`](crate::Device::new_buffer)), or a visible-function table whose
+    /// words are
+    /// ([`ComputePipelineState::new_visible_function_table`](crate::ComputePipelineState::new_visible_function_table)):
+    /// a shader reaches a buffer argument's bytes by 32-bit offsets from its bind address, which
+    /// the translator may read as signed. Metal answers nil past a device's `maxBufferLength`,
+    /// which the consumer states no larger than this.
     ///
     /// Basis: ours (this crate's cap: a buffer's every byte lies within 2^31 bytes of each bind
     /// address in it).
@@ -376,6 +378,17 @@ pub enum Refusal {
     SamplerArgumentIndex {
         /// The index asked for.
         index: u32,
+    },
+    /// A visible-function table's entry at or past its size
+    /// ([`VisibleFunctionTable::set_function`](crate::VisibleFunctionTable::set_function),
+    /// `set_functions`), which writes nothing.
+    ///
+    /// Basis: ours (the runtime writes no byte past a table's words).
+    FunctionTableIndex {
+        /// The last index asked for.
+        index: u64,
+        /// The table's size, its `functionCount`.
+        count: u32,
     },
     /// A consumer's answer to
     /// [`Device::new_compute_pipeline_state`](crate::Device::new_compute_pipeline_state)'s
@@ -1662,9 +1675,9 @@ pub enum KernelInputKind {
         /// The fact's name (`RuntimeFact::name`), such as `"ImageblockSize"`.
         fact: &'static str,
     },
-    /// An argument slot the encoder does not bind: a visible or an intersection function table
-    /// at a buffer index, or a slot of another class or stage. Metal's counterparts are
-    /// `setVisibleFunctionTable:atBufferIndex:` and `setIntersectionFunctionTable:atBufferIndex:`.
+    /// An argument slot the encoder does not bind: an intersection function table at a buffer
+    /// index, or a slot of another class or stage. Metal's counterpart is
+    /// `setIntersectionFunctionTable:atBufferIndex:`.
     Slot,
     /// A pushed parameter the encoder does not fill: a `PushField` or a placement the runtime
     /// does not name, or one of another stage. Metal's counterpart is the dispatch's state the
@@ -2398,6 +2411,9 @@ impl fmt::Display for Refusal {
             }
             Refusal::SamplerArgumentIndex { index } => {
                 write!(f, "sampler index {index} is past the 16 entries")
+            }
+            Refusal::FunctionTableIndex { index, count } => {
+                write!(f, "function table entry {index} is past its {count} entries")
             }
             Refusal::SamplerIds { numbered, given } => write!(
                 f,

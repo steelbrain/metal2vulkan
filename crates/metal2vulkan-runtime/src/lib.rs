@@ -33,6 +33,7 @@ mod fault;
 mod fence;
 mod fill;
 pub mod floor;
+mod function_table;
 mod hazard;
 mod host_bytes;
 mod import;
@@ -88,6 +89,7 @@ pub use export::{Export, ExportHandle};
 pub use extension::{ConsumerFeature, DeviceExtension};
 pub use fault::{DeviceFault, FaultAddress, FaultPlace, FaultRange, RangeFreed, RangeKind};
 pub use fence::Fence;
+pub use function_table::{VisibleFunctionTable, VisibleFunctionTableDescriptor};
 pub use host_bytes::HostBytes;
 pub use import::ImportHandle;
 pub use indirect::{IndirectCommandBuffer, IndirectCommandBufferDescriptor, IndirectCommandType};
@@ -133,6 +135,9 @@ pub use metal2vulkan::pipeline::{
 pub use metal2vulkan::pipeline::{
     ComputePipelineDescriptor, FunctionDescriptor, NumberedSampler, PrecisionNote, StageSource,
 };
+/// `MTLFunctionHandle`, the word a visible-function table's entry holds, and a function of
+/// `MTLLinkedFunctions`, which a compute pipeline state's handle is asked of: the translator's.
+pub use metal2vulkan::pipeline::{FunctionHandle, LinkedFunction};
 pub use pass::{
     ClearColor, LoadAction, MultisampleDepthResolveFilter, MultisampleStencilResolveFilter,
     RenderPassColorAttachmentDescriptor, RenderPassDepthAttachmentDescriptor, RenderPassDescriptor,
