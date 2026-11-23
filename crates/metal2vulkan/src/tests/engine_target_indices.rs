@@ -2,18 +2,18 @@
 //! `engine/rt6_layered` (a vertex function that chooses its slice per instance, and fragment
 //! functions that read it, one with the barycentric weights and the primitive ID),
 //! `engine/rt6_viewports` (a vertex function that selects its viewport per instance, and a
-//! fragment function that reads it), `engine/rt6_first_vertex` (a vertex function whose slice
-//! and viewport differ among the vertices of a primitive) and `engine/rt6_unwritten` (a vertex
+//! fragment function that reads it), `engine/rt6_per_primitive` (a vertex function that reads its
+//! slice and viewport per triangle from a device buffer at `vertex_id / 3`),
+//! `engine/rt6_first_vertex` (one that reads them per vertex) and `engine/rt6_unwritten` (a vertex
 //! function that declares both and writes neither):
 //!
-//! - An index written the same at every vertex of a primitive is stored to `Layer` or
-//!   `ViewportIndex` where the device stores the builtin from a vertex function; without
-//!   `shaderOutputLayer` (`shaderOutputViewportIndex`) it is refused needing that feature alone.
+//! - An index is stored to `Layer` or `ViewportIndex` as the function writes it, where the device
+//!   stores the builtin from a vertex function, whatever its structure shows of it: Metal and
+//!   Vulkan both ask the same value at every vertex of a primitive. Without `shaderOutputLayer`
+//!   (`shaderOutputViewportIndex`) it is refused needing that feature alone.
 //! - Without `multiViewport` a draw has one viewport, so the vertex function stores no viewport
 //!   index at all.
-//! - An index not shown the same at every vertex of a primitive is refused as not implemented on
-//!   every device: Metal leaves its primitive undefined and Vulkan asks every vertex to write the
-//!   same. An index declared and never written, which Metal gives no value, is stored as 0.
+//! - An index declared and never written, which Metal gives no value, is stored as 0.
 //! - A fragment function that reads an index no stage writes, on a device that cannot declare its
 //!   builtin, reads 0 (`StageIo::zero_indices`).
 //!
@@ -32,7 +32,6 @@ use crate::pipeline::descriptor::{
     ColorAttachmentDescriptor, FunctionDescriptor, RenderPipelineDescriptor, StageSource,
 };
 use crate::pipeline::stage_io::{IoRole, StageBuiltin};
-use crate::pipeline::sym::VaryingKey;
 use crate::pipeline::testing::{compile, engine_dir, llvm_assemble, AssembleError};
 use crate::pipeline::RenderPipeline;
 use crate::spirv::testing::check_words_valid;
@@ -216,34 +215,43 @@ fn a_uniform_viewport_takes_the_output_or_goes_nowhere() {
     }
 }
 
-/// A vertex function whose slice and viewport differ among the vertices of a primitive
-/// (`engine/rt6_first_vertex`) writes neither alike, as its structure shows, where one whose slice
-/// is the same at every vertex (`rt6_layered_vertex`) writes it alike; the first is refused as not
-/// implemented on every device, with the outputs, with `geometryShader` and without it.
+/// A vertex function that reads its slice and viewport per triangle from a device buffer
+/// (`engine/rt6_per_primitive`), or per vertex (`engine/rt6_first_vertex`), which its structure
+/// does not show the same at every vertex of a primitive, stores both to `Layer` and
+/// `ViewportIndex` as it writes them, in a pipeline of its vertex and fragment stages alone, on
+/// every device with the outputs, with `geometryShader` and without it; a device without
+/// `shaderOutputLayer` refuses it needing that feature alone.
 #[test]
-fn indices_that_differ_among_a_primitive_s_vertices_are_refused() {
-    let Some(layered_bc) = assemble("rt6_layered.ll") else {
+fn indices_are_stored_as_the_vertex_function_writes_them() {
+    let Some(per_primitive) = assemble("rt6_per_primitive.ll") else {
         return;
     };
-    let Some(bc) = assemble("rt6_first_vertex.ll") else {
+    let Some(first_vertex) = assemble("rt6_first_vertex.ll") else {
         return;
     };
-    let dev = device("lavapipe", &[]);
-    let uniform = |bc: &[u8], entry: &str| {
-        let a = compile(bc, entry, dev.profile()).unwrap_or_else(|e| panic!("{entry}: {e}"));
-        a.interface.io.uniform_outputs.clone()
-    };
-    let alike = uniform(&layered_bc, "rt6_layered_vertex");
-    assert!(
-        alike.contains(&VaryingKey::render_target_array_index()),
-        "{alike:?}"
-    );
-    let d = render(
-        &bc,
-        "rt6_first_vertex",
-        "rt6_first_vertex_read",
-        PixelFormat::R32Uint,
-    );
+    let budget = Budget::standard();
+    let pipelines = [
+        (
+            render(
+                &per_primitive,
+                "rt6_per_primitive",
+                "rt6_per_primitive_read",
+                PixelFormat::R32Uint,
+            ),
+            &per_primitive,
+            &["rt6_per_primitive"][..],
+        ),
+        (
+            render(
+                &first_vertex,
+                "rt6_first_vertex",
+                "rt6_first_vertex_read",
+                PixelFormat::R32Uint,
+            ),
+            &first_vertex,
+            &["rt6_first_vertex", "rt6_first_vertex_point"][..],
+        ),
+    ];
     for (stem, dev) in [
         ("lavapipe", device("lavapipe", &[])),
         ("moltenvk-m3", device("moltenvk-m3", &[])),
@@ -253,28 +261,42 @@ fn indices_that_differ_among_a_primitive_s_vertices_are_refused() {
         ),
         ("runtime-floor", device("runtime-floor", &[])),
     ] {
-        for entry in ["rt6_first_vertex", "rt6_first_vertex_point"] {
-            match compile(&bc, entry, dev.profile()) {
-                Err(Error::Unsupported(u)) => {
-                    assert_eq!(u.feature, Feature::LayeredRendering, "{stem} {entry}");
-                    assert_eq!(u.needs, Needs::NotImplemented, "{stem} {entry}");
+        for (d, bc, entries) in &pipelines {
+            for &entry in *entries {
+                let (_, builtins) = vertex_io(bc, entry, &dev);
+                for b in [StageBuiltin::Layer, StageBuiltin::ViewportIndex] {
+                    assert!(builtins.contains(&b), "{stem} {entry}: {builtins:?}");
                 }
-                other => panic!("{stem} {entry}: {:?}", other.map(|_| ())),
             }
+            let p = (dev.compile_render_pipeline(d, &budget))
+                .unwrap_or_else(|e| panic!("{stem} {entries:?}: {e}"));
+            validate(&p, &dev, stem);
+            let stages: Vec<_> = p.stages.iter().map(|m| m.stage).collect();
+            assert_eq!(
+                stages,
+                [
+                    crate::vk::ShaderStage::VERTEX,
+                    crate::vk::ShaderStage::FRAGMENT
+                ],
+                "{stem} {entries:?}"
+            );
+            assert!(p.graphics.declares_layer, "{stem} {entries:?}");
+            assert!(p.graphics.writes_viewport_index, "{stem} {entries:?}");
         }
-        layered(
-            dev.compile_render_pipeline(&d, &Budget::standard()),
-            Needs::NotImplemented,
-            stem,
-        );
     }
+    let (d, _, _) = &pipelines[0];
+    layered(
+        device("runtime-floor", &[F::ShaderOutputLayer]).compile_render_pipeline(d, &budget),
+        needs(F::ShaderOutputLayer),
+        "runtime-floor without shaderOutputLayer",
+    );
 }
 
 /// A vertex function that declares its slice and viewport and writes neither
 /// (`engine/rt6_unwritten`, both `undef` in its return) stores each as 0, the same at every vertex
-/// of a primitive: both are among its uniform outputs, its stage declares `Layer` and
-/// `ViewportIndex`, and no value it stores to either reads an `OpUndef`, in a pipeline with a
-/// fragment function that reads both, on a full device and on the floor.
+/// of a primitive: its stage declares `Layer` and `ViewportIndex`, and no value it stores to either
+/// reads an `OpUndef`, in a pipeline with a fragment function that reads both, on a full device
+/// and on the floor.
 #[test]
 fn indices_a_vertex_function_never_writes_are_stored_as_zero() {
     let Some(bc) = assemble("rt6_unwritten.ll") else {
@@ -293,16 +315,6 @@ fn indices_a_vertex_function_never_writes_are_stored_as_zero() {
         let a =
             compile(&bc, "rt6_unwritten", dev.profile()).unwrap_or_else(|e| panic!("{stem}: {e}"));
         let io = &a.interface.io;
-        for key in [
-            VaryingKey::render_target_array_index(),
-            VaryingKey::viewport_index(),
-        ] {
-            assert!(
-                io.uniform_outputs.contains(&key),
-                "{stem}: {:?}",
-                io.uniform_outputs
-            );
-        }
         for b in [StageBuiltin::Layer, StageBuiltin::ViewportIndex] {
             assert!(io.builtins.contains(&b), "{stem}: {:?}", io.builtins);
         }
