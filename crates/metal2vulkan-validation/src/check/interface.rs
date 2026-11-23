@@ -1078,6 +1078,35 @@ impl Values {
                 table,
             });
         }
+        // Each program-scope binding (`!air.global_bindings`) binds as a parameter of its role
+        // does: Metal fills its global from the stage's argument table at the node's slot. No
+        // LLVM parameter carries it, so it is numbered after the entry's own and what the code
+        // does through it is not traced; every binding of the module is required.
+        for (k, global) in abi.global_bindings.iter().enumerate() {
+            let param = u32::try_from(param_types.len() + k)
+                .map_err(|_| "too many program-scope bindings".to_string())?;
+            let mut binding = ParamBinding {
+                param,
+                role: global.role.clone(),
+                unused: false,
+                predicate: None,
+                ty: global.ty.clone(),
+                name: global.name.clone(),
+            };
+            if let Err(Missing::NotEvaluated(error) | Missing::Invalid(error)) =
+                self.role(&mut binding.role)
+            {
+                return Err(format!(
+                    "the slot of program-scope binding {k} does not evaluate: {error}"
+                ));
+            }
+            params.push(Param {
+                value: None,
+                binding,
+                live: true,
+                table: false,
+            });
+        }
         let returned = match module.types().get(ret) {
             Some(Type::Struct { fields, .. }) => fields.to_vec(),
             Some(Type::Void) => Vec::new(),
