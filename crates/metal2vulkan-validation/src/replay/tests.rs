@@ -4,7 +4,7 @@
 use super::addresses::AddressMap;
 use super::compare::{compare_plays, shown_differences};
 use super::covers::SlotStage;
-use super::dumps::{compare_dumps, Difference};
+use super::dumps::{compare_dumps, CommandBufferList, Difference};
 use super::new_runtime::indices::Indices;
 use super::new_runtime::places::Waiting;
 use super::new_runtime::second::merge;
@@ -3062,11 +3062,72 @@ fn dumped(
     dir: &std::path::Path,
     build: impl FnOnce(&mut StreamWriter<File>) -> std::io::Result<()>,
 ) -> (Report, Result<(), PlayError>) {
+    dumped_listed(backend, dir, "20..29", build)
+}
+
+/// A play of `build` on `backend` that dumps the command buffers `listed` names, as
+/// `--dump-command-buffers` lists them, into `dir`.
+fn dumped_listed(
+    backend: &mut Kept,
+    dir: &std::path::Path,
+    listed: &str,
+    build: impl FnOnce(&mut StreamWriter<File>) -> std::io::Result<()>,
+) -> (Report, Result<(), PlayError>) {
     let streams = ScratchDir::new("replay-dumped").unwrap();
     let path = written(&streams, "s.m2vr", build);
     let mut reader = StreamReader::open(&[path], None).unwrap();
-    let player = Player::new(backend).dumping(20..=29, dir.to_path_buf());
+    let listed = CommandBufferList::parse(listed).unwrap();
+    let player = Player::new(backend).dumping(listed, dir.to_path_buf());
     player.play(&mut reader)
+}
+
+/// `--dump-command-buffers` lists `FIRST..LAST` ranges and single ids joined by commas, in any
+/// order: the list holds each and nothing between them. An empty item, a range with an end
+/// missing or its first id past its last, or any other text is no list.
+#[test]
+fn a_dump_list_holds_its_ranges_and_ids_and_nothing_between() {
+    let list = CommandBufferList::parse("30,20..22,23,40..40").unwrap();
+    let held: Vec<u64> = (0..50).filter(|&id| list.contains(id)).collect();
+    assert_eq!(held, [20, 21, 22, 23, 30, 40]);
+    for bad in ["", "20,", "20..", "..22", "x", "22..20", "20;22", "-1"] {
+        assert_eq!(CommandBufferList::parse(bad), None, "{bad:?}");
+    }
+}
+
+/// A play dumps the listed command buffers alone: of command buffers 20, 22 and 24, each naming
+/// buffer #3, the list `20,24..24` dumps 20's and 24's and not 22's.
+#[test]
+fn a_play_dumps_the_listed_command_buffers_alone() {
+    let dir = ScratchDir::new("dumps-listed").unwrap();
+    let (_, ended) = dumped_listed(&mut Kept::default(), dir.path(), "20,24..24", |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        let plain = [Value::Uint(16), Value::Uint(0)];
+        w.call("newBufferWithLength:options:", 1, 3, &plain, &[])?;
+        w.call("newCommandQueue", 1, 6, &[], &[])?;
+        for command_buffer in [20, 22, 24] {
+            let encoder = command_buffer + 1;
+            w.call("commandBuffer", 6, command_buffer, &[], &[])?;
+            w.call("computeCommandEncoder", command_buffer, encoder, &[], &[])?;
+            let bound = [Value::Object(3), Value::Uint(0), Value::Uint(0)];
+            w.call("setBuffer:offset:atIndex:", encoder, 0, &bound, &[])?;
+            w.call("endEncoding", encoder, 0, &[], &[])?;
+            w.call("commit", command_buffer, 0, &[], &[])?;
+        }
+        Ok(())
+    });
+    ended.unwrap();
+    let mut names: Vec<String> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    let wanted = [
+        "cb20-obj3.bin",
+        "cb20-obj3.cover",
+        "cb24-obj3.bin",
+        "cb24-obj3.cover",
+    ];
+    assert_eq!(names, wanted);
 }
 
 /// The dump tests' play of `bytes` into buffer #3 (0x2000 bytes at offset 0 of a placement heap,
