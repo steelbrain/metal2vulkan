@@ -1093,7 +1093,7 @@ fn declare_slot(
     }
     let cube = shape.dim == ImageDim::Cube;
     // A cube that is read or written, or whose faces are fetched, and every storage cube, is the
-    // binder's 2D-array view.
+    // binder's 2D-array view, or under the identity domains a storage cube's element.
     let cube_as_array = cube && (storage || s.uses.read || s.uses.write || s.uses.faces);
     if cube && shape.array && !cube_as_array && !images.cube_array {
         return Err(needs(Feature::CubeArray, VkFeature::ImageCubeArray));
@@ -1141,7 +1141,9 @@ fn declare_slot(
             .storage_images
             .get(&s.slot)
             .is_some_and(|c| c.x_channel);
-    if cube_as_array {
+    // Under the identity domains a storage cube's element is already the 2D-array view of its
+    // faces ([`identity_class`]): no binder chooses its view.
+    if cube_as_array && !(storage && crate::lower::access::identity(cx.profile)) {
         facts.push(RuntimeFact::ImageViewShape { slot: s.slot });
     }
     // Under the identity domains the runtime makes no texture buffer past
@@ -1537,11 +1539,15 @@ impl SlotPlan {
 /// element is of that format. A `ulong` slot is an `RG32` unsigned image whose two words the
 /// shader joins and splits, so its class is the unsigned integer one of its shape. A texture
 /// buffer's is a texel buffer's, uniform where the slot reads and storage where it writes, the
-/// element its resource ID holds in the texel-buffer arrays. `None` for a declaration the identity
-/// arrays hold no element of yet: a cube viewed as an array, level views, a texture buffer's parts,
-/// an extended-range or RGBX form, or a storage image with another format or a conversion.
+/// element its resource ID holds in the texel-buffer arrays. A storage cube or cube array is
+/// declared as the 2D array of its faces (layer `6 · cube + face`), which is its storage element:
+/// the runtime holds a cube's storage view as that 2D array. `None` for a declaration the identity
+/// arrays hold no element of yet: a sampled cube viewed as an array, level views, a texture
+/// buffer's parts, an extended-range or RGBX form, or a storage image with another format or a
+/// conversion.
 pub(crate) fn identity_class(decl: &ImageDecl) -> Option<ImageHandleClass> {
-    let plain = !decl.cube_as_array
+    let storage = decl.usage == ImageUsage::Storage;
+    let plain = !(decl.cube_as_array && !storage)
         && decl.level_views.is_none()
         && decl.extended.is_none()
         && !decl.x_channel
@@ -1555,7 +1561,6 @@ pub(crate) fn identity_class(decl: &ImageDecl) -> Option<ImageHandleClass> {
         Dim::Buffer => SymDim::Buffer,
         _ => return None,
     };
-    let storage = decl.usage == ImageUsage::Storage;
     let format = match (storage, decl.format) {
         (false, _) => StorageFormatClass::NotStorage,
         (true, crate::spv::ImageFormat::Unknown) => StorageFormatClass::Unknown,

@@ -1357,10 +1357,12 @@ made, with no lock, and never rewritten for layouts.
   descriptor's swizzle composed over it; a depth or stencil format's view takes its depth, else
   its stencil. The storage element is written where the usage has shader write and the device
   stores the format through a storage image declared without a format; its view maps each
-  channel to itself. A multisampled texture has no storage element on any device, as Metal's
-  shaders only read one (the Metal Shading Language: "Multisampled textures only support the
-  read attribute"). Its image takes no storage usage, so its sample counts are the device's for
-  its other usages, whether or not the device has `shaderStorageImageMultisample`.
+  channel to itself. A cube's or a cube array's storage view is the 2D array of its faces,
+  layer `6 · cube + face`, which a kernel's storage cube writes and reads by face. A multisampled
+  texture has no storage element on any device, as Metal's shaders only read one (the Metal
+  Shading Language: "Multisampled textures only support the read attribute"). Its image takes no
+  storage usage, so its sample counts are the device's for its other usages, whether or not the
+  device has `shaderStorageImageMultisample`.
 - A format is made where the translator's format table maps it for the usage on the device
   (`vk_format`) to the format itself or to one whose view gives Metal's values (a swizzled or
   rotated view, alpha held in red, an RGBX format, a depth or stencil aspect of a combined
@@ -3307,13 +3309,22 @@ cache is answered compile-required on both.
     `SlotBindOffset`; a texture's level count, `TextureLevels`; the draw's `InstanceCount` or
     `BaseVertexInstance`; a stage-in stride, `StageInStride`; and the others the translator
     pushes beside the identity fields): no test yet;
+  - among those, a storage texture written or read at a level other than the constant 0 (MSL
+    `write(color, coord, lod)` at a level the kernel computes or reads), whose slot the
+    translator declares as one storage element per level, which the identity arrays do not hold
+    ("an encoder value the function reads as TextureLevels(S)"). Metal writes such a level on
+    Intel Macs as well as on Apple silicon: an owned kernel's writes at levels 1 and 2, read
+    from a buffer, landed exactly on a Radeon Pro 5300M and on a UHD 630 under macOS 26.7.1, with
+    Metal's validation off, with its API validation, and with its shader validation. No test yet;
   - a buffer argument not reached through its device address ("a buffer argument not reached
     through its device address"): no test yet;
   - a texture argument of a type the identity arrays hold no element of, or whose bound texture's
     state beyond its resource ID the function reads ("texture argument S: a type the identity
     arrays hold no element of, or state of the bound texture beyond its resource ID"), a cube
-    read by face among them: the golden table (`tests/golden_hashes.tsv`) holds the refusal's
-    class for `engine/texture_ops`' `cube_faces`, and no test asserts the text yet;
+    read by face through `access::read` or `access::sample` among them: the golden table
+    (`tests/golden_hashes.tsv`) holds the refusal's class for `engine/texture_ops`' `cube_faces`,
+    and no test asserts the text yet. A storage cube written or read by face is lowered: the
+    translator test `a_storage_cube_written_by_face_is_the_2d_array_element_of_its_faces`;
   - a texture argument sampled through a sampler the identity sampling does not take ("a texture
     argument sampled through a sampler the identity sampling does not take"), and a sampler
     argument whose minimum level or emulated filter the function specializes ("a sampler argument

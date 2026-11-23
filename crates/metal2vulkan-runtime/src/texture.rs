@@ -2782,6 +2782,18 @@ pub(crate) fn components(
     })
 }
 
+/// The view type of the storage element of a texture viewed as `view_type`: a cube's or a cube
+/// array's is the 2D array of its faces, layer `6 · cube + face`, the image the translator's
+/// identity domains declare a storage cube as and read and write by face; any other texture's is
+/// its own. Vulkan views every layer of a cube-compatible image as a 2D array, so this is one
+/// form on every device.
+fn storage_view_type(view_type: vk::ImageViewType) -> vk::ImageViewType {
+    match view_type {
+        vk::ImageViewType::CUBE | vk::ImageViewType::CUBE_ARRAY => vk::ImageViewType::TYPE_2D_ARRAY,
+        other => other,
+    }
+}
+
 /// An image view of `range` of `image`, of `view_type` and `format`, with `components`, and with
 /// `usage` where its format is another than the image's (`VkImageViewUsageCreateInfo`: the image's
 /// usage that the format's features hold), else the image's. Timed in
@@ -3194,8 +3206,8 @@ impl Made {
         plan: &Plan,
         usage: vk::ImageUsageFlags,
     ) -> Result<(Option<vk::ImageView>, Option<vk::ImageView>), Error> {
-        let mut view = |components, aspect| {
-            let (view_type, format) = (shape.view_type, plan.format);
+        let mut view = |view_type, components, aspect| {
+            let format = plan.format;
             // SAFETY: the caller's contract.
             let range = whole(aspect);
             let view =
@@ -3205,12 +3217,13 @@ impl Made {
         };
         let sampled = match plan.sampled {
             Some((components, aspect)) if usage.contains(vk::ImageUsageFlags::SAMPLED) => {
-                Some(view(components, aspect)?)
+                Some(view(shape.view_type, components, aspect)?)
             }
             _ => None,
         };
         let storage = match plan.storage {
             true => Some(view(
+                storage_view_type(shape.view_type),
                 vk::ComponentMapping::default(),
                 vk::ImageAspectFlags::COLOR,
             )?),
@@ -3974,7 +3987,11 @@ impl Texture {
         };
         let image = inner.imaged().image;
         let make = |(components, aspect, role): (_, _, vk::ImageUsageFlags)| {
-            let (view_type, format) = (shape.view_type, plan.format);
+            let view_type = match role == vk::ImageUsageFlags::STORAGE {
+                true => storage_view_type(shape.view_type),
+                false => shape.view_type,
+            };
+            let format = plan.format;
             let usage = views_usage.map(|usage| usage & role);
             // SAFETY: the image is bound, lists the view's format, has the view's usage, and holds
             // the range: the texture's levels and layers hold the view's.

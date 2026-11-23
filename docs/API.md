@@ -188,7 +188,10 @@ and so do the command line, the compile worker and every validation tool. It hol
   the capped `maxComputeWorkGroupInvocations` on every axis. A texture slot's `gpuResourceID` is pushed as
   its `PushField::SlotGuestBase`, and its texture is the element at the ID's index of set 1's two
   fixed arrays, the same layout for every pipeline ([RESOURCE-ID.md](RESOURCE-ID.md)); it binds no
-  descriptor of its own and declares no specialization constant. An argument buffer's texture is
+  descriptor of its own and declares no specialization constant. A storage cube or cube array slot
+  is declared as the 2D array of its faces and written and read by face at layer
+  `6 · cube + face`, so the storage element a consumer holds for a cube texture is that 2D-array
+  view of its layers. An argument buffer's texture is
   the element at the index of the `gpuResourceID` its member holds, with no handle table, so a
   slot and a member of one class index one array. No variant is chosen there: a
   texture reads through the plain form whatever texture its ID names, its `float` or `half` reads
