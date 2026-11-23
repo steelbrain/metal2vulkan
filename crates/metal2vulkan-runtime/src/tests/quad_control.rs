@@ -17,6 +17,11 @@
 //! reduction after the loop. Every device of the cfg's kind with quad control makes it and draws
 //! each pixel's sums.
 //!
+//! `quad_votes` writes its quad's `quad_any` of "the pixel is right of the diagonal" and
+//! `quad_all` of "the pixel is on or left of it", drawn by `fragment_quad_bitwise`'s triangle: in a
+//! diagonal quad only the helper is right of the diagonal, so `quad_any` holds and `quad_all` does
+//! not there, and the other way round in a quad the triangle covers whole.
+//!
 //! `llvm-as` assembles the functions; without it the test skips visibly.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
@@ -28,8 +33,9 @@ mod on_device {
     };
     use crate::tests::spirv_instructions;
     use crate::{
-        Error, FunctionDescriptor, IndexClass, Library, NumberedSampler, PixelFormat,
-        PrimitiveType, Region, StageSource, TextureDescriptor, TextureType, TextureUsage,
+        Device, Error, FunctionDescriptor, IndexClass, Library, NumberedSampler, PixelFormat,
+        PrimitiveType, Region, RenderPipelineState, StageSource, TextureDescriptor, TextureType,
+        TextureUsage,
     };
     use metal2vulkan::device::VkFeature;
     use metal2vulkan::error::Feature;
@@ -107,9 +113,73 @@ declare float @air.quad_sum.f32(float)
 !7 = !{!"air.sampler_state", ptr addrspace(2) @__air_sampler_state}
 "#;
 
+    /// `quad_votes`: pixel `(x, y)` returns `(quad_any(x > y), quad_all(x <= y), 0, 1)`.
+    const QUAD_VOTES: &str = r#"target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
+target triple = "air64_v28-apple-macosx26.0.0"
+
+define <4 x i32> @quad_votes(<4 x float> %pos) {
+entry:
+  %xy = shufflevector <4 x float> %pos, <4 x float> poison, <2 x i32> <i32 0, i32 1>
+  %p = call <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float> %xy)
+  %x = extractelement <2 x i32> %p, i64 0
+  %y = extractelement <2 x i32> %p, i64 1
+  %right = icmp ugt i32 %x, %y
+  %left = icmp ule i32 %x, %y
+  %any = call i1 @air.quad_any(i1 %right)
+  %all = call i1 @air.quad_all(i1 %left)
+  %a = zext i1 %any to i32
+  %b = zext i1 %all to i32
+  %o0 = insertelement <4 x i32> <i32 0, i32 0, i32 0, i32 1>, i32 %a, i64 0
+  %o = insertelement <4 x i32> %o0, i32 %b, i64 1
+  ret <4 x i32> %o
+}
+
+declare <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float>)
+declare i1 @air.quad_any(i1)
+declare i1 @air.quad_all(i1)
+
+!air.fragment = !{!0}
+!0 = !{ptr @quad_votes, !1, !3}
+!1 = !{!2}
+!2 = !{!"air.render_target", i32 0, i32 0, !"air.arg_type_name", !"uint4"}
+!3 = !{!4}
+!4 = !{i32 0, !"air.position", !"air.center", !"air.no_perspective", !"air.arg_type_name", !"float4", !"air.arg_name", !"pos"}
+"#;
+
     /// The word `fragment_quad_bitwise` takes of pixel `[x, y]`.
     fn word([x, y]: [u32; 2]) -> u32 {
         (x * 7 + y * 13) ^ 0x5a
+    }
+
+    /// Draw `state` into an `RGBA32Uint` target by a triangle that covers the pixels `[x, y]` with
+    /// `x <= y`, and read the target back: the edge `x + y = 0.125` (clip space, y up) passes no
+    /// pixel centre and cuts each diagonal quad at its top right pixel, which runs as a helper.
+    fn diagonal(name: &str, device: &Device, state: &RenderPipelineState) -> Vec<u8> {
+        let mut buffers = Buffers::new(device);
+        let positions = buffers.of(device, &floats(&[-1.0, -1.0, 1.125, -1.0, -1.0, 1.125]));
+        let colors = buffers.of(device, &floats(&[0.0; 12]));
+        let color = target(device, PixelFormat::RGBA32Uint, TextureUsage::RENDER_TARGET);
+        let queue = device.new_command_queue(4).expect("a queue");
+        let command_buffer = queue.command_buffer().expect("a command buffer");
+        let ok =
+            |result: Result<(), Error>| result.unwrap_or_else(|error| panic!("{name}: {error}"));
+        let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        ok(encoder.set_render_pipeline_state(state));
+        ok(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+        ok(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+        ok(encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0));
+        encoder.end_encoding();
+        run(name, &command_buffer);
+        read(&color, 16)
+    }
+
+    /// The first `n` words of pixel `[x, y]` of a target `diagonal` read.
+    fn words(texels: &[u8], [x, y]: [u32; 2], n: usize) -> Vec<u32> {
+        let at = ((y * SIDE + x) * 16) as usize;
+        (texels[at..at + 4 * n].as_chunks::<4>().0.iter())
+            .map(|w| u32::from_le_bytes(*w))
+            .collect()
     }
 
     /// Where Vulkan offers `shaderQuadControl`, a fragment function's quad operations read their
@@ -153,30 +223,7 @@ declare float @air.quad_sum.f32(float)
                     Err(error) => panic!("{name}: {error}"),
                 };
             assert!(on, "{name}: a state made without quad control");
-            let mut buffers = Buffers::new(&device);
-            // Pixel centres with x <= y are inside: the edge x + y = 0.125 (clip space, y up)
-            // passes no centre, and cuts each diagonal quad at its top right pixel.
-            let positions = buffers.of(&device, &floats(&[-1.0, -1.0, 1.125, -1.0, -1.0, 1.125]));
-            let colors = buffers.of(&device, &floats(&[0.0; 12]));
-            let color = target(
-                &device,
-                PixelFormat::RGBA32Uint,
-                TextureUsage::RENDER_TARGET,
-            );
-            let queue = device.new_command_queue(4).expect("a queue");
-            let command_buffer = queue.command_buffer().expect("a command buffer");
-            let ok = |result: Result<(), Error>| {
-                result.unwrap_or_else(|error| panic!("{name}: {error}"))
-            };
-            let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
-            ok(encoder.set_render_pipeline_state(&state));
-            ok(encoder.set_vertex_buffer(Some(&positions), 0, 0));
-            ok(encoder.set_vertex_buffer(Some(&colors), 0, 1));
-            ok(encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0));
-            encoder.end_encoding();
-            run(name, &command_buffer);
-            let texels = read(&color, 16);
+            let texels = diagonal(name, &device, &state);
             let mut drawn = 0;
             for y in 0..SIDE {
                 for x in (0..SIDE).filter(|&x| x <= y) {
@@ -187,17 +234,67 @@ declare float @air.quad_sum.f32(float)
                         quad.iter().fold(0, |any, w| any | w),
                         quad.iter().fold(0, |odd, w| odd ^ w),
                     ];
-                    let at = ((y * SIDE + x) * 16) as usize;
-                    let got: Vec<u32> = (texels[at..at + 12].as_chunks::<4>().0.iter())
-                        .map(|w| u32::from_le_bytes(*w))
-                        .collect();
-                    assert_eq!(got, want, "{name}: pixel [{x}, {y}]");
+                    assert_eq!(words(&texels, [x, y], 3), want, "{name}: pixel [{x}, {y}]");
                     drawn += 1;
                 }
             }
             println!(
                 "quad_control: {name}: shaderQuadControl enabled; {drawn} pixels read their \
                  quads whole, helpers included"
+            );
+        });
+    }
+
+    /// `quad_votes`' state is made on every device with quad control, and each pixel the
+    /// triangle covers reads its quad's votes with the helper's predicate counted: a diagonal
+    /// quad's `quad_any(x > y)` holds and its `quad_all(x <= y)` does not, as Metal answers.
+    #[test]
+    fn every_device_votes_over_its_quads_helpers() {
+        let fragment = match llvm_assemble_text(QUAD_VOTES) {
+            Ok(bitcode) => Library::from_air(&bitcode).expect("the library"),
+            Err(AssembleError::Missing(why)) => {
+                eprintln!("SKIPPED: {why}");
+                return;
+            }
+            Err(error) => panic!("quad_votes: {error:?}"),
+        };
+        let Some(examples) = examples() else {
+            return;
+        };
+        let mut d = descriptor(&examples, "colored_fragment", PixelFormat::RGBA32Uint);
+        d.fragment = Some(StageSource::Function(FunctionDescriptor::new(
+            fragment.function("quad_votes").expect("the function"),
+        )));
+        each_device("quad_votes", |name, _, device| {
+            if !(device.core().translator.profile().enabled().features)
+                .contains(&VkFeature::ShaderQuadControl)
+            {
+                println!("quad_votes: {name}: no quad control; not made");
+                return;
+            }
+            let state = (device.new_render_pipeline_state(&d, crate::tests::no_constexpr_samplers))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let texels = diagonal(name, &device, &state);
+            let mut drawn = 0;
+            let mut wrong = Vec::new();
+            for y in 0..SIDE {
+                for x in (0..SIDE).filter(|&x| x <= y) {
+                    let helper = x >> 1 == y >> 1;
+                    let want = vec![u32::from(helper), u32::from(!helper), 0, 1];
+                    let got = words(&texels, [x, y], 4);
+                    if got != want {
+                        wrong.push(([x, y], got, want));
+                    }
+                    drawn += 1;
+                }
+            }
+            assert!(
+                wrong.is_empty(),
+                "{name}: {} of {drawn} pixels differ ([x, y], got, want): {wrong:?}",
+                wrong.len()
+            );
+            println!(
+                "quad_votes: {name}: {drawn} pixels read their quads' votes, helpers included"
             );
         });
     }
