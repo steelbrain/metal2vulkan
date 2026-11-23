@@ -1,0 +1,427 @@
+{
+  "format": 1,
+  "case": "compute-imageblock-sizes",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "a4_imageblock_extent.ll",
+      "entry": "a4_imageblock_extent",
+      "source_sha256": "3fcc4207683f034a6804df88e121bfbe1db99610b2301b1042f9e3b3a631c1a2"
+    },
+    {
+      "fixture": "a4_imageblock_extent.air.ll",
+      "entry": "a4_imageblock_extent",
+      "source_sha256": "155c77190cf60e4b001104fbe169e8dd1c74fd800cb7806ece9da9d086e30f1f"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "air",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "3fcc4207683f034a6804df88e121bfbe1db99610b2301b1042f9e3b3a631c1a2"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "155c77190cf60e4b001104fbe169e8dd1c74fd800cb7806ece9da9d086e30f1f"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:out",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c6c61d9f1b772be25b9a2502d7962c5f904f1d991308174f7dec8f53bf6cae7f"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "005fc5c2ab35a1d0087d0cdafe1ee8f34375ef3b2008941a492cb60fe7ac4f3a"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pass",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "outcome",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "dispatch_type",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Serial",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "status",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "error",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "None",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "step/0/setComputePipelineState",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "step/1/setBuffer",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "step/2/dispatchThreadgroups",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "step/3/setImageblockWidth",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "step/4/setBuffer",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "step/5/dispatchThreadgroups",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "step/6/setImageblockWidth",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "step/7/setBuffer",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "step/8/dispatchThreadgroups",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "read-back/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "out",
+                  "observed": {
+                    "value": {
+                      "bytes": "AAAAAAAAAAABAAAAAQAAAH5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fgAAgD8BAAAABAAAAAIAAAAAAABAAgAAAAQAAAACAAAAAABAQAMAAAAEAAAAAgAAAAAAAAAAAAAABAAAAAIAAAAAAMpCAQABAAQAAAACAAAAAADMQgIAAQAEAAAAAgAAAAAAzkIDAAEABAAAAAIAAAAAAMhCAAABAAQAAAACAAAAfn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn4AAIA/AQAAAAQAAAAEAAAAAAAAQAIAAAAEAAAABAAAAAAAQEADAAAABAAAAAQAAAAAAAAAAAAAAAQAAAAEAAAAAADKQgEAAQAEAAAABAAAAAAAzEICAAEABAAAAAQAAAAAAM5CAwABAAQAAAAEAAAAAADIQgAAAQAEAAAABAAAAAAASUMBAAIABAAAAAQAAAAAAEpDAgACAAQAAAAEAAAAAABLQwMAAgAEAAAABAAAAAAASEMAAAIABAAAAAQAAAAAgJZDAQADAAQAAAAEAAAAAACXQwIAAwAEAAAABAAAAACAl0MDAAMABAAAAAQAAAAAAJZDAAADAAQAAAAEAAAAfn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fg=="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 832
+                          }
+                        },
+                        "element": "u32",
+                        "row_offset": 0,
+                        "row_elements": 4,
+                        "row_pitch": 16,
+                        "rows": 52,
+                        "image_pitch": 832,
+                        "images": 1,
+                        "gaps": "compared"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": "ran"
+    }
+  ],
+  "times": [
+    {
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 29.42",
+      "instrument": 286,
+      "times": {
+        "case": "compute-imageblock-sizes",
+        "calls": 5,
+        "in_calls": 32107376,
+        "on_cpu": 1053959,
+        "blocked": 29892876,
+        "elsewhere": 3808917,
+        "spend": 35944874,
+        "spend_least": 33759541,
+        "spend_most": 37251918,
+        "per_call": [
+          {
+            "call": "buffer",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 34459,
+            "on_cpu": 34667,
+            "blocked": 0,
+            "wall_least": 30500,
+            "wall_most": 43500,
+            "wall_total": 34459,
+            "on_cpu_total": 34667,
+            "blocked_total": 0
+          },
+          {
+            "call": "compute_pass",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 4527834,
+            "on_cpu": 204542,
+            "blocked": 4301000,
+            "wall_least": 4252333,
+            "wall_most": 4832667,
+            "wall_total": 4527834,
+            "on_cpu_total": 204542,
+            "blocked_total": 4301000
+          },
+          {
+            "call": "compute_pipeline",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 117250,
+            "on_cpu": 117541,
+            "blocked": 0,
+            "wall_least": 105875,
+            "wall_most": 1088250,
+            "wall_total": 117250,
+            "on_cpu_total": 117541,
+            "blocked_total": 0
+          },
+          {
+            "call": "library",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 26338959,
+            "on_cpu": 685792,
+            "blocked": 25591876,
+            "wall_least": 25798166,
+            "wall_most": 28727459,
+            "wall_total": 26338959,
+            "on_cpu_total": 685792,
+            "blocked_total": 25591876
+          },
+          {
+            "call": "read_buffer",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 6625,
+            "on_cpu": 6791,
+            "blocked": 0,
+            "wall_least": 5417,
+            "wall_most": 8792,
+            "wall_total": 6625,
+            "on_cpu_total": 6791,
+            "blocked_total": 0
+          }
+        ]
+      }
+    }
+  ]
+}
