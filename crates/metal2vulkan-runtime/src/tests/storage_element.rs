@@ -558,7 +558,9 @@ declare void @air.write_texture_2d.v4f32(ptr addrspace(1), <2 x i32>, <4 x float
     /// in the image's tiling (and, linear, where the view format's linear tiling holds what storage
     /// keeps of its optimal tiling). With it, the dispatch writes the view's unorm codes, which the
     /// texture's bytes hold and its own read decodes; without it, the dispatch is
-    /// `Gap::StorageElement`, `StorageElementCase::Unextended`. The write that ran, and no other
+    /// `Gap::StorageElement`, `StorageElementCase::Unextended`. Where the device stores the
+    /// texture's own format, its image takes the storage usage for that format, unextended, and
+    /// the write runs through it. The write that ran through the extended usage, and no other
     /// dispatch, adds one to `Metrics::extended_view_dispatches`. Prints the query's answer for the
     /// extended image, optimal and linear.
     #[test]
@@ -653,7 +655,7 @@ declare void @air.write_texture_2d.v4f32(ptr addrspace(1), <2 x i32>, <4 x float
                 let added = counted() - before;
                 assert_eq!(
                     added,
-                    u64::from(written.is_ok()),
+                    u64::from(written.is_ok() && !own),
                     "{name}: {kind}: the count"
                 );
                 match (extended, written) {
@@ -686,7 +688,11 @@ declare void @air.write_texture_2d.v4f32(ptr addrspace(1), <2 x i32>, <4 x float
                 let out = arena.buffer();
                 (dispatch(&device, &read, &texture, &out))
                     .unwrap_or_else(|error| panic!("{name}: {kind}: the read: {error}"));
-                assert_eq!(counted(), before + 1, "{name}: {kind}: the read's count");
+                assert_eq!(
+                    counted(),
+                    before + added,
+                    "{name}: {kind}: the read's count"
+                );
                 let got = out.contents().expect("a Shared buffer");
                 // SAFETY: the buffer is alive, Shared and 256 bytes long; its work completed.
                 let got = unsafe { got.cast::<[f32; 4]>().as_ptr().read() };
