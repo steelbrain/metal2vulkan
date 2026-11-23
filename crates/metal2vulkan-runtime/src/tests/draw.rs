@@ -72,6 +72,10 @@
 //!     retires, and its bytes stay as they were; `Disabled` at any offset records nothing, and the
 //!     pass takes the submission, barrier and pass one without the buffer takes (`Boolean` and
 //!     `Counting` are `tests::visibility`'s).
+//!   - an indexed draw's index buffer and an indexed indirect draw's, each the one holder of its
+//!     Shared block, dropped once encoded and before the commit, are kept with their blocks until
+//!     the command buffer retires: the draws read their own indices, not those of blocks taken
+//!     after the drops, and neither block is back in the pool before the retirement.
 //!
 //! `llvm-as` assembles the fixtures; without it a device test skips visibly.
 
@@ -3357,6 +3361,93 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
             );
             assert_eq!(read(&color, 4), texels(|_, _| BLUE), "{name}: the texels");
             println!("{name}: the visibility result buffer kept and its bytes as they were");
+        });
+    }
+
+    /// An indexed draw's index buffer and an indexed indirect draw's, each the one holder of a
+    /// Shared block of its own, both dropped once encoded and before the commit: the command
+    /// buffer keeps each, and so its block, until it retires, as Metal's command buffer retains
+    /// what its draws use. Blocks of the same length taken after the drops land elsewhere, and
+    /// their indices, which would draw the top half green, are never read: the target is blue in
+    /// its left half, the direct draw's, and white in its right, the indirect one's. Neither
+    /// block is back in the pool before the command buffer retires, and both are once it has.
+    #[test]
+    fn every_device_keeps_index_buffers_dropped_before_the_commit_until_their_draws_retire() {
+        let Some(library) = examples() else {
+            return;
+        };
+        let d = descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
+        each_device("index_buffers_kept", |name, _, device| {
+            let state = state(name, &device, &d);
+            let mut buffers = Buffers::new(&device);
+            let (positions, colors) = vertices(&device, &mut buffers);
+            // Index count 3, one instance, index start 0, base vertex 0, base instance 0.
+            let words = [3u32, 1, 0, 0, 0];
+            let arguments = buffers.of(&device, &words.map(u32::to_le_bytes).concat());
+            // Four 16-bit indices in a Shared block of their own, the buffer its one holder.
+            let indices = |vertices: [u16; 4]| {
+                let block = (device.take_block(MemoryClass::Shared, 8)).expect("a Shared block");
+                let buffer = (device.new_buffer(block.id, 0, 8, None)).expect("a buffer");
+                let bytes = vertices.map(u16::to_le_bytes).concat();
+                let contents = buffer.contents().expect("a Shared buffer");
+                // SAFETY: the 8 bytes lie in the buffer, which is alive, and no GPU work uses it.
+                unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), contents.as_ptr(), 8) };
+                (buffer, block.id)
+            };
+            let (blue, white) = (indices([3, 4, 5, 0]), indices([6, 7, 8, 0]));
+            let color = target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            let indexed = |buffer| IndexBuffer {
+                buffer,
+                offset: 0,
+                index_type: IndexType::UInt16,
+            };
+            let half = |x| ScissorRect {
+                x,
+                y: 0,
+                width: u64::from(SIDE / 2),
+                height: u64::from(SIDE),
+            };
+            let triangle = PrimitiveType::Triangle;
+            draw(encoder.set_render_pipeline_state(&state));
+            draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+            draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+            encoder.set_scissor_rect(half(0));
+            draw(encoder.draw_indexed_primitives(triangle, 3, indexed(&blue.0), 1, 0, 0));
+            encoder.set_scissor_rect(half(u64::from(SIDE / 2)));
+            draw(encoder.draw_indexed_primitives_indirect(
+                triangle,
+                indexed(&white.0),
+                &arguments,
+                0,
+            ));
+            encoder.end_encoding();
+            let ids = [blue.1, white.1];
+            drop((blue, white));
+            let pool = &device.core().pool;
+            let early = ids.map(|id| pool.holds(id));
+            let decoys = [[0, 1, 2, 0]; 2].map(indices);
+            run(name, &command_buffer);
+            let want = texels(|x, _| if x < SIDE / 2 { BLUE } else { WHITE });
+            assert_eq!(read(&color, 4), want, "{name}: the texels");
+            assert_eq!(
+                early, [false; 2],
+                "{name}: the index buffers' blocks back in the pool before their command buffer \
+                 retired"
+            );
+            for id in ids {
+                within("an index buffer's block's return", || pool.holds(id));
+            }
+            drop(decoys);
+            println!("{name}: both index buffers kept to the retirement, their own indices drawn");
         });
     }
     /// Four samples: a white triangle over the lower-left half of a `SIDE` square

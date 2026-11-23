@@ -2471,8 +2471,10 @@ impl RenderCommandEncoder {
         if self.facts.host {
             building.wrote_host();
         }
-        if let Some(arguments) = arguments {
-            building.keep(arguments);
+        // The command buffer keeps the index buffer and the arguments' buffer until it retires, as
+        // it keeps a buffer bound to a slot: the GPU reads them as the draw runs.
+        for buffer in [index_buffer, arguments].into_iter().flatten() {
+            building.keep(buffer);
         }
         self.wrote |= writes_memory;
         (self.drew, self.pass_drew) = (true, true);
