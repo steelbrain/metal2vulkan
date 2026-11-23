@@ -4402,6 +4402,19 @@ cache is answered compile-required on both.
   section 10. RADV on the same cards draws Metal's pixels (jobs m3-max-70513 and m3-max-70514).
   The driver's source was not read; it is a driver bug, and the pixels stay undrawn on that
   driver.
+- AMD's open Linux driver (AMDVLK 2025.Q2.1) on the RX 7900 XTX and the Radeon 780M resolves a
+  colour attachment at a slice above 0 of a multisample array texture into the right slice of the
+  resolve texture, but from the samples of the array's slice 0: in the conformance case
+  `layered-resolve-places`, which renders slice 1 and resolves it into slice 1, all 64 texels of
+  that slice read 0 where Metal holds the drawn and cleared values (job m3-max-70391 on the RX 7900
+  XTX), and the resolve texture's other slices keep their values. RADV on the same cards resolves
+  it exactly. The runtime resolves a 2D view of the attachment's slice into a 2D view of the resolve
+  slice, and Vulkan's resolve combines the samples of the attachment's own view ("Render Pass
+  Multisample Resolve Operations"); a standalone Vulkan program with no runtime code gives the same
+  slice-0 samples under that driver on the RX 7900 XTX and exact slices under RADV (job
+  m3-max-70937). No Vulkan query reaches it and the runtime has no other form: it is a driver bug,
+  and the slice stays wrong on that driver. No replay stream resolves at all: 0 resolve attachments
+  in the 26 streams (jobs m3-max-70810 to m3-max-70812).
 - Visibility results (`set_visibility_result_mode`, Metal's `setVisibilityResultMode:offset:`):
   each `Boolean` or `Counting` mode set counts the samples its later draws pass, up to the next
   mode set or the encoder's end, in one precise occlusion query (`occlusionQueryPrecise`, the
