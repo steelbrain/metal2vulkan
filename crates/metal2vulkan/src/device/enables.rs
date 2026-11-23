@@ -776,8 +776,13 @@ impl Device {
 }
 
 /// `Device::from_queries`'s check of the description invariants: every listed feature is exposed by
-/// the description's version or listed extensions, and every listed feature's [`FEATURE_NEEDS`]
-/// companion is listed.
+/// the description's version or listed extensions, every listed feature's [`FEATURE_NEEDS`]
+/// companion is listed, and `shaderQuadControl` is listed only with `shaderMaximalReconvergence`.
+/// `VK_KHR_shader_quad_control` requires `VK_KHR_shader_maximal_reconvergence`, and a device that
+/// supports that extension supports its feature (Vulkan's "Feature Requirements"), so no device
+/// offers the one without the other; a fragment function that runs its quads whole declares
+/// `MaximallyReconvergesKHR` beside `RequireFullQuadsKHR`, as its group operations other than the
+/// quad ones reach the helpers only under that mode (`lower::simd`'s module, **Helpers**).
 pub(crate) fn check_invariants(desc: &DeviceDescription) -> Result<(), Error> {
     for &f in &desc.features {
         let x = f.exposure();
@@ -793,6 +798,13 @@ pub(crate) fn check_invariants(desc: &DeviceDescription) -> Result<(), Error> {
         .find(|(f, needs, _)| desc.has(*f) && !desc.has(*needs))
     {
         return Err(invalid(format!("lists {f:?} without {needs:?} ({vuid})")));
+    }
+    if desc.has(VkFeature::ShaderQuadControl) && !desc.has(VkFeature::ShaderMaximalReconvergence) {
+        return Err(invalid(
+            "lists ShaderQuadControl without ShaderMaximalReconvergence (VK_KHR_shader_quad_control \
+             requires VK_KHR_shader_maximal_reconvergence, whose feature its every device supports)"
+                .to_owned(),
+        ));
     }
     Ok(())
 }

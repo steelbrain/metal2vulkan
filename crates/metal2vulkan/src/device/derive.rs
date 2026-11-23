@@ -59,9 +59,10 @@ impl Device {
     /// `maxPushConstantsSize` is below 128 bytes, Vulkan's least, the least push window a stage is
     /// lowered for (`Unsupported{PushWindow}`, a `Limit` of `MaxPushConstantsSize`; the window is
     /// the limit up to 256 bytes, [`DeviceProfile::push_window`]), a description that lists
-    /// a feature neither its version nor its listed extensions expose or a feature without the
-    /// feature Vulkan requires enabled with it (`InvalidDescriptor`, the invariants
-    /// `device::enables` states), a policy that turns containment off while guest isolation
+    /// a feature neither its version nor its listed extensions expose, a feature without the
+    /// feature Vulkan requires enabled with it, or `shaderQuadControl` without
+    /// `shaderMaximalReconvergence`, which every device with the one supports (`InvalidDescriptor`,
+    /// the invariants `device::enables` states), a policy that turns containment off while guest isolation
     /// is on (`InvalidDescriptor`), a policy that takes one identity domain without the other
     /// (`InvalidDescriptor`), and the identity domains on a device without `bufferDeviceAddress`
     /// and `shaderInt64` (`Unsupported{IdentityDomains}`).

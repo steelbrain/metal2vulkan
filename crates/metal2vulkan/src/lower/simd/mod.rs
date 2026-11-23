@@ -100,7 +100,9 @@
 //! (a fill reads a helper's value, a quad sum folds it in). Vulkan runs its quad instructions over
 //! a quad's helpers in every entry, and its other group operations over them only where the entry
 //! declares `MaximallyReconvergesKHR` (section 9.31, "Helper Invocations"), as every such entry
-//! does where the profile has maximal reconvergence (**Reconvergence**, below). A quad reduction
+//! does (**Reconvergence**, below): a profile with `shaderQuadControl` has maximal reconvergence,
+//! which every device with the one supports (`Device::from_queries` refuses a description listing
+//! the one without the other). A quad reduction
 //! there reads its quad through quad instructions alone. A profile without `shaderQuadControl`
 //! refuses such a function.
 //!

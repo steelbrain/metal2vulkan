@@ -338,6 +338,41 @@ fn device_new_refuses_a_feature_without_its_companion() {
     }
 }
 
+/// `Device::from_queries` refuses a description listing `shaderQuadControl` without
+/// `shaderMaximalReconvergence`, which every device with `VK_KHR_shader_quad_control` supports, and
+/// makes it with both; every committed profile that lists quad control lists both.
+#[test]
+fn device_new_refuses_quad_control_without_maximal_reconvergence() {
+    let mut quads = 0;
+    for (stem, text) in committed_profiles() {
+        let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();
+        if desc.has(VkFeature::ShaderQuadControl) {
+            assert!(desc.has(VkFeature::ShaderMaximalReconvergence), "{stem}");
+            quads += 1;
+        }
+    }
+    assert!(quads > 0, "no committed profile lists quad control");
+    let mut d = floor_with(
+        &[
+            VkExtension::KhrShaderMaximalReconvergence,
+            VkExtension::KhrShaderQuadControl,
+        ],
+        &[VkFeature::ShaderQuadControl],
+    );
+    let e = match Device::from_queries(d.clone(), DevicePolicy::RESIDENT_TABLES) {
+        Err(Error::InvalidDescriptor(DescriptorError::DeviceDescription { detail })) => detail,
+        other => panic!("{other:?}"),
+    };
+    assert!(
+        e.contains("ShaderQuadControl without ShaderMaximalReconvergence"),
+        "{e}"
+    );
+    d.features.insert(VkFeature::ShaderMaximalReconvergence);
+    let device = Device::from_queries(d, DevicePolicy::RESIDENT_TABLES).unwrap();
+    let model = &device.profile().fields().subgroup;
+    assert!(model.quad_control && model.maximal_reconvergence);
+}
+
 /// The restriction keeps exactly the enabled features and extensions and drops format entries
 /// whose value the enabled extensions do not expose.
 #[test]
