@@ -713,11 +713,18 @@ impl Case for TextureFills {
         // decode, announced where the runtime makes it (`compressed-texel-decode`). Metal
         // announces none, so the notices site differs on such a device, and the difference is
         // justified where it fired. A float depth's denormals are the device's own answer, which
-        // the suite declares for every case (`crate::replay::NATIVE_NOTES`). The format's own
-        // digest still compares.
-        vec![notice_allowance(
-            crate::degradation::Degradation::CompressedTexelDecode.code(),
-        )]
+        // the suite declares for every case (`crate::replay::NATIVE_NOTES`). A 32-bit float
+        // depth (`Depth32Float`, and the depth of `Depth32Float_Stencil8`) takes its `0xEE` bytes
+        // by copies from a buffer, which carry the note of an upload into one
+        // (`restricted-depth-upload`): those bytes are a depth below 0, which Metal keeps and a
+        // device that clamps does not, so the note loosens the notices site alone and the digest
+        // still decides. The format's own digest still compares.
+        use crate::degradation::Degradation as D;
+        let mut allowances = vec![notice_allowance(D::CompressedTexelDecode.code())];
+        if matches!(self.raw, 252 | 260) {
+            allowances.push(notice_allowance(D::RestrictedDepthUpload.code()));
+        }
+        allowances
     }
 
     fn carried_transcript(&self) -> Result<Option<(u32, Transcript)>, String> {

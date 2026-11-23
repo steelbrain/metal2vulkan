@@ -883,10 +883,16 @@ impl Case for SamplerFiltering {
         // [0, 1] (`restricted-depth-range`). Every texel of the family lies in [0, 1], so it moves
         // no sample: measured on the M3 Max, the notices site is the whole of the difference of
         // each of the eight rows. Its texture's upload carries the note of an upload into a 32-bit
-        // float depth (`restricted-depth-upload`), which moves none of those texels either.
+        // float depth (`restricted-depth-upload`), which moves none of those texels either. And
+        // its kernel `rrp_mc_compare` writes `out[5 * i + k]` for five `k`, stores the translator
+        // does not find disjoint between two threads of one SIMD-group, so its pipeline carries
+        // `simdgroup-access-order` on every device (`crate::replay::simdgroup_access_order_notice`;
+        // measured through the rt side on lavapipe for each of the eight rows). Each thread writes
+        // slots of its own, so the note moves no value.
         if matches!(self.family, Family::Compare(_)) {
             named.push(notice_allowance(Degradation::RestrictedDepthRange.code()));
             named.push(notice_allowance(Degradation::RestrictedDepthUpload.code()));
+            named.push(crate::replay::simdgroup_access_order_notice());
         }
         named
     }

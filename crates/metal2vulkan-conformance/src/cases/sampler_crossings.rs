@@ -955,7 +955,11 @@ impl Case for SamplerCrossings {
         // value outside [0, 1] (`restricted-depth-range`), and its upload carries the note of an
         // upload into a 32-bit float depth (`restricted-depth-upload`). Its depths all lie in
         // [0, 1], so neither note moves a sample: measured on MoltenVK on the M3 Max, the notices
-        // site is the whole of the difference.
+        // site is the whole of the difference. Its kernel `rrp_mc_compare` writes `out[5 * i + k]`
+        // for five `k`, stores the translator does not find disjoint between two threads of one
+        // SIMD-group, so its pipeline carries `simdgroup-access-order` on every device
+        // (`crate::replay::simdgroup_access_order_notice`; measured through the rt side on
+        // lavapipe). Each thread writes slots of its own, so the note moves no value.
         //
         // Every row samples through the runtime sampler at `[[sampler(0)]]`, which the runtime's
         // pipelines note as scaled (`crate::replay::pixel_sampler_scaling_notice` holds why).
@@ -975,6 +979,7 @@ impl Case for SamplerCrossings {
             for kind in [D::RestrictedDepthRange, D::RestrictedDepthUpload] {
                 allowances.push(crate::replay::notice_allowance(kind.code()));
             }
+            allowances.push(crate::replay::simdgroup_access_order_notice());
         }
         allowances
     }

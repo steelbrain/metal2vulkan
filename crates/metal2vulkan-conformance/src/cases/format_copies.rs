@@ -27,6 +27,7 @@
 //! Nothing here can fault a GPU: blit copies between textures the program makes, of formats whose
 //! copy unit matches, no dispatch, no draw and no loop.
 
+use crate::allowance::Allowance;
 use crate::case::{made, Abort, Case, Failure, Input, MetalSource, Side};
 use crate::transcript::{ByteLayout, Element, Observed, Sites, Value};
 use crate::work::{Plane, Resource, Step, TextureSpec, Work};
@@ -293,6 +294,25 @@ impl Case for FormatCopies {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
+    }
+
+    fn allowances(&self) -> Vec<Allowance> {
+        // A `Depth32Float` texture of a pair takes its bytes by a copy from a buffer, which
+        // carries the note of an upload into a 32-bit float depth (`restricted-depth-upload`).
+        // As a source its depths lie in [0, 1]; as a destination its [`BEFORE`] bytes are a depth
+        // below 0, which the copy between the textures overwrites whole before any read. So the
+        // note moves no byte the case reads: one declaration, which loosens the notices site
+        // alone.
+        let pair = self.pair();
+        let depth = [pair.from, pair.to].contains(&PixelFormat::Depth32Float);
+        depth
+            .then(|| {
+                crate::replay::notice_allowance(
+                    crate::degradation::Degradation::RestrictedDepthUpload.code(),
+                )
+            })
+            .into_iter()
+            .collect()
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

@@ -1072,6 +1072,14 @@ impl Case for FreshTexture {
                 crate::degradation::Degradation::CompressedTexelDecode.code(),
             ));
         }
+        // The `Depth32Float` row's depth of 0.5 goes in by a copy from a buffer, which carries the
+        // note of an upload into a 32-bit float depth (`restricted-depth-upload`). 0.5 lies in
+        // [0, 1], so the note moves no byte: at the notices site alone.
+        if self.row.shape.format == DEPTH32FLOAT.format {
+            allowances.push(crate::replay::notice_allowance(
+                crate::degradation::Degradation::RestrictedDepthUpload.code(),
+            ));
+        }
         allowances
     }
 
