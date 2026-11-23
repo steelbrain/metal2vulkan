@@ -4,3 +4,5 @@ macosx-sdk: 27.0 (26A425)
 llvm: 21 (pinned: llvm-dis writes each .ll, and llvm-as must accept it)
 llvm-dis: Homebrew LLVM version 21.1.8
 llvm-as: Homebrew LLVM version 21.1.8
+# Fixtures compiled by another Metal toolchain (regen-air-fixtures.sh <name>...).
+fixture visible_table_ops: metal: Apple metal version 32023.922 (metalfe-32023.922.4); macosx-sdk: 27.2 (26B118)
