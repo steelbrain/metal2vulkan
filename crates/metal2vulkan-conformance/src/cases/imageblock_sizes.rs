@@ -16,6 +16,7 @@
 //! (a neighbour's column wraps at the imageblock's width and its row is the thread's own, inside a
 //! threadgroup the imageblock's size) or inside its slot of the output.
 
+use crate::allowance::Allowance;
 use crate::case::{made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
 use crate::compute_pass::{ComputePass, ComputeStep, Dispatching};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
@@ -111,6 +112,13 @@ impl Case for ImageblockSizes {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
+    }
+
+    fn allowances(&self) -> Vec<Allowance> {
+        // One declaration, which loosens no value: the kernel holds SIMD-group access pairs, which
+        // the runtime's pipelines note on every device (`crate::replay::simdgroup_access_order_notice`;
+        // announced on the RTX 3090, the Radeon 780M and the Iris Xe, jobs m3-max-70084 to 70086).
+        vec![crate::replay::simdgroup_access_order_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
