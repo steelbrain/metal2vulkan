@@ -949,6 +949,8 @@ impl ComputeCommandEncoder {
     /// kernel; [`Limit::ThreadgroupThreads`] within it and past this device's;
     /// [`Refusal::BufferOffsetAlignment`] for a buffer the kernel reaches bound off its argument's
     /// alignment, which nothing records; [`Gap::SwizzledReadWrite`]; [`Gap::BicubicTexels`];
+    /// [`Limit::LevelElements`] where no run of level elements holds a texture of several levels
+    /// the kernel writes or reads at a level other than the constant 0;
     /// [`Limit::ThreadgroupMemory`], the imageblock's cells at the size
     /// [`set_imageblock_size`](Self::set_imageblock_size) set counted with the lengths;
     /// [`Gap::PartialSimdgroups`] for a threadgroup that is not whole SIMD groups of a kernel
@@ -1106,6 +1108,15 @@ impl ComputeCommandEncoder {
                     case: gap.case,
                     backing: gap.backing,
                 }));
+            }
+            // The run of level elements of each texture the kernel writes or reads at a level
+            // other than the constant 0, which its push names.
+            for field in &interface.fields {
+                if let FieldValue::TextureLevelBase(slot) = field.value {
+                    if let Some(Some(texture)) = self.textures.get(slot as usize) {
+                        texture.hold_levels()?;
+                    }
+                }
             }
             self.facts.extended = (interface.textures.iter()).any(|&(slot, access)| {
                 access.writes()
@@ -1693,6 +1704,21 @@ impl Parameters {
                         _ => BICUBIC_TEXELS_UNBOUND,
                     };
                     bytes[at..at + 4].copy_from_slice(&word.to_le_bytes());
+                }
+                FieldValue::TextureLevels(slot) => {
+                    let count = match textures.get(slot as usize) {
+                        Some(Some(texture)) => texture.level_count(),
+                        _ => 0,
+                    };
+                    bytes[at..at + 4].copy_from_slice(&count.to_le_bytes());
+                }
+                // A texture of several levels holds its run: the dispatch's checks took it.
+                FieldValue::TextureLevelBase(slot) => {
+                    let first = match textures.get(slot as usize) {
+                        Some(Some(texture)) => texture.level_base(),
+                        _ => 0,
+                    };
+                    bytes[at..at + 4].copy_from_slice(&first.to_le_bytes());
                 }
                 FieldValue::ConstexprSampler(place) => {
                     let index = sampler_ids.get(place).copied().unwrap_or(0);

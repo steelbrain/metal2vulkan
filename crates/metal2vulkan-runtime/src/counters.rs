@@ -421,6 +421,8 @@ pub(crate) enum Gauge {
     Samplers,
     /// [`Gauges::lod_clamp_variants`].
     LodClampVariants,
+    /// [`Gauges::level_elements`].
+    LevelElements,
     /// [`Gauges::descriptor_slots`].
     DescriptorSlots,
     /// [`Gauges::pipelines`].
@@ -800,6 +802,7 @@ struct Atomics {
     textures: AtomicU64,
     samplers: AtomicU64,
     lod_clamp_variants: AtomicU64,
+    level_elements: AtomicU64,
     pipelines: AtomicU64,
     kernels: AtomicU64,
     kernel_variants: AtomicU64,
@@ -1595,6 +1598,7 @@ impl Counters {
             Gauge::Textures => &a.textures,
             Gauge::Samplers => &a.samplers,
             Gauge::LodClampVariants => &a.lod_clamp_variants,
+            Gauge::LevelElements => &a.level_elements,
             Gauge::DescriptorSlots => &a.descriptor_slots,
             Gauge::Pipelines => &a.pipelines,
             Gauge::Kernels => &a.kernels,
@@ -1941,6 +1945,7 @@ impl Counters {
             textures: a.textures.load(Relaxed),
             samplers: a.samplers.load(Relaxed),
             lod_clamp_variants: a.lod_clamp_variants.load(Relaxed),
+            level_elements: a.level_elements.load(Relaxed),
             pipelines: a.pipelines.load(Relaxed),
             kernels: a.kernels.load(Relaxed),
             kernel_variants: a.kernel_variants.load(Relaxed),
@@ -3066,6 +3071,11 @@ pub struct Gauges {
     /// 1's sampler arrays: at most 4,000
     /// ([`Limit::LodClampVariants`](crate::Limit::LodClampVariants)).
     pub lod_clamp_variants: u64,
+    /// Runs of set 1's level elements textures hold, each a texture's single-level storage views
+    /// from its first bind to a slot written or read at a level other than the constant 0 until it
+    /// is released and its work retired: at most 4,096
+    /// ([`Limit::LevelElements`](crate::Limit::LevelElements)).
+    pub level_elements: u64,
     /// `VkPipeline`s.
     pub pipelines: u64,
     /// Compiled kernels: each the translation of one compute pipeline content (its descriptor's

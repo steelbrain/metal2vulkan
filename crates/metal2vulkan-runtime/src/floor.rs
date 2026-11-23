@@ -240,6 +240,16 @@ pub(crate) fn shader_extension(name: &CStr) -> Option<VkExtension> {
 /// supports `descriptorIndexing`.
 pub(crate) const TEXTURES: u32 = 65_536;
 
+/// The elements past [`TEXTURES`] in the storage-texture array: runs of single-level storage views,
+/// each run a texture's levels, which a function written or read at a level other than the
+/// constant 0 indexes (`crate::arrays`), at indices no grant and no resource ID reaches. They count
+/// against the storage-image limits beside the arrays a resource ID reaches.
+pub(crate) const LEVEL_ELEMENTS: u32 = 65_536;
+
+/// The elements of one run of [`LEVEL_ELEMENTS`]: a texture's levels, at most 16 of a texture of
+/// 32,768 texels a side, past any texture Metal makes (16,384, 15 levels); so 4,096 runs.
+pub(crate) const LEVEL_RUN: u32 = 16;
+
 /// The indices of each sampler array a resource ID reaches: 0, nil, and the consumer's grants, 1
 /// to 3,999. 4000 is Vulkan's minimum `maxSamplerAllocationCount`, so every device can hold a
 /// sampler at every index.
@@ -1575,12 +1585,13 @@ fn second_elements_fit(device: &Queried) -> bool {
     let limits = &device.limits;
     let descriptors = &device.vulkan12;
     let sampled = 3 * TEXTURES;
+    let storage = 2 * TEXTURES + LEVEL_ELEMENTS;
     descriptors.max_per_stage_descriptor_update_after_bind_sampled_images >= sampled
         && descriptors.max_descriptor_set_update_after_bind_sampled_images >= sampled
         && descriptors.max_per_stage_update_after_bind_resources
-            >= sampled + 2 * TEXTURES + limits.max_color_attachments
+            >= sampled + storage + limits.max_color_attachments
         && descriptors.max_update_after_bind_descriptors_in_all_pools
-            >= sampled + 2 * TEXTURES + SAMPLER_ARRAYS * SAMPLER_ELEMENTS
+            >= sampled + storage + SAMPLER_ARRAYS * SAMPLER_ELEMENTS
 }
 
 /// Each limit the floor sets: its Vulkan name, the device's value, and the least value the runtime
@@ -1588,7 +1599,9 @@ fn second_elements_fit(device: &Queried) -> bool {
 pub(crate) fn limits(device: &Queried) -> [(&'static str, u32, u32); 17] {
     let limits = &device.limits;
     let descriptors = &device.vulkan12;
-    // A uniform texel buffer counts as a sampled image, and a storage one as a storage image.
+    // A uniform texel buffer counts as a sampled image, and a storage one as a storage image; the
+    // storage-texture array holds its level elements past its textures.
+    let storage = 2 * TEXTURES + LEVEL_ELEMENTS;
     [
         (
             "maxPerStageDescriptorUpdateAfterBindSampledImages",
@@ -1603,12 +1616,12 @@ pub(crate) fn limits(device: &Queried) -> [(&'static str, u32, u32); 17] {
         (
             "maxPerStageDescriptorUpdateAfterBindStorageImages",
             descriptors.max_per_stage_descriptor_update_after_bind_storage_images,
-            2 * TEXTURES,
+            storage,
         ),
         (
             "maxDescriptorSetUpdateAfterBindStorageImages",
             descriptors.max_descriptor_set_update_after_bind_storage_images,
-            2 * TEXTURES,
+            storage,
         ),
         (
             "maxPerStageDescriptorUpdateAfterBindSamplers",
@@ -1629,12 +1642,12 @@ pub(crate) fn limits(device: &Queried) -> [(&'static str, u32, u32); 17] {
         (
             "maxPerStageUpdateAfterBindResources",
             descriptors.max_per_stage_update_after_bind_resources,
-            4 * TEXTURES + limits.max_color_attachments,
+            2 * TEXTURES + storage + limits.max_color_attachments,
         ),
         (
             "maxUpdateAfterBindDescriptorsInAllPools",
             descriptors.max_update_after_bind_descriptors_in_all_pools,
-            4 * TEXTURES + SAMPLER_ARRAYS * SAMPLER_ELEMENTS,
+            2 * TEXTURES + storage + SAMPLER_ARRAYS * SAMPLER_ELEMENTS,
         ),
         (
             "maxComputeWorkGroupInvocations",

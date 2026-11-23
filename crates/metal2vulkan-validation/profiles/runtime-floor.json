@@ -1224,12 +1224,12 @@
         "VkPhysicalDeviceVulkan12Properties": {
           "maxPerStageDescriptorUpdateAfterBindSampledImages": 131072,
           "maxDescriptorSetUpdateAfterBindSampledImages": 131072,
-          "maxPerStageDescriptorUpdateAfterBindStorageImages": 131072,
-          "maxDescriptorSetUpdateAfterBindStorageImages": 131072,
+          "maxPerStageDescriptorUpdateAfterBindStorageImages": 196608,
+          "maxDescriptorSetUpdateAfterBindStorageImages": 196608,
           "maxPerStageDescriptorUpdateAfterBindSamplers": 24000,
           "maxDescriptorSetUpdateAfterBindSamplers": 24000,
-          "maxPerStageUpdateAfterBindResources": 262152,
-          "maxUpdateAfterBindDescriptorsInAllPools": 286144
+          "maxPerStageUpdateAfterBindResources": 327688,
+          "maxUpdateAfterBindDescriptorsInAllPools": 351680
         }
       }
     },

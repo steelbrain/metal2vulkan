@@ -910,6 +910,152 @@ fn a_storage_cube_written_by_face_is_the_2d_array_element_of_its_faces() {
     }
 }
 
+/// A kernel over a `side × side` grid writing `(x, y, lod, 7)` at texel `(x, y)` of level `lod`
+/// of its `texture2d<uint, write>` slot 0, `lod` read from `constant uint &lod` (buffer 1).
+const LEVEL_WRITE_KERNEL: &str = "define void @lw(ptr addrspace(1) %t, ptr addrspace(2) noundef \"air-buffer-no-alias\" %lod, <2 x i32> noundef %gid) {\n\
+entry:\n\
+  %l = load i32, ptr addrspace(2) %lod, align 4\n\
+  %x = extractelement <2 x i32> %gid, i64 0\n\
+  %y = extractelement <2 x i32> %gid, i64 1\n\
+  %v0 = insertelement <4 x i32> <i32 0, i32 0, i32 0, i32 7>, i32 %x, i64 0\n\
+  %v1 = insertelement <4 x i32> %v0, i32 %y, i64 1\n\
+  %v = insertelement <4 x i32> %v1, i32 %l, i64 2\n\
+  tail call void @air.write_texture_2d.u.v4i32(ptr addrspace(1) %t, <2 x i32> %gid, <4 x i32> %v, i32 %l, i32 2)\n\
+  ret void\n\
+}\n\n\
+declare void @air.write_texture_2d.u.v4i32(ptr addrspace(1), <2 x i32>, <4 x i32>, i32, i32)\n\n\
+!air.kernel = !{!0}\n!air.version = !{!4}\n!air.language_version = !{!5}\n\
+!0 = !{ptr @lw, !1, !2}\n!1 = !{}\n!2 = !{!6, !7, !3}\n\
+!6 = !{i32 0, !\"air.texture\", !\"air.location_index\", i32 0, i32 1, !\"air.write\", !\"air.arg_type_name\", !\"texture2d<uint, write>\", !\"air.arg_name\", !\"t\"}\n\
+!7 = !{i32 1, !\"air.buffer\", !\"air.buffer_size\", i32 4, !\"air.location_index\", i32 1, i32 1, !\"air.read\", !\"air.address_space\", i32 2, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"lod\"}\n\
+!3 = !{i32 2, !\"air.thread_position_in_grid\", !\"air.arg_type_name\", !\"uint2\", !\"air.arg_name\", !\"gid\"}\n\
+!4 = !{i32 2, i32 8, i32 0}\n!5 = !{!\"Metal\", i32 4, i32 0, i32 0}\n";
+
+/// A storage slot written at a level the kernel reads from a buffer is, under the identity
+/// domains, an element of the storage class's run its pushed `TextureLevelBase` names, at the
+/// level below its pushed `TextureLevels`: levels 0, 1 and 2 of a texture of three levels land on
+/// the run's three elements in order and nowhere else; levels 3 and 7, past the count, land
+/// nowhere; a texture of one level (its own element, count 1) takes level 0 and drops level 1;
+/// nil (element 0, count 0) drops every level.
+#[test]
+fn a_storage_slot_written_at_a_run_time_level_is_an_element_of_its_run() {
+    let Some(bc) = assemble_text("lw", LEVEL_WRITE_KERNEL) else {
+        return;
+    };
+    const LOD: u64 = 0x10_0000;
+    // The texture's resource ID holds index 3, its run is elements 8 to 10, and element 11 is
+    // past it; the others are other textures'.
+    const I: u32 = 3;
+    const RUN: u32 = 8;
+    for stem in ["lavapipe", "runtime-floor"] {
+        let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
+        let (a, plan, module) =
+            compile_kept(&bc, "lw", &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
+        let linked = link(&[&a], &LinkInputs::standalone(), &p).unwrap_or_else(|e| panic!("{e}"));
+        let mut classes = (linked.table.bindings.iter()).filter(|(_, b)| **b == (1, 1));
+        let (storage, _) = classes
+            .next()
+            .unwrap_or_else(|| panic!("{stem}: no storage class"));
+        assert!(classes.next().is_none(), "{stem}: two storage classes");
+        // A dispatch of `side × side` threads at level `lod` over elements 0 to 11, the slot
+        // pushing its resource ID's index, its level count and its run's first element.
+        let dispatch = |lod: u32, side: u32, (id, count, first): (u32, u32, u32)| {
+            let l = [side, side, 1];
+            let mut push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
+            for field in &plan.push.fields {
+                let PushLoc::Push { offset } = field.loc else {
+                    panic!("{stem}: {field:?} spilled");
+                };
+                let o = offset as usize;
+                match field.field {
+                    PushField::SlotGuestBase(s) => {
+                        let word = match (s.class, s.index) {
+                            (SlotClass::Texture, 0) => resource_id(id, 0),
+                            (SlotClass::Buffer, 1) => slot_word(LOD),
+                            _ => panic!("{stem}: unexpected slot {s:?}"),
+                        };
+                        push[o..o + 8].copy_from_slice(&word.to_le_bytes());
+                    }
+                    PushField::SlotBounds(_) => push[o..o + 8].copy_from_slice(&bounds_word(4, 0)),
+                    PushField::ZeroAddress => {
+                        push[o..o + 8].copy_from_slice(&ZERO_UNMAPPED.to_le_bytes())
+                    }
+                    PushField::DispatchRegion => {
+                        let region = region_bytes([0; 3], l, l).expect("packs");
+                        push[o..o + 32].copy_from_slice(&region);
+                    }
+                    PushField::TextureLevels(_) => {
+                        push[o..o + 4].copy_from_slice(&count.to_le_bytes())
+                    }
+                    PushField::TextureLevelBase(_) => {
+                        push[o..o + 4].copy_from_slice(&first.to_le_bytes())
+                    }
+                    // 0: the images' channels are 32-bit, so each lane stores as written.
+                    PushField::TextureIntegerChannels(_) => {
+                        push[o..o + 4].copy_from_slice(&0u32.to_le_bytes())
+                    }
+                    other => panic!("{stem}: unexpected push field {other:?}"),
+                }
+            }
+            let images: Vec<Image> = (0..12)
+                .map(|e| {
+                    let side = match e {
+                        I => 4,
+                        RUN..=10 => 4 >> (e - RUN),
+                        _ => 1,
+                    };
+                    Image::new(*storage, [side, side, 1], 1, 1, 1).at_element(e)
+                })
+                .collect();
+            let res = Resources {
+                buffers: vec![Buffer {
+                    slot: None,
+                    address: Some(LOD),
+                    bytes: lod.to_le_bytes().to_vec(),
+                }],
+                push,
+                spec: local_size3(l),
+            };
+            let (_, images) = run_with_images(&module, &Config::default(), res, images)
+                .unwrap_or_else(|e| panic!("{stem}: level {lod}: {e}"));
+            images
+        };
+        // Element `written` holds `side × side` texels of level `lod`, and every other element
+        // its zeros.
+        let holds = |images: &[Image], written: Option<u32>, lod: u32, what: &str| {
+            for (e, img) in images.iter().enumerate() {
+                let side = img.extent[0];
+                let want: Vec<[u32; 4]> = match written == Some(e as u32) {
+                    true => (0..side)
+                        .flat_map(|y| (0..side).map(move |x| [x, y, lod, 7]))
+                        .collect(),
+                    false => vec![[0; 4]; (side * side) as usize],
+                };
+                assert_eq!(img.texels, want, "{stem}: {what}, element {e}");
+            }
+        };
+        for lod in 0..3u32 {
+            let images = dispatch(lod, 4 >> lod, (I, 3, RUN));
+            holds(&images, Some(RUN + lod), lod, &format!("level {lod}"));
+        }
+        for lod in [3, 7] {
+            let images = dispatch(lod, 4, (I, 3, RUN));
+            holds(&images, None, lod, &format!("level {lod}, past the count"));
+        }
+        holds(&dispatch(0, 4, (I, 1, I)), Some(I), 0, "one level, level 0");
+        holds(&dispatch(1, 4, (I, 1, I)), None, 1, "one level, level 1");
+        for lod in [0, 1] {
+            holds(
+                &dispatch(lod, 4, (0, 0, 0)),
+                None,
+                lod,
+                &format!("nil, level {lod}"),
+            );
+        }
+    }
+}
+
 /// Set 1's fixed arrays under the identity domains: binding, descriptor type and count.
 fn identity_arrays() -> Vec<(u32, vk::DescriptorType, u32)> {
     vec![

@@ -250,6 +250,18 @@ pub(crate) struct TextureInner {
     /// mapping and range, and the view once a draw read through it, which its second element
     /// names.
     shadow: Option<ShadowView>,
+    /// Its run of set 1's level elements ([`TextureObject::hold_levels`]), once a dispatch or a
+    /// draw bound it to a slot written or read at a level other than the constant 0, and given
+    /// back with it.
+    levels: Mutex<Option<LevelRun>>,
+}
+
+/// A texture's run of set 1's level elements ([`TextureInner`]'s `levels`): its first element,
+/// and the single-level storage views of the texture's levels its elements hold, from its first
+/// level; none where the texture has no storage element, whose run stays null.
+struct LevelRun {
+    first: u32,
+    views: Vec<vk::ImageView>,
 }
 
 /// What holds a texture's texels ([`TextureInner`]'s `body`).
@@ -1058,6 +1070,16 @@ impl Drop for TextureInner {
         if let Some(view) = shadow {
             core.pool.release(core, Free::ShadowView(view));
         }
+        // Its run's elements go null before its views go.
+        let levels = (self.levels.get_mut())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(LevelRun { first, views }) = levels {
+            core.pool.release(core, Free::LevelElements(first));
+            if !views.is_empty() {
+                core.pool.release(core, Free::LevelViews(views));
+            }
+        }
     }
 }
 
@@ -1500,6 +1522,7 @@ impl Device {
             emulation: plan.emulation,
             attachments: Mutex::new(Vec::new()),
             shadow: None,
+            levels: Mutex::new(None),
         };
         Ok(Texture {
             inner: Arc::new(inner),
@@ -1756,6 +1779,7 @@ impl Device {
             emulation: plan.emulation,
             attachments: Mutex::new(Vec::new()),
             shadow,
+            levels: Mutex::new(None),
         };
         // Over a buffer of no device copy, the commands track what they write while it lives
         // (`crate::over`).
@@ -2991,6 +3015,18 @@ unsafe fn image_view(
     made.map_err(Error::vulkan("vkCreateImageView"))
 }
 
+/// Destroys `views`.
+///
+/// # Safety
+///
+/// Each is of `device`, and no work uses it.
+unsafe fn destroy_views(device: &ash::Device, views: Vec<vk::ImageView>) {
+    for view in views {
+        // SAFETY: the caller's contract.
+        unsafe { device.destroy_image_view(view, None) };
+    }
+}
+
 /// Every level and layer of an image of `aspects`.
 fn whole(aspects: vk::ImageAspectFlags) -> vk::ImageSubresourceRange {
     vk::ImageSubresourceRange {
@@ -3866,6 +3902,52 @@ impl TextureInner {
             .expect("an image path reached by a texture buffer, which every such call refuses")
     }
 
+    /// A single-level storage view of each of its first `levels` levels, from its first, of its
+    /// storage element's type, format and layers ([`storage_view_type`]): the views its run of
+    /// level elements holds ([`TextureObject::hold_levels`]).
+    ///
+    /// Err: [`Error::Vulkan`] where a view cannot be made; what was made is destroyed.
+    fn level_views(&self, levels: u32) -> Result<Vec<vk::ImageView>, Error> {
+        let shape = shape(&self.descriptor)?;
+        let view_type = storage_view_type(shape.view_type);
+        let [level, layer] = self.base();
+        let image = self.imaged().image;
+        let usage = (self.views_usage).map(|usage| usage & vk::ImageUsageFlags::STORAGE);
+        let mut views = Vec::with_capacity(levels as usize);
+        for at in level..level + levels {
+            let range = vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: at,
+                level_count: 1,
+                base_array_layer: layer,
+                layer_count: shape.layers,
+            };
+            let components = vk::ComponentMapping::default();
+            // SAFETY: the image is bound, of the storage usage its storage element has, lists the
+            // view's format, and holds the range: the texture's levels and layers.
+            let made = unsafe {
+                image_view(
+                    &self.core,
+                    image,
+                    view_type,
+                    self.format,
+                    components,
+                    range,
+                    usage,
+                )
+            };
+            match made {
+                Ok(view) => views.push(view),
+                Err(error) => {
+                    // SAFETY: nothing used the views.
+                    unsafe { destroy_views(&self.core.device, views) };
+                    return Err(error);
+                }
+            }
+        }
+        Ok(views)
+    }
+
     /// Whether it has a storage element: a storage view of its image, or a texture buffer's view
     /// in the storage texel-buffer array.
     fn stores(&self) -> bool {
@@ -4270,6 +4352,7 @@ impl Texture {
             emulation: plan.emulation,
             attachments: Mutex::new(Vec::new()),
             shadow,
+            levels: Mutex::new(None),
         };
         Ok(Texture {
             inner: Arc::new(view),
@@ -5296,6 +5379,76 @@ pub(crate) trait TextureObject {
         TextureInner::reads(self.object()) != TextureSwizzleChannels::DEFAULT
     }
 
+    /// Its level count as a function's `get_num_mip_levels` of a storage texture and the bounds of
+    /// its levels read it (`PushField::TextureLevels`): its own where shaders reach it at an
+    /// index, else 0, as nil's, whose resource ID it pushes.
+    fn level_count(&self) -> u32 {
+        let inner = self.object();
+        match inner.index {
+            Some(_) => inner.descriptor.mipmap_level_count,
+            None => 0,
+        }
+    }
+
+    /// The first element of the run of set 1's storage-texture array that holds its levels
+    /// (`PushField::TextureLevelBase`): its run of level elements where it holds one
+    /// ([`hold_levels`](Self::hold_levels)), else its own index, whose storage element is its one
+    /// level, and 0, nil's, where shaders reach it at no index. A dispatch or a draw that pushes
+    /// it held the texture's run first.
+    fn level_base(&self) -> u32 {
+        let inner = self.object();
+        match &*lock(&inner.levels) {
+            Some(run) => run.first,
+            None => inner.index.map_or(0, |(index, _)| index),
+        }
+    }
+
+    /// Its run of set 1's level elements, taken where it has more than one level, shaders reach
+    /// it at an index, and it holds none yet (`Arrays::place_levels`): a single-level storage
+    /// view of each of its levels at the run's elements, where it has a storage element; none
+    /// where it has not, so its run reads and writes as nil does. Made at the first dispatch or
+    /// draw that binds it to a slot written or read at a level other than the constant 0, and
+    /// given back as it goes; a later bind takes its lock and makes nothing.
+    ///
+    /// Err: [`Limit::LevelElements`] where every run is held, or it has more levels than a run;
+    /// [`Error::Vulkan`] where a view cannot be made.
+    fn hold_levels(&self) -> Result<(), Error> {
+        let inner = self.object();
+        let levels = inner.descriptor.mipmap_level_count;
+        if levels < 2 || inner.index.is_none() {
+            return Ok(());
+        }
+        let mut run = lock(&inner.levels);
+        if run.is_some() {
+            return Ok(());
+        }
+        if levels > crate::floor::LEVEL_RUN {
+            return Err(Error::Limit(Limit::LevelElements {
+                max: crate::floor::LEVEL_ELEMENTS / crate::floor::LEVEL_RUN,
+            }));
+        }
+        let views = match inner.stores() {
+            true => inner.level_views(levels)?,
+            false => Vec::new(),
+        };
+        let core = &inner.core;
+        // SAFETY: each view is live, of the device and of the texture's image, which is in the
+        // general layout whenever work uses its storage views, until the texture's drop gives back
+        // the run before its views.
+        let placed = unsafe { (core.arrays).place_levels(&core.device, &core.counters, &views) };
+        match placed {
+            Ok(first) => {
+                *run = Some(LevelRun { first, views });
+                Ok(())
+            }
+            Err(error) => {
+                // SAFETY: nothing used the views.
+                unsafe { destroy_views(&core.device, views) };
+                Err(error)
+            }
+        }
+    }
+
     /// How Metal's bicubic filter treats its texels, under the swizzle it is sampled through
     /// (`metal::format::bicubic_texels_word`): `None` for a format with no such treatment.
     fn bicubic_texels(&self) -> Option<u32> {
@@ -5849,6 +6002,7 @@ impl Device {
             emulation: FormatEmulation::Direct,
             attachments: Mutex::new(Vec::new()),
             shadow: None,
+            levels: Mutex::new(None),
         };
         Ok(Texture {
             inner: Arc::new(inner),
@@ -6113,6 +6267,7 @@ impl Device {
             emulation: plan.emulation,
             attachments: Mutex::new(Vec::new()),
             shadow,
+            levels: Mutex::new(None),
         };
         let texture = Texture {
             inner: Arc::new(inner),

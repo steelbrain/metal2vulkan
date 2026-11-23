@@ -1294,7 +1294,7 @@ the Direct3D 11 texture's payload until it is freed.
 Shaders reach textures and samplers by index (`docs/RESOURCE-ID.md`). Every pipeline takes set 1,
 one descriptor set the device makes at creation, of seven arrays whose element `i` is the object
 whose `gpuResourceID` holds index `i`: 65,536 sampled textures (binding 0), 65,536 storage
-textures (binding 1), 8,000 samplers of each use, plain, depth comparison and integer texture
+textures and then 65,536 level elements (binding 1), 8,000 samplers of each use, plain, depth comparison and integer texture
 (bindings 2, 3 and 4), and 65,536 uniform and 65,536 storage texel buffers, the texture buffers
 (bindings 5 and 6). A texture's index is the same element of both texture arrays: one with a
 storage view takes both, any other the sampled one alone, and its storage element stays null. A
@@ -1312,6 +1312,22 @@ made, with no lock, and never rewritten for layouts.
   over a buffer); on a device without the loop it is the texture's view of its image's
   shadow (Render encoders), written at the first draw that reads through it where the texture
   still owns index `i`. It is a null descriptor otherwise, and no grant reaches it.
+- Binding 1's elements 65,536 to 131,071 are level elements, in 4,096 runs of 16. A function that
+  writes or reads a storage texture at a level other than the constant 0 (MSL
+  `write(color, coord, lod)` or `read(coord, lod)` at a level it computes or reads) indexes a
+  run: the first dispatch or draw that binds a texture of more than one level to such a slot
+  gives the texture a run and writes the run's elements, each a single-level storage view of one
+  of the texture's levels, in order from its first (a cube's level as the 2D array of its faces, a
+  texture view's from its own first level). The dispatch or draw pushes the texture's level count
+  and the run's first element, and an access at level `l` reads or writes element
+  `first + min(l, count - 1)` only where `l < count`: a write past the count is dropped and a
+  read there answers zeros, and no level reaches another texture's elements. A texture of one
+  level pushes its own index, and nil pushes count 0, so its writes are dropped. A later bind of the texture makes nothing: it takes the texture's lock and
+  pushes the same two words. The run goes back once the texture is released and its work has
+  retired: its views are destroyed and its elements are null again
+  (`Gauges::level_elements`). A texture bound so when every run is held, or one of more than 16
+  levels, past any texture Metal makes, is `Limit::LevelElements`, and the dispatch or draw
+  does not run. No grant and no resource ID reaches the level elements.
 - A shader masks the index of a texture ID it reads from an argument buffer to its low 16 bits,
   so a bad ID there reads the element at `index & 0xFFFF`, never one outside the arrays. A slot's
   index is the runtime's own push, unmasked, and no argument buffer's ID reaches the feedback
@@ -3392,16 +3408,9 @@ cache is answered compile-required on both.
     function"): no test yet;
   - a value from the encoder that the function reads and the identity domains do not source ("an
     encoder value the function reads as F", `F` the `PushField`: a texture buffer's bind offset,
-    `SlotBindOffset`; a texture's level count, `TextureLevels`; the draw's `InstanceCount` or
-    `BaseVertexInstance`; a stage-in stride, `StageInStride`; and the others the translator
-    pushes beside the identity fields): no test yet;
-  - among those, a storage texture written or read at a level other than the constant 0 (MSL
-    `write(color, coord, lod)` at a level the kernel computes or reads), whose slot the
-    translator declares as one storage element per level, which the identity arrays do not hold
-    ("an encoder value the function reads as TextureLevels(S)"). Metal writes such a level on
-    Intel Macs as well as on Apple silicon: an owned kernel's writes at levels 1 and 2, read
-    from a buffer, landed exactly on a Radeon Pro 5300M and on a UHD 630 under macOS 26.7.1, with
-    Metal's validation off, with its API validation, and with its shader validation. No test yet;
+    `SlotBindOffset`; the draw's `InstanceCount` or `BaseVertexInstance`; a stage-in stride,
+    `StageInStride`; and the others the translator pushes beside the identity fields): no test
+    yet;
   - a buffer argument not reached through its device address ("a buffer argument not reached
     through its device address"): no test yet;
   - a texture argument of a type the identity arrays hold no element of, or whose bound texture's
@@ -5153,7 +5162,7 @@ pipeline states). So `Device::extensions` names the extension only with its feat
 ### Limits
 
 The descriptor limits are what the runtime's fixed arrays need: 65,536 sampled textures, 65,536
-storage textures, 65,536 read and 65,536 written texture buffers, and three arrays of 8,000
+storage textures and 65,536 level elements, 65,536 read and 65,536 written texture buffers, and three arrays of 8,000
 samplers, one per use (plain, depth comparison, integer texture): 4,000 indices and 4,000 variant
 elements each (Set 1 and index grants). A read texture buffer (a uniform texel buffer) counts
 against the sampled-image limits and a written one (a storage texel buffer) against the
@@ -5178,13 +5187,13 @@ below 256 an indirect command reaches fewer vertex slots (Known gaps of indirect
 |---|---|---|
 | `maxPerStageDescriptorUpdateAfterBindSampledImages` | `131072` | the sampled-texture and read texture-buffer arrays |
 | `maxDescriptorSetUpdateAfterBindSampledImages` | `131072` | the sampled-texture and read texture-buffer arrays |
-| `maxPerStageDescriptorUpdateAfterBindStorageImages` | `131072` | the storage-texture and written texture-buffer arrays |
-| `maxDescriptorSetUpdateAfterBindStorageImages` | `131072` | the storage-texture and written texture-buffer arrays |
+| `maxPerStageDescriptorUpdateAfterBindStorageImages` | `196608` | the storage-texture array with its level elements, and the written texture-buffer array |
+| `maxDescriptorSetUpdateAfterBindStorageImages` | `196608` | the storage-texture array with its level elements, and the written texture-buffer array |
 | `maxPerStageDescriptorUpdateAfterBindSamplers` | `24000` | the three sampler arrays; the lab's least is 500,000 |
 | `maxDescriptorSetUpdateAfterBindSamplers` | `24000` | the three sampler arrays; the lab's least is 500,000 |
 | `maxSamplerAllocationCount` | `4000` | Vulkan's minimum: live samplers |
-| `maxPerStageUpdateAfterBindResources` | `262144` | the four texture and texture-buffer arrays in one stage; a fragment stage needs its `maxColorAttachments` more |
-| `maxUpdateAfterBindDescriptorsInAllPools` | `286144` | all seven arrays; the lab's least is 1,048,576 |
+| `maxPerStageUpdateAfterBindResources` | `327680` | the four texture and texture-buffer arrays, the level elements among them, in one stage; a fragment stage needs its `maxColorAttachments` more |
+| `maxUpdateAfterBindDescriptorsInAllPools` | `351680` | all seven arrays; the lab's least is 1,048,576 |
 | `maxComputeWorkGroupInvocations` | `1024` | Metal's most threads per threadgroup |
 | `maxComputeWorkGroupSize[0]` | `1024` | a threadgroup's width |
 | `maxComputeWorkGroupSize[1]` | `1024` | a threadgroup's height |

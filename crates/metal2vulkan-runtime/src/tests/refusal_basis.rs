@@ -17,6 +17,7 @@ fn each_refusal_enum_answers_its_declared_basis() {
     assert_eq!(Gap::LinearPlanePass { kind }.basis(), Device);
     assert_eq!(Gap::CubicSampler.basis(), Ours);
     assert_eq!(Limit::LodClampVariants { max: 4000 }.basis(), Ours);
+    assert_eq!(Limit::LevelElements { max: 4096 }.basis(), Ours);
 }
 
 /// A refusal enum's variant answers its own; a device that lacks the floor's mechanism `Device`;

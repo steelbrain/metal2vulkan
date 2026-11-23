@@ -77,6 +77,11 @@ pub(crate) enum Free {
     },
     /// A dropped texture's view of its image's shadow.
     ShadowView(vk::ImageView),
+    /// A released texture's run of set 1's level elements, by its first element
+    /// (`Arrays::vacate_levels`).
+    LevelElements(u32),
+    /// A dropped texture's single-level storage views, which its run of level elements held.
+    LevelViews(Vec<vk::ImageView>),
     /// A dropped texture's resolve image (`crate::texture`'s `Resolved`), its attachment view
     /// and its memory of `bytes`, freed as a texture's are; the resolve images gauges fall with
     /// it.
@@ -240,6 +245,19 @@ pub(crate) fn free(core: &Core, object: Free) {
         // SAFETY: no pending work uses it: every command buffer that read through it held its
         // texture until it retired, and its element of set 1 is null or another texture's.
         Free::ShadowView(view) => unsafe { device.destroy_image_view(view, None) },
+        // SAFETY: no pending work reads the run: every command buffer that bound the texture held
+        // it until it retired, and no resource ID reaches the run.
+        Free::LevelElements(first) => unsafe {
+            (core.arrays).vacate_levels(device, &core.counters, first)
+        },
+        Free::LevelViews(views) => {
+            // SAFETY: as above; the run's elements are null.
+            unsafe {
+                for view in views {
+                    device.destroy_image_view(view, None);
+                }
+            }
+        }
         Free::Resolved {
             view,
             image,

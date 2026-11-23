@@ -32,7 +32,7 @@ Columns:
 | The translation deadline | 1 | 1 | 0 | 0 | 0 | 1 | 0 |
 | Devices below the runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | The runtime's `Refusal` | 86 | 86 | 0 | 0 | 0 | 0 | 0 |
-| The runtime's `Limit` | 18 | 18 | 0 | 0 | 0 | 0 | 0 |
+| The runtime's `Limit` | 19 | 19 | 0 | 0 | 0 | 0 | 0 |
 | The runtime's `Gap` | 31 | 31 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
@@ -45,7 +45,7 @@ Columns:
 | The translation deadline | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 |
 | Devices below the runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
 | The runtime's `Refusal` | 23 | 25 | 0 | 0 | 38 | 0 | 0 | 0 |
-| The runtime's `Limit` | 0 | 0 | 0 | 13 | 5 | 0 | 0 | 0 |
+| The runtime's `Limit` | 0 | 0 | 0 | 13 | 6 | 0 | 0 | 0 |
 | The runtime's `Gap` | 0 | 0 | 0 | 3 | 28 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
@@ -327,6 +327,7 @@ Columns:
 | `TextureSize` | A texture whose extent or array layers are past what the device makes of its format, type, usage and sample count | at the device's limit | `device`: the image format query's `maxExtent` and `maxArrayLayers`, and `maxTexelBufferElements` | 2: `crates/metal2vulkan-runtime/src/texture.rs (planned)`, `crates/metal2vulkan-runtime/src/texture.rs (texel_texture)` | `-` |
 | `DeviceSamplers` | A sampler state whose device samplers would take the device past its `maxSamplerAllocationCount`, less the sampler arrays' two defaults... | at the device's limit | `device`: the device's `maxSamplerAllocationCount` | 1: `crates/metal2vulkan-runtime/src/sampler.rs (take)` | `-` |
 | `LodClampVariants` | A sampler state bound with LOD clamps of its own past the variants the runtime holds at once | every device (a public call's own check of its arguments) | `ours`: the runtime's 4,000 variant elements | 1: `crates/metal2vulkan-runtime/src/arrays.rs (place_variant)` | `-` |
+| `LevelElements` | A dispatch or a draw that binds a texture of more than one level to a slot its function writes or reads at a level other than the constant 0 (MSL... | every device (a public call's own check of its arguments) | `ours`: the runtime's 65,536 level elements, 4,096 runs of 16 | 2: `crates/metal2vulkan-runtime/src/arrays.rs (place_levels)`, `crates/metal2vulkan-runtime/src/texture.rs (hold_levels)` | `-` |
 | `MemoryAllocations` | A `VkDeviceMemory` allocation past the device's `maxMemoryAllocationCount` live ones, refused before the driver is called | at the device's limit | `device`: the device's `maxMemoryAllocationCount` | 1: `crates/metal2vulkan-runtime/src/memory.rs (allocate)` | `-` |
 | `AllocationNotMapped` | A take that no free range fits made an allocation that the consumer's `BlockMappings::map` did not map | every device (a public call's own check of its arguments) | `ours`: the consumer's hook gave the allocation no place in its own address range | 1: `crates/metal2vulkan-runtime/src/memory.rs (own)` | `-` |
 | `NoImport` | An import of a handle the device does not take (`Device::import_dma_buf` and `Device::import_dma_bufs` on Unix, `Device::import_host_memory`, a... | at the device's limit | `device`: the device's extensions, features, queue family and external buffer properties | 6: `crates/metal2vulkan-runtime/src/d3d11.rs (d3d11_plane)`, `crates/metal2vulkan-runtime/src/d3d11.rs (import_d3d11_surface)` (+4) | `-` |
@@ -617,6 +618,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Limit::TextureSize`: `crates/metal2vulkan-runtime/src/texture.rs (planned)`; `crates/metal2vulkan-runtime/src/texture.rs (texel_texture)`
 - `rt:Limit::DeviceSamplers`: `crates/metal2vulkan-runtime/src/sampler.rs (take)`
 - `rt:Limit::LodClampVariants`: `crates/metal2vulkan-runtime/src/arrays.rs (place_variant)`
+- `rt:Limit::LevelElements`: `crates/metal2vulkan-runtime/src/arrays.rs (place_levels)`; `crates/metal2vulkan-runtime/src/texture.rs (hold_levels)`
 - `rt:Limit::MemoryAllocations`: `crates/metal2vulkan-runtime/src/memory.rs (allocate)`
 - `rt:Limit::AllocationNotMapped`: `crates/metal2vulkan-runtime/src/memory.rs (own)`
 - `rt:Limit::NoImport`: `crates/metal2vulkan-runtime/src/d3d11.rs (d3d11_plane)`; `crates/metal2vulkan-runtime/src/d3d11.rs (import_d3d11_surface)`; `crates/metal2vulkan-runtime/src/import.rs (import_dma_buf)`; `crates/metal2vulkan-runtime/src/import.rs (import_dma_bufs)`; `crates/metal2vulkan-runtime/src/import.rs (import_host_memory)`; `crates/metal2vulkan-runtime/src/import.rs (surface_import)`

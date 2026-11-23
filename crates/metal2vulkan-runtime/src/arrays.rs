@@ -4,7 +4,8 @@
 //!
 //! One descriptor set of the translator's identity domains' seven arrays, made at device creation
 //! and never rewritten for layouts: binding 0 the sampled textures and binding 1 the storage
-//! textures (65,536 each, element `i` of both the texture at index `i`), bindings 2, 3 and 4 the
+//! textures (65,536 each, element `i` of both the texture at index `i`; binding 1 then holds the
+//! level elements), bindings 2, 3 and 4 the
 //! samplers of each use, plain, depth comparison and integer texture (8,000 each: the 4,000 indices
 //! a resource ID reaches, then 4,000 variant elements), and bindings 5 and 6 the texture buffers'
 //! uniform and storage texel buffers (65,536 each, element `i` of both the texture buffer at index
@@ -38,6 +39,13 @@
 //! image's shadow, written at the first draw that reads through it where the texture still owns
 //! the index (`crate::shadow`). It is a null descriptor otherwise. No index of a grant reaches it.
 //!
+//! Past its 65,536 textures the storage-texture array holds 65,536 level elements in runs of 16
+//! (`floor::LEVEL_ELEMENTS`, `floor::LEVEL_RUN`): a texture of more than one level bound to a slot
+//! a function writes or reads at a level other than the constant 0 takes a run at that bind, each
+//! element its own single-level storage view of a level, from its first, which the slot's
+//! `PushField::TextureLevelBase` names ([`Arrays::place_levels`]); the run is null again and free
+//! once the texture is released and its work retired. No grant and no resource ID reaches them.
+//!
 //! The consumer names each range of indices it takes ([`Device::grant_indices`]), so resource IDs
 //! are chosen on the guest's side and reproduce in replay. Two classes: textures of every usage
 //! take 1 to 65,535, an index valid in both texture arrays; samplers 1 to 3,999. Index 0 is nil
@@ -47,7 +55,8 @@ use crate::counters::{Counters, Gauge, Metric, Part};
 use crate::device::lock;
 use crate::error::{Error, Limit, Refusal};
 use crate::floor::{
-    BelowFloor, Missing, SAMPLERS, SAMPLER_ARRAYS, SAMPLER_ELEMENTS, SAMPLER_VARIANTS, TEXTURES,
+    BelowFloor, Missing, LEVEL_ELEMENTS, LEVEL_RUN, SAMPLERS, SAMPLER_ARRAYS, SAMPLER_ELEMENTS,
+    SAMPLER_VARIANTS, TEXTURES,
 };
 use crate::Device;
 use ash::vk;
@@ -70,7 +79,8 @@ pub(crate) const STORAGE_TEXELS_BINDING: u32 = 6;
 /// Set 1's bindings, each its binding, descriptor type and count: the arrays a kernel's layout
 /// names under the identity domains, which every pipeline's layout takes from this set. Shaders
 /// declare the arrays unsized, and the set's layout holds [`layout_counts`] elements: more in the
-/// sampled-texture array with the second elements, and in each sampler array its variants'.
+/// sampled-texture array with the second elements, in the storage-texture array its level
+/// elements, and in each sampler array its variants'.
 pub(crate) const BINDINGS: [(u32, vk::DescriptorType, u32); 7] = [
     (SAMPLED_BINDING, vk::DescriptorType::SAMPLED_IMAGE, TEXTURES),
     (STORAGE_BINDING, vk::DescriptorType::STORAGE_IMAGE, TEXTURES),
@@ -206,6 +216,9 @@ pub(crate) struct Grants {
     last: u64,
     /// The variant elements no variant holds, the lowest last.
     variants: Vec<u32>,
+    /// The first elements of the storage-texture array's runs of level elements no texture holds,
+    /// the lowest last.
+    runs: Vec<u32>,
 }
 
 impl Grants {
@@ -215,6 +228,10 @@ impl Grants {
             owners: [HashMap::new(), HashMap::new()],
             last: 0,
             variants: (SAMPLERS..SAMPLER_ELEMENTS).rev().collect(),
+            runs: (TEXTURES..TEXTURES + LEVEL_ELEMENTS)
+                .step_by(LEVEL_RUN as usize)
+                .rev()
+                .collect(),
         }
     }
 
@@ -789,6 +806,87 @@ impl Arrays {
         grants.variants.push(index);
     }
 
+    /// Places a texture's levels at a run of the storage-texture array's level elements no texture
+    /// holds ([`LEVEL_RUN`] elements past [`TEXTURES`]) and writes `views`, each a single-level
+    /// storage view of its level, at the run's elements in order; the run's other elements stay
+    /// null. The level-elements gauge rises. The run's first element, which no grant reaches.
+    ///
+    /// Err: [`Limit::LevelElements`] where every run is held.
+    ///
+    /// # Safety
+    ///
+    /// `views` are at most [`LEVEL_RUN`], each live and of the device, of an image in the general
+    /// layout whenever work uses it, until the run is vacated ([`Arrays::vacate_levels`]).
+    pub(crate) unsafe fn place_levels(
+        &self,
+        device: &ash::Device,
+        counters: &Counters,
+        views: &[vk::ImageView],
+    ) -> Result<u32, Error> {
+        let mut grants = lock(&self.grants);
+        let first = (grants.runs.pop()).ok_or(Error::Limit(Limit::LevelElements {
+            max: LEVEL_ELEMENTS / LEVEL_RUN,
+        }))?;
+        counters.rise(Gauge::LevelElements);
+        // SAFETY: the caller's contract; no texture held the run, so no work uses it, and the
+        // lock is held.
+        unsafe { self.write_storage(device, first, views) };
+        Ok(first)
+    }
+
+    /// The texture of the run at `first` goes: each of the run's elements is null again, the run
+    /// is free, and the level-elements gauge falls.
+    ///
+    /// # Safety
+    ///
+    /// `first` is the first element of a run a texture held, and no work in flight reads its
+    /// elements.
+    pub(crate) unsafe fn vacate_levels(
+        &self,
+        device: &ash::Device,
+        counters: &Counters,
+        first: u32,
+    ) {
+        let mut grants = lock(&self.grants);
+        let null = [vk::ImageView::null(); LEVEL_RUN as usize];
+        // SAFETY: the caller's contract; the lock is held, so no texture is placed at the run
+        // before its elements are null.
+        unsafe { self.write_storage(device, first, &null) };
+        grants.runs.push(first);
+        counters.fall(Gauge::LevelElements);
+    }
+
+    /// Writes `views` at the storage-texture array's elements from `first`, in the general layout,
+    /// a null descriptor where a view is null.
+    ///
+    /// # Safety
+    ///
+    /// The grants' lock is held by a placement or a vacating of the elements, no pending work uses
+    /// them, and each view is live and of the device whenever work uses it.
+    unsafe fn write_storage(&self, device: &ash::Device, first: u32, views: &[vk::ImageView]) {
+        if views.is_empty() {
+            return;
+        }
+        let infos: Vec<vk::DescriptorImageInfo> = (views.iter())
+            .map(|&view| {
+                vk::DescriptorImageInfo::default()
+                    .image_view(view)
+                    .image_layout(vk::ImageLayout::GENERAL)
+            })
+            .collect();
+        let write = write(
+            self.set,
+            STORAGE_BINDING,
+            vk::DescriptorType::STORAGE_IMAGE,
+            &infos,
+        )
+        .dst_array_element(first);
+        // SAFETY: the caller's contract; the binding is update-after-bind and
+        // update-unused-while-pending, so elements of other owners may be written meanwhile, and
+        // a null image view is a null descriptor under `nullDescriptor`.
+        unsafe { device.update_descriptor_sets(&[write], &[]) };
+    }
+
     /// Writes elements at `index` of the sampler arrays, each `(array, sampler)`, the array 0
     /// plain, 1 comparison and 2 integer texture: the array's default where the sampler is `None`.
     /// An element that holds that sampler already is not written: an equal sampler state, whose
@@ -906,7 +1004,7 @@ impl Made {
             },
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::STORAGE_IMAGE,
-                descriptor_count: TEXTURES,
+                descriptor_count: TEXTURES + LEVEL_ELEMENTS,
             },
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::SAMPLER,
@@ -1042,11 +1140,13 @@ pub(crate) unsafe fn supported(
 }
 
 /// The elements of each binding of set 1's layout, by [`BINDINGS`]: theirs, the sampled-texture
-/// array's [`sampled_images`], and each sampler array's [`SAMPLER_ELEMENTS`], its variant elements
-/// past the [`SAMPLERS`] a pipeline's layout names.
+/// array's [`sampled_images`], the storage-texture array's level elements past its textures, and
+/// each sampler array's [`SAMPLER_ELEMENTS`], its variant elements past the [`SAMPLERS`] a
+/// pipeline's layout names.
 pub(crate) fn layout_counts(seconds: bool) -> [u32; 7] {
     let mut counts = BINDINGS.map(|(_, _, count)| count);
     counts[SAMPLED_BINDING as usize] = sampled_images(seconds);
+    counts[STORAGE_BINDING as usize] = TEXTURES + LEVEL_ELEMENTS;
     for array in 0..SAMPLER_ARRAYS {
         counts[(FIRST_SAMPLER_BINDING + array) as usize] = SAMPLER_ELEMENTS;
     }
@@ -1062,7 +1162,8 @@ pub(crate) fn sampled_images(seconds: bool) -> u32 {
 }
 
 /// Writes every element of `set` its default: a null descriptor in each texture and texel-buffer
-/// array, the sampled-texture array's `sampled` elements, `plain` in the plain and
+/// array, the sampled-texture array's `sampled` elements and the storage-texture array's level
+/// elements among them, `plain` in the plain and
 /// integer-texture sampler arrays and `compare` in the comparison array.
 ///
 /// # Safety
@@ -1083,7 +1184,7 @@ unsafe fn fill(
     ];
     let storage = vec![
         vk::DescriptorImageInfo::default().image_layout(vk::ImageLayout::GENERAL);
-        TEXTURES as usize
+        (TEXTURES + LEVEL_ELEMENTS) as usize
     ];
     let samplers = |sampler| {
         vec![vk::DescriptorImageInfo::default().sampler(sampler); SAMPLER_ELEMENTS as usize]

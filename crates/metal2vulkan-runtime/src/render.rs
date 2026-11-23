@@ -157,6 +157,11 @@ pub(crate) struct Draws {
     /// and whose texture a draw's checks refuse where the filter's treatment of its format is not
     /// established (`Gap::BicubicTexels`). Empty for every other content.
     pub(crate) bicubic: Vec<(usize, u32)>,
+    /// Each texture slot a function writes or reads at a level other than the constant 0, with its
+    /// function: the slots whose `PushField::TextureLevelBase` a draw writes, the first element
+    /// of the bound texture's run of level elements, which a draw's checks hold first. Empty for
+    /// every other content.
+    pub(crate) levels: Vec<(usize, u32)>,
     /// Each fixed-function vertex binding: its binding and the vertex buffer index it reads.
     pub(crate) bindings: Vec<(u32, u32)>,
     /// Whether a function reads through an address that is not one of its slots.
@@ -702,6 +707,7 @@ fn draws(
     let mut fields = Vec::new();
     let mut fetched = Vec::new();
     let mut bicubic = Vec::new();
+    let mut levels = Vec::new();
     let mut push_len = 0;
     let mut blocks = [None; 2];
     for placement in &translated.push {
@@ -763,6 +769,26 @@ fn draws(
                     let of = table(stage)?;
                     fields.push((offset, of, FieldValue::BicubicTexels(index)));
                     bicubic.push((of, index));
+                    continue;
+                }
+                // The bound texture's level count, and the first element of the run that holds
+                // its levels, the words a dispatch writes for its kernel's slot.
+                PushField::TextureLevels(SlotRef {
+                    stage,
+                    class: SlotClass::Texture,
+                    index,
+                }) => {
+                    fields.push((offset, table(stage)?, FieldValue::TextureLevels(index)));
+                    continue;
+                }
+                PushField::TextureLevelBase(SlotRef {
+                    stage,
+                    class: SlotClass::Texture,
+                    index,
+                }) => {
+                    let of = table(stage)?;
+                    fields.push((offset, of, FieldValue::TextureLevelBase(index)));
+                    levels.push((of, index));
                     continue;
                 }
                 PushField::ConstexprSampler(sampler) => {
@@ -861,6 +887,7 @@ fn draws(
         own_pixel,
         fetched,
         bicubic,
+        levels,
         bindings,
         reads_unbound: translated.reads_unbound_resources,
         writes_unbound: translated.writes_unbound_resources,

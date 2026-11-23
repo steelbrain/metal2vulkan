@@ -2145,6 +2145,19 @@ pub enum Limit {
         /// The most variants live at once.
         max: u32,
     },
+    /// A dispatch or a draw that binds a texture of more than one level to a slot its function
+    /// writes or reads at a level other than the constant 0 (MSL `write(color, coord, lod)` at a
+    /// level the function computes), where no run of set 1's level elements holds the texture's
+    /// levels: each such texture holds one run of 16, a single-level storage view of each of its
+    /// levels, from its first such bind until it is released and its work retired, and every run
+    /// is held; or the texture has more than 16 levels, past any texture Metal makes (16,384
+    /// texels a side, 15 levels). Nothing is recorded.
+    ///
+    /// Basis: ours (the runtime's 65,536 level elements, 4,096 runs of 16).
+    LevelElements {
+        /// The most textures that hold runs at once.
+        max: u32,
+    },
     /// A `VkDeviceMemory` allocation past the device's `maxMemoryAllocationCount` live ones,
     /// refused before the driver is called: each block, each imported block, each texture's own
     /// memory, each staging buffer of [`Texture::replace_region`](crate::Texture::replace_region)
@@ -3011,6 +3024,10 @@ impl fmt::Display for Limit {
             Limit::LodClampVariants { max } => write!(
                 f,
                 "{max} sampler states bound with LOD clamps of their own are live already"
+            ),
+            Limit::LevelElements { max } => write!(
+                f,
+                "none of the {max} runs of 16 level elements holds the texture's levels"
             ),
             Limit::MemoryAllocations { max } => {
                 write!(f, "the device holds {max} memory allocations already")

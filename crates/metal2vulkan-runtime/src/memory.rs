@@ -998,7 +998,10 @@ impl Pool {
         if now
             && matches!(
                 object,
-                Free::TextureIndex(..) | Free::TexelIndex(..) | Free::SamplerIndex(..)
+                Free::TextureIndex(..)
+                    | Free::TexelIndex(..)
+                    | Free::SamplerIndex(..)
+                    | Free::LevelElements(_)
             )
         {
             return crate::reaper::free(core, object);
@@ -1757,9 +1760,10 @@ pub(crate) fn run(core: Arc<Core>) {
             // An index goes here, before the gauge falls, so every released index is vacated once
             // nothing waits; an object goes to the reaper.
             match object {
-                Free::TextureIndex(..) | Free::TexelIndex(..) | Free::SamplerIndex(..) => {
-                    crate::reaper::free(&core, object)
-                }
+                Free::TextureIndex(..)
+                | Free::TexelIndex(..)
+                | Free::SamplerIndex(..)
+                | Free::LevelElements(_) => crate::reaper::free(&core, object),
                 _ => core.reaper.give(Job::Free(object)),
             }
             core.counters.fall(Gauge::ReleasesWaiting);

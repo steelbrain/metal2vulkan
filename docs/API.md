@@ -251,7 +251,11 @@ and so do the command line, the compile worker and every validation tool. It hol
   member reaches included, reads and writes its `ulong` texture slots (an `RG32` unsigned image,
   declared `Rg32ui` where it is a storage image, the element at its ID's index), updates its
   texture slots atomically (a slot declared `R32ui` or `R32i`, the storage-image array's element
-  at its ID's index), reads, writes and updates atomically its texture buffers, slots and
+  at its ID's index), writes and reads its storage texture slots at a level other than the
+  constant 0 (element `first + min(l, max(n, 1) - 1)` of set 1's storage-image array where the
+  level `l` is below the bound texture's level count `n`, `PushField::TextureLevels`, and
+  `first` its run's first element, `PushField::TextureLevelBase`:
+  [RESOURCE-ID.md](RESOURCE-ID.md)), reads, writes and updates atomically its texture buffers, slots and
   argument buffers' members alike (a uniform texel buffer where it reads one, a storage texel
   buffer where it writes one, the element of set 1's texel-buffer array at its ID's index), and
   samples its texture slots
@@ -261,7 +265,7 @@ and so do the command line, the compile worker and every validation tool. It hol
   the function holds: one that samples through an argument buffer's sampler or samples an
   argument buffer's texture, emulates a sampler's anisotropy, samples a 1D
   texture through a bicubic filter, uses a texture buffer's parts or rows
-  form, a slot's levels or swizzle, a two-plane, extended-range or sRGB-twin form, reads an
+  form, a slot's swizzle, a two-plane, extended-range or sRGB-twin form, reads an
   argument buffer's texture
   through another numeric type or as raw texels, or uses any other state of a texture or sampler
   beyond its ID.

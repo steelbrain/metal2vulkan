@@ -117,6 +117,14 @@
 //! textures). Heap storage images take only the constant 0, and a
 //! texture atomic on a slot with level views is not implemented.
 //!
+//! Under the identity domains the level views are no array of the slot's own: they are a run of
+//! the set-1 storage array, each element a single-level view of the bound texture's level, in
+//! order from its first, and the consumer pushes the run's first element
+//! (`PushField::TextureLevelBase`) beside the level count, with no fact. An access at level `l`
+//! takes element `first + min(l, max(n, 1) − 1)` within the `l < n` check, `NonUniform` where `l`
+//! is not a constant, and the level 0 the first element. A texture of one level is its own run
+//! (its resource ID's element), and nil's run is element 0, the null descriptor, of count 0.
+//!
 //! **Size queries at a level** (`emit::level_extent`). A width, height, or depth query at a level
 //! that is not the constant 0, of a sampled or storage texture, answers Metal's
 //! `max(1, e >> (l & 255))` of the extent `e` of the texture's first level, at every level `l`,

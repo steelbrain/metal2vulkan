@@ -1806,8 +1806,6 @@ fn identity_unsourced(f: &RuntimeFact) -> bool {
             | RuntimeFact::HeapNumericType { .. }
             | RuntimeFact::StorageTextureNumericType { .. }
             | RuntimeFact::BicubicTexels { .. }
-            | RuntimeFact::StorageTextureLevels { .. }
-            | RuntimeFact::StorageTextureLevelViews { .. }
             | RuntimeFact::SparseTexture { .. }
             | RuntimeFact::SrgbTexture { .. }
             | RuntimeFact::OpenClLineTexture { .. }
@@ -1837,7 +1835,9 @@ fn identity_unsourced(f: &RuntimeFact) -> bool {
 /// descriptor and no state of a bound texture or sampler but its resource ID's: a texture's
 /// presence, its format's missing alpha and the border texels a read through a sampler reads
 /// (`SlotPlan::identity_lowered`, [`identity_unsourced`]). The values it reads of the encoder are
-/// pushed: the dispatch's region, a storage texture's integer channel widths, the compute
+/// pushed: the dispatch's region, a storage texture's integer channel widths, its level count
+/// and the first element of its levels' run in set 1's storage array (`PushField::TextureLevels`,
+/// `PushField::TextureLevelBase`), the compute
 /// encoder's stage-in region (`PushField::StageInRegion`), the stride of a vertex layout whose
 /// attributes the function pulls (`PushField::VertexBufferStride`): a post-tessellation function's
 /// control points and patches, and a plain vertex function's layouts that a pulled-vertex-buffer
@@ -1885,6 +1885,8 @@ fn identity_refusal(plan: &Plan) -> Option<String> {
                 | PushField::ZeroAddress
                 | PushField::DispatchRegion
                 | PushField::TextureIntegerChannels(_)
+                | PushField::TextureLevels(_)
+                | PushField::TextureLevelBase(_)
                 | PushField::BicubicTexels(_)
                 | PushField::ConstexprSampler(_)
                 | PushField::StageInRegion

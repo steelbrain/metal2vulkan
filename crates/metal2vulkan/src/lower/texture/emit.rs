@@ -479,7 +479,7 @@ fn image_in(
             flagged: None,
         });
     };
-    let (img, within) = level_element(cx, fb, at, ptr, n, level)?;
+    let (img, within) = level_element(cx, fb, at, ptr, Some(n), level)?;
     Ok(Loaded {
         decl,
         img,
@@ -509,26 +509,38 @@ pub(crate) fn identity_id(
 
 /// Under the identity domains, texture slot `index`'s image: the element of its class's set-1
 /// array (`slot::identity_class`) at the index its resource ID holds, which is uniform over the
-/// call. A slot has one level here (`level` is `None`).
+/// call; a slot with level views reads level `level` (`None`: 0) of the run of that array its
+/// `PushField::TextureLevelBase` names ([`level_element`]). A slot without them has one level
+/// here (`level` is `None`).
 fn identity_image(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     index: u32,
     level: Option<ValueId>,
 ) -> BResult<Loaded> {
-    let decl = cx
-        .plan
-        .families
-        .texture
-        .slots
-        .get(&index)
-        .and_then(|s| s.decl);
+    let slot = cx.plan.families.texture.slots.get(&index);
+    let (decl, at) = (slot.and_then(|s| s.decl), slot.map(|s| s.slot));
     let global = cx.decl.families.texture.images.get(&index).copied();
-    let (Some(decl), Some((g, _)), None) = (decl, global, level) else {
+    let (Some(decl), Some(at), Some((g, _))) = (decl, at, global) else {
         return Err(cx.fail(format!("texture slot {index} is not declared")));
     };
-    let (element, _) = identity_id(cx, fb, index)?;
     let base = fb.module().global_value(g)?;
+    if decl.level_views.is_some() {
+        let (img, within) = level_element(cx, fb, at, base, None, level)?;
+        return Ok(Loaded {
+            decl,
+            img,
+            live: None,
+            within: Some(within),
+            flagged: None,
+        });
+    }
+    if level.is_some() {
+        return Err(cx.fail(format!(
+            "a level of texture slot {index} without level views"
+        )));
+    }
+    let (element, _) = identity_id(cx, fb, index)?;
     let p = fb.access_chain(base, &[element])?;
     let img = fb.load(p, MemAccess::default())?;
     Ok(Loaded {
@@ -551,33 +563,49 @@ pub(crate) fn slot_image(
     Ok((decl, img))
 }
 
-/// Element `level` (`None`: 0) of the `n` level views `ptr` points to, slot `slot`'s, and whether
-/// the level is below the bound texture's level count (`PushField::TextureLevels`). A constant
-/// level below `n` indexes the array as is (that element is a neutral where the texture lacks the
-/// level); any other level is clamped below the count first (element 0, a neutral, for a count of
-/// 0), so the access never leaves the array, and indexes it `NonUniform`.
+/// Element `level` (`None`: 0) of slot `slot`'s level views, and whether the level is below the
+/// bound texture's level count (`PushField::TextureLevels`). The views are the `n` elements of the
+/// slot's own array `ptr` points to (`Some(n)`), or under the identity domains (`None`) the run of
+/// the set-1 array `ptr` points to from the element the slot's `PushField::TextureLevelBase`
+/// names. A constant level below `n` indexes the slot's array as is (that element is a neutral
+/// where the texture lacks the level), and the level 0 the run's first element; any other level is
+/// clamped below the count first (the first element for a count of 0), so the access never leaves
+/// the views, and indexes them `NonUniform` where the level is not a constant.
 fn level_element(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     slot: crate::pipeline::sym::SlotRef,
     ptr: SValue,
-    n: u32,
+    n: Option<u32>,
     level: Option<ValueId>,
 ) -> BResult<(SValue, SValue)> {
-    let count = cx.push_field(fb, crate::pipeline::sym::PushField::TextureLevels(slot))?;
+    use crate::pipeline::sym::PushField;
+    let count = cx.push_field(fb, PushField::TextureLevels(slot))?;
     let l = match level {
         Some(l) => cx.operand(fb, l)?,
         None => u32s(fb, 1, 0)?,
     };
     let within = fb.binary(BinOp::ULessThan, l, count)?;
-    let element = match fb.const_scalar(l)? {
-        Some(k) if k < u64::from(n) => fb.access_chain(ptr, &[l])?,
+    let first = match n {
+        Some(_) => None,
+        None => Some(cx.push_field(fb, PushField::TextureLevelBase(slot))?),
+    };
+    let constant = fb.const_scalar(l)?;
+    let element = match (constant, n, first) {
+        (Some(k), Some(n), _) if k < u64::from(n) => fb.access_chain(ptr, &[l])?,
+        (Some(0), _, Some(first)) => fb.access_chain(ptr, &[first])?,
         _ => {
             let one = u32s(fb, 1, 1)?;
             let some = fb.glsl(GlslOp::UMax, &[count, one])?;
             let top = fb.binary(BinOp::ISub, some, one)?;
-            let index = fb.glsl(GlslOp::UMin, &[l, top])?;
-            fb.access_chain_non_uniform(ptr, index)?
+            let mut index = fb.glsl(GlslOp::UMin, &[l, top])?;
+            if let Some(first) = first {
+                index = fb.binary(BinOp::IAdd, first, index)?;
+            }
+            match (constant, first) {
+                (Some(_), Some(_)) => fb.access_chain(ptr, &[index])?,
+                _ => fb.access_chain_non_uniform(ptr, index)?,
+            }
         }
     };
     let img = fb.load(element, MemAccess::default())?;

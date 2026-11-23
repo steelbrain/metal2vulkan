@@ -1324,6 +1324,7 @@ field	metal2vulkan-runtime::Gauges.indirect_command_buffers	pub indirect_command
 field	metal2vulkan-runtime::Gauges.kernel_entries	pub kernel_entries: u64
 field	metal2vulkan-runtime::Gauges.kernel_variants	pub kernel_variants: u64
 field	metal2vulkan-runtime::Gauges.kernels	pub kernels: u64
+field	metal2vulkan-runtime::Gauges.level_elements	pub level_elements: u64
 field	metal2vulkan-runtime::Gauges.lod_clamp_variants	pub lod_clamp_variants: u64
 field	metal2vulkan-runtime::Gauges.managed_spilled_bytes	pub managed_spilled_bytes: u64
 field	metal2vulkan-runtime::Gauges.occlusion_pools	pub occlusion_pools: u64
@@ -8458,6 +8459,7 @@ variant	metal2vulkan-runtime::Limit::ExportType	ExportType { handle: ExportHandl
 variant	metal2vulkan-runtime::Limit::ImportAlignment	ImportAlignment { handle: ImportHandle, len: u64, alignment: u64 }
 variant	metal2vulkan-runtime::Limit::ImportType	ImportType { handle: ImportHandle, offered: u32, listed: u32 }
 variant	metal2vulkan-runtime::Limit::IndexRange	IndexRange { class: IndexClass, first: u32, count: u32 }
+variant	metal2vulkan-runtime::Limit::LevelElements	LevelElements { max: u32 }
 variant	metal2vulkan-runtime::Limit::LodClampVariants	LodClampVariants { max: u32 }
 variant	metal2vulkan-runtime::Limit::MemoryAllocations	MemoryAllocations { max: u32 }
 variant	metal2vulkan-runtime::Limit::NoExport	NoExport { handle: ExportHandle }
@@ -9938,6 +9940,7 @@ variant	metal2vulkan::pipeline::PushField::TessellationFactorInstanceStride	Tess
 variant	metal2vulkan::pipeline::PushField::TessellationFactorOffset	TessellationFactorOffset
 variant	metal2vulkan::pipeline::PushField::TessellationFactorScale	TessellationFactorScale
 variant	metal2vulkan::pipeline::PushField::TextureIntegerChannels	TextureIntegerChannels(SlotRef)
+variant	metal2vulkan::pipeline::PushField::TextureLevelBase	TextureLevelBase(SlotRef)
 variant	metal2vulkan::pipeline::PushField::TextureLevels	TextureLevels(SlotRef)
 variant	metal2vulkan::pipeline::PushField::VertexBufferStride	VertexBufferStride(u32)
 variant	metal2vulkan::pipeline::PushField::VerticesPerPrimitive	VerticesPerPrimitive

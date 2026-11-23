@@ -898,6 +898,7 @@ codec_enum! {
         IndirectRange,
         IndirectSequence,
         IndirectBase,
+        TextureLevelBase(f0),
     }
     Symbol { Binding(f0), DescriptorSet(f0), Location(f0), Component(f0), SpecId(f0) }
 }

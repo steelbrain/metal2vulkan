@@ -286,7 +286,7 @@ impl Facts {
     ///
     /// Err: [`Refusal::VertexBufferOffset`]; [`Refusal::NoBufferAtIndex`] for a vertex buffer the
     /// vertex descriptor reads that is not bound; [`Gap::SwizzledReadWrite`];
-    /// [`Gap::BicubicTexels`]; [`Gap::StorageElement`].
+    /// [`Gap::BicubicTexels`]; [`Gap::StorageElement`]; [`Limit::LevelElements`].
     fn find(
         &mut self,
         draws: &Draws,
@@ -361,6 +361,13 @@ impl Facts {
                 case: gap.case,
                 backing: gap.backing,
             }));
+        }
+        // The run of level elements of each texture a function writes or reads at a level other
+        // than the constant 0, which its push names.
+        for &(table, slot) in &draws.levels {
+            if let Some(texture) = tables[table].texture(slot) {
+                texture.hold_levels()?;
+            }
         }
         self.attachments = !draws.fetched.is_empty()
             || (draws.textures.iter()).any(|&(table, slot, _)| {
@@ -3597,6 +3604,15 @@ fn fill_push(
                     t.bicubic_texels().unwrap_or(BICUBIC_TEXELS_UNBOUND)
                 });
                 bytes[at..at + 4].copy_from_slice(&word.to_le_bytes());
+            }
+            FieldValue::TextureLevels(slot) => {
+                let count = (tables.texture(slot)).map_or(0, |t| t.level_count());
+                bytes[at..at + 4].copy_from_slice(&count.to_le_bytes());
+            }
+            // A texture of several levels holds its run: the draw's checks took it.
+            FieldValue::TextureLevelBase(slot) => {
+                let first = (tables.texture(slot)).map_or(0, |t| t.level_base());
+                bytes[at..at + 4].copy_from_slice(&first.to_le_bytes());
             }
             FieldValue::ConstexprSampler(place) => {
                 let index = ids.get(place).copied().unwrap_or(0);

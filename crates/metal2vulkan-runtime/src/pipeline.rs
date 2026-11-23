@@ -877,6 +877,13 @@ pub(crate) enum FieldValue {
     /// `metal::format::BICUBIC_TEXELS_UNBOUND` where none is; a texture of a format with no
     /// such treatment is refused at the dispatch or the draw ([`Gap::BicubicTexels`]).
     BicubicTexels(u32),
+    /// A `u32`: the level count of the texture bound at the slot, 0 where none is
+    /// (`PushField::TextureLevels`).
+    TextureLevels(u32),
+    /// A `u32`: the first element of the run of set 1's storage-texture array that holds the
+    /// levels of the texture bound at the slot, 0 where none is (`PushField::TextureLevelBase`);
+    /// the dispatch or the draw holds the texture's run first.
+    TextureLevelBase(u32),
     /// A `u32`: the sampler index the consumer gave the constexpr sampler at this place of the
     /// state's numbered samplers (a render state's: the vertex function's, then the fragment
     /// function's).
@@ -1775,6 +1782,22 @@ pub(crate) fn interface(
                     }),
                     _,
                 ) => FieldValue::BicubicTexels(index),
+                (
+                    PushField::TextureLevels(SlotRef {
+                        stage: Stage::Kernel,
+                        class: SlotClass::Texture,
+                        index,
+                    }),
+                    _,
+                ) => FieldValue::TextureLevels(index),
+                (
+                    PushField::TextureLevelBase(SlotRef {
+                        stage: Stage::Kernel,
+                        class: SlotClass::Texture,
+                        index,
+                    }),
+                    _,
+                ) => FieldValue::TextureLevelBase(index),
                 (PushField::ConstexprSampler(sampler), _) => {
                     let SamplerRef::Constexpr(words) = sampler.sampler else {
                         return Err(KernelInputKind::ConstexprSampler);

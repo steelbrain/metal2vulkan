@@ -891,8 +891,17 @@ pub enum PushField {
     /// The encoder's tessellation factor scale rounded to `half` (`float`), a control-stage field.
     TessellationFactorScale,
     /// The mipmap level count (`u32`) of the storage texture bound to the slot, 0 where the binder
-    /// binds a neutral (`RuntimeFact::StorageTextureLevels`).
+    /// binds a neutral (`RuntimeFact::StorageTextureLevels`). Under the identity domains no fact
+    /// is stated: 0 where the slot's resource ID is nil.
     TextureLevels(SlotRef),
+    /// Under the identity domains, the first element (`u32`) of the run of set 1's storage-image
+    /// array that holds the levels of the storage texture bound to a slot read or written at a
+    /// level other than the constant 0, each its own single-level storage view, in order from the
+    /// texture's first level (`docs/RESOURCE-ID.md`): an access at level `l` reads or writes element
+    /// `first + min(l, max(n, 1) − 1)`, `n` the slot's [`PushField::TextureLevels`], and only
+    /// where `l < n`. A texture of one level pushes its resource ID's index, whose storage element
+    /// is that level, and nil pushes 0.
+    TextureLevelBase(SlotRef),
     /// The instance count (`u32`) of the instance acceleration structure bound at the buffer slot,
     /// 0 where none is bound (`RuntimeFact::AccelerationStructureInstanceCount`).
     InstanceCount(SlotRef),

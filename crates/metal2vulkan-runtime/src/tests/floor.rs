@@ -139,12 +139,12 @@ pub(super) fn at_the_floor() -> Queried {
         vulkan12: vk::PhysicalDeviceVulkan12Properties::default()
             .max_per_stage_descriptor_update_after_bind_sampled_images(2 * 65_536)
             .max_descriptor_set_update_after_bind_sampled_images(2 * 65_536)
-            .max_per_stage_descriptor_update_after_bind_storage_images(2 * 65_536)
-            .max_descriptor_set_update_after_bind_storage_images(2 * 65_536)
+            .max_per_stage_descriptor_update_after_bind_storage_images(3 * 65_536)
+            .max_descriptor_set_update_after_bind_storage_images(3 * 65_536)
             .max_per_stage_descriptor_update_after_bind_samplers(3 * 8000)
             .max_descriptor_set_update_after_bind_samplers(3 * 8000)
-            .max_per_stage_update_after_bind_resources(4 * 65_536 + 8)
-            .max_update_after_bind_descriptors_in_all_pools(4 * 65_536 + 3 * 8000),
+            .max_per_stage_update_after_bind_resources(5 * 65_536 + 8)
+            .max_update_after_bind_descriptors_in_all_pools(5 * 65_536 + 3 * 8000),
         features,
         extensions: DEVICE_EXTENSIONS
             .iter()
@@ -802,18 +802,18 @@ fn each_low_limit_is_named() {
         (
             |d| {
                 d.vulkan12
-                    .max_per_stage_descriptor_update_after_bind_storage_images = 2 * 65_536 - 1
+                    .max_per_stage_descriptor_update_after_bind_storage_images = 3 * 65_536 - 1
             },
             "maxPerStageDescriptorUpdateAfterBindStorageImages",
-            2 * 65_536,
+            3 * 65_536,
         ),
         (
             |d| {
                 d.vulkan12
-                    .max_descriptor_set_update_after_bind_storage_images = 2 * 65_536 - 1
+                    .max_descriptor_set_update_after_bind_storage_images = 3 * 65_536 - 1
             },
             "maxDescriptorSetUpdateAfterBindStorageImages",
-            2 * 65_536,
+            3 * 65_536,
         ),
         (
             |d| {
@@ -834,14 +834,14 @@ fn each_low_limit_is_named() {
             4000,
         ),
         (
-            |d| d.vulkan12.max_per_stage_update_after_bind_resources = 4 * 65_536 + 7,
+            |d| d.vulkan12.max_per_stage_update_after_bind_resources = 5 * 65_536 + 7,
             "maxPerStageUpdateAfterBindResources",
-            4 * 65_536 + 8,
+            5 * 65_536 + 8,
         ),
         (
-            |d| d.vulkan12.max_update_after_bind_descriptors_in_all_pools = 4 * 65_536 + 23_999,
+            |d| d.vulkan12.max_update_after_bind_descriptors_in_all_pools = 5 * 65_536 + 23_999,
             "maxUpdateAfterBindDescriptorsInAllPools",
-            4 * 65_536 + 24_000,
+            5 * 65_536 + 24_000,
         ),
         (
             |d| d.limits.max_compute_work_group_invocations = 1023,
@@ -1650,8 +1650,8 @@ fn the_attachment_reads_take_the_feedback_loop_where_reported_and_a_copy_elsewhe
         let descriptors = &mut device.vulkan12;
         descriptors.max_per_stage_descriptor_update_after_bind_sampled_images = 3 * 65_536;
         descriptors.max_descriptor_set_update_after_bind_sampled_images = 3 * 65_536;
-        descriptors.max_per_stage_update_after_bind_resources = 5 * 65_536 + 8;
-        descriptors.max_update_after_bind_descriptors_in_all_pools = 5 * 65_536 + 3 * 8000;
+        descriptors.max_per_stage_update_after_bind_resources = 6 * 65_536 + 8;
+        descriptors.max_update_after_bind_descriptors_in_all_pools = 6 * 65_536 + 3 * 8000;
     };
     let looped = |device: &mut Queried| {
         (device.extensions).extend(

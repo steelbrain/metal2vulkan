@@ -980,8 +980,10 @@ pub fn max_levels(profile: &crate::device::DeviceProfile, dim: ImageDim) -> u32 
     d.max(1).ilog2() + 1
 }
 
-/// The level views of storage slot `s`, checked on the profile, with their facts and push field:
-/// `None` for a slot without them.
+/// The level views of storage slot `s`, checked on the profile, with their facts and push fields:
+/// `None` for a slot without them. Under the identity domains the views are the run of set 1's
+/// storage array the slot's `PushField::TextureLevelBase` names, and no fact is stated: the
+/// consumer pushes the bound texture's level count and its run's first element.
 fn level_views(
     cx: &SelectCx<'_>,
     s: &SlotPlan,
@@ -990,8 +992,11 @@ fn level_views(
     push: &mut Vec<PushField>,
 ) -> Result<Option<u32>, Error> {
     let u = &s.uses;
+    let identity = crate::lower::access::identity(cx.profile);
     if u.levels || u.level_views {
-        facts.push(RuntimeFact::StorageTextureLevels { slot: s.slot });
+        if !identity {
+            facts.push(RuntimeFact::StorageTextureLevels { slot: s.slot });
+        }
         push.push(PushField::TextureLevels(s.slot));
     }
     if !u.level_views {
@@ -1010,7 +1015,10 @@ fn level_views(
             VkFeature::ShaderStorageImageArrayNonUniformIndexing,
         ));
     }
-    facts.push(RuntimeFact::StorageTextureLevelViews { slot: s.slot });
+    match identity {
+        true => push.push(PushField::TextureLevelBase(s.slot)),
+        false => facts.push(RuntimeFact::StorageTextureLevelViews { slot: s.slot }),
+    }
     Ok(Some(n))
 }
 
@@ -1541,14 +1549,14 @@ impl SlotPlan {
 /// buffer's is a texel buffer's, uniform where the slot reads and storage where it writes, the
 /// element its resource ID holds in the texel-buffer arrays. A storage cube or cube array is
 /// declared as the 2D array of its faces (layer `6 · cube + face`), which is its storage element:
-/// the runtime holds a cube's storage view as that 2D array. `None` for a declaration the identity
-/// arrays hold no element of yet: a sampled cube viewed as an array, level views, a texture
-/// buffer's parts, an extended-range or RGBX form, or a storage image with another format or a
-/// conversion.
+/// the runtime holds a cube's storage view as that 2D array. A storage slot's level views are
+/// elements of the same array, the run its `PushField::TextureLevelBase` names. `None` for a
+/// declaration the identity arrays hold no element of yet: a sampled cube viewed as an array, a
+/// texture buffer's parts, an extended-range or RGBX form, or a storage image with another format
+/// or a conversion.
 pub(crate) fn identity_class(decl: &ImageDecl) -> Option<ImageHandleClass> {
     let storage = decl.usage == ImageUsage::Storage;
     let plain = !(decl.cube_as_array && !storage)
-        && decl.level_views.is_none()
         && decl.extended.is_none()
         && !decl.x_channel
         && decl.parts.is_none()

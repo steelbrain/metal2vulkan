@@ -209,11 +209,12 @@ pub const fn shape(f: PushField) -> FieldShape {
         PushField::ZeroAddress | PushField::IndirectRange => FieldShape::U64,
         // The command of an indirect command buffer's execution, and its part's first.
         PushField::IndirectSequence | PushField::IndirectBase => FieldShape::U32,
-        // A texture's mipmap level count, an acceleration structure's instance count, the render
-        // encoder's viewport count, the render pass's array length, a kernel stage-in buffer's
-        // bound stride, a storage texture's integer channels' widths, a bicubic slot's format
-        // treatment.
+        // A texture's mipmap level count and its levels' first storage element, an acceleration
+        // structure's instance count, the render encoder's viewport count, the render pass's array
+        // length, a kernel stage-in buffer's bound stride, a storage texture's integer channels'
+        // widths, a bicubic slot's format treatment.
         PushField::TextureLevels(_)
+        | PushField::TextureLevelBase(_)
         | PushField::TextureIntegerChannels(_)
         | PushField::BicubicTexels(_)
         | PushField::InstanceCount(_)

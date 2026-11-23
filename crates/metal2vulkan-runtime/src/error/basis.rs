@@ -112,6 +112,7 @@ impl Limit {
             Limit::TextureSize { .. } => RefusalBasis::Device,
             Limit::DeviceSamplers { .. } => RefusalBasis::Device,
             Limit::LodClampVariants { .. } => RefusalBasis::Ours,
+            Limit::LevelElements { .. } => RefusalBasis::Ours,
             Limit::MemoryAllocations { .. } => RefusalBasis::Device,
             Limit::AllocationNotMapped { .. } => RefusalBasis::Ours,
             Limit::NoImport { .. } => RefusalBasis::Device,

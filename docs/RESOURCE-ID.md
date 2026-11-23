@@ -54,7 +54,13 @@ texel-buffer arrays of 65,536 elements each, every one partially bound, updated 
 while unused elements are pending, and seen by every stage. Shaders declare the arrays unsized, so
 a consumer's layout may hold more elements than these; the runtime's sampler arrays hold 8,000,
 the last 4,000 for sampler states bound with LOD clamps of their own, which no ID a program
-writes reaches. Element `i` of each image array is the
+writes reaches, and its storage-image array 131,072, the last 65,536 the level elements: 4,096
+runs of 16, each the single-level storage views of one texture's levels in order from its first,
+which a slot written or read at a level other than the constant 0 indexes. The slot pushes the
+run's first element (`PushField::TextureLevelBase`) beside the texture's level count
+(`PushField::TextureLevels`), and an access at level `l` takes element
+`first + min(l, max(count, 1) - 1)` only where `l < count`; a texture of one level pushes its own
+index, and nil 0 with count 0. No ID reaches a level element. Element `i` of each image array is the
 texture whose ID holds index `i`, and element `i` of each texel-buffer array the texture buffer
 whose ID holds it (a read texture buffer is a uniform texel buffer, a written one a storage texel
 buffer), so the consumer writes an element once, as it makes the texture, for every pipeline; a
