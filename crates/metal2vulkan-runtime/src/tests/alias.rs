@@ -12,11 +12,14 @@
 //! - A draw whose fragment writes P after a dispatch wrote Q: P moves through the pass's
 //!   interruption.
 //! - A heap whose two textures' bytes do not meet: no links, no check and no move.
+//! - Buffers whose bytes meet only buffers' take no part, and no command looks at them; a texture
+//!   placed over their bytes makes them take part, and its release makes them take none again.
 //!
 //! `llvm-as` assembles the kernels' libraries; without it the tests are skipped, visibly.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
+    use crate::buffer::BufferObject;
     use crate::tests::command::on_device::{each_device, finished};
     use crate::tests::draw::on_device::{library, pass, state};
     use crate::tests::heap_alias::on_device::{
@@ -325,6 +328,52 @@ mod on_device {
             drop((p, r, inputs, buffers, queue));
             (device.release_block(block)).unwrap_or_else(|error| panic!("{name}: {error}"));
             println!("heap checks: {name}: apart placements take no check or move");
+        });
+    }
+
+    /// Two buffers at offset 0 of one heap take no part: a buffer whose bytes meet only buffers'
+    /// is never moved and stales no texture, so its uses look at nothing. A texture placed over
+    /// their bytes makes both take part; once it is released they take none again, and the
+    /// device's count of placements that take part is back where it was.
+    #[test]
+    fn every_device_takes_no_part_for_heap_buffers_that_meet_only_buffers() {
+        each_device("alias_buffers", |name, _, device| {
+            let _grant = (device.grant_indices(IndexClass::Texture, FIRST, 4))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let (block, heap) = heap(name, &device);
+            let taking = || device.core().heap_ids.any_linked();
+            let was = taking();
+            let buffer = |offset| {
+                (device.new_heap_buffer(heap, offset, 4096))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"))
+            };
+            let [a, b] = [buffer(0), buffer(0)];
+            let part = |x: &Buffer| {
+                (BufferObject::object(x).placement())
+                    .expect("a heap buffer's placement")
+                    .linked()
+            };
+            assert!(
+                !part(&a) && !part(&b),
+                "{name}: buffers meeting buffers take no part"
+            );
+            assert_eq!(taking(), was, "{name}: no placement takes part");
+            let format = PixelFormat::RGBA16Float;
+            let t = place(name, &device, heap, (0, format, 64, 64), FIRST);
+            assert!(
+                part(&a) && part(&b),
+                "{name}: a texture over them makes them take part"
+            );
+            assert!(taking(), "{name}: placements take part");
+            drop(t);
+            assert!(
+                !part(&a) && !part(&b),
+                "{name}: the texture released, none again"
+            );
+            assert_eq!(taking(), was, "{name}: the count back where it was");
+            drop((a, b));
+            (device.release_block(block)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            println!("heap checks: {name}: buffers meeting only buffers take no part");
         });
     }
 }

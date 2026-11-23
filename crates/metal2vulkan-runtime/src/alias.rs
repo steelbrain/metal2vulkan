@@ -5,13 +5,16 @@
 //! needs the move, as a write through an alias leaves that state the alias's.
 //!
 //! Each resource placed in a heap is a [`Placement`], linked at placement with the others of its heap
-//! whose bytes meet its, both ways and weakly; a release drops its links. A heap with no meeting
-//! placements holds no links, and its resources' uses pay one test.
+//! whose bytes meet its, both ways and weakly; a release drops its links. A placement keeps its
+//! links to textures apart from its links to buffers: only a texture is ever moved, so a write
+//! makes only its texture links stale, and a buffer whose bytes meet no texture's takes part in
+//! nothing. A heap with no meeting placements holds no links, and its resources' uses pay one
+//! test.
 //!
-//! A use that writes a placement makes its links stale. A stale texture's next use that writes it
-//! moves its whole image from undefined to its home layout first, in a barrier that orders every
-//! earlier command before it and every later one after it. Reads move nothing. A buffer is never
-//! moved; its writes make its links stale.
+//! A use that writes a placement makes its texture links stale. A stale texture's next use that
+//! writes it moves its whole image from undefined to its home layout first, in a barrier that
+//! orders every earlier command before it and every later one after it. Reads move nothing. A
+//! buffer is never moved; its writes make its texture links stale.
 //!
 //! Inside a command buffer, encode order is the order its commands run in: [`Marks`] keeps what
 //! the command buffer did to the placements it touched, and a write of one that a link was
@@ -74,6 +77,40 @@ struct Link {
     stale: Arc<AtomicBool>,
 }
 
+/// A placement's links: to textures, which its writes make stale, and to buffers, which only a
+/// texture's checks look at (a read of one before the texture's move).
+#[derive(Default)]
+struct Links {
+    textures: Vec<Link>,
+    buffers: Vec<Link>,
+}
+
+impl Links {
+    fn push(&mut self, link: Link, texture: bool) {
+        match texture {
+            true => self.textures.push(link),
+            false => self.buffers.push(link),
+        }
+    }
+
+    fn all(&self) -> impl Iterator<Item = &Link> {
+        self.textures.iter().chain(&self.buffers)
+    }
+
+    /// Drops the links to `place`.
+    fn drop_to(&mut self, place: *const Placement) {
+        let other = |link: &Link| !std::ptr::eq(link.place.as_ptr(), place);
+        self.textures.retain(other);
+        self.buffers.retain(other);
+    }
+
+    /// Whether its placement, a texture where `texture`, takes part: a texture with any link,
+    /// a buffer with a link to a texture.
+    fn take_part(&self, texture: bool) -> bool {
+        !self.textures.is_empty() || (texture && !self.buffers.is_empty())
+    }
+}
+
 /// A resource's bytes in its heap: a heap texture's or a heap buffer's.
 pub(crate) struct Placement {
     heap: Arc<HeapId>,
@@ -83,8 +120,9 @@ pub(crate) struct Placement {
     /// A texture's image; `None` for a buffer.
     moved: Option<Moved>,
     /// The placements of its heap whose bytes meet its, changed under its heap's lock.
-    links: Mutex<Vec<Link>>,
-    /// It has links: the one test a placement with none pays, read without the lock.
+    links: Mutex<Links>,
+    /// It takes part ([`Links::take_part`]): the one test a placement that does not pays, read
+    /// without the lock.
     linked: AtomicBool,
     /// As the submit thread has staged the segments: a link was written since its own last write,
     /// or it was placed over another's bytes and is not yet written. A texture's alone is read.
@@ -106,10 +144,11 @@ impl Placement {
             start,
             end,
             moved,
-            links: Mutex::new(Vec::new()),
+            links: Mutex::new(Links::default()),
             linked: AtomicBool::new(false),
             stale: Arc::new(AtomicBool::new(false)),
         });
+        let texture = moved.is_some();
         let mut places = lock(heap.places());
         places.retain(|other| other.strong_count() > 0);
         // Held until the heap's lock is let go: the last handle of one dropped here would take it.
@@ -117,25 +156,29 @@ impl Placement {
             .filter_map(Weak::upgrade)
             .filter(|other| other.start < end && start < other.end)
             .collect();
-        let mut links = Vec::with_capacity(met.len());
+        let mut links = Links::default();
         for other in &met {
             let mut theirs = lock(&other.links);
-            theirs.push(Link {
+            let link = Link {
                 place: Arc::downgrade(&place),
                 stale: Arc::clone(&place.stale),
-            });
-            if !other.linked.swap(true, Relaxed) {
+            };
+            theirs.push(link, texture);
+            if theirs.take_part(other.moved.is_some()) && !other.linked.swap(true, Relaxed) {
                 heap.linked(true);
             }
-            links.push(Link {
+            let link = Link {
                 place: Arc::downgrade(other),
                 stale: Arc::clone(&other.stale),
-            });
+            };
+            links.push(link, other.moved.is_some());
         }
-        if !links.is_empty() {
-            place.stale.store(moved.is_some(), Relaxed);
-            place.linked.store(true, Relaxed);
-            heap.linked(true);
+        if !met.is_empty() {
+            place.stale.store(texture, Relaxed);
+            if links.take_part(texture) {
+                place.linked.store(true, Relaxed);
+                heap.linked(true);
+            }
             *lock(&place.links) = links;
         }
         places.push(Arc::downgrade(&place));
@@ -144,7 +187,8 @@ impl Placement {
         place
     }
 
-    /// Whether a placement of its heap meets its bytes.
+    /// Whether it takes part: a texture whose bytes another placement of its heap meets, or a
+    /// buffer whose bytes a texture's meet.
     pub(crate) fn linked(&self) -> bool {
         self.linked.load(Relaxed)
     }
@@ -168,7 +212,7 @@ impl Drop for Placement {
             places.retain(|other| other.strong_count() > 0);
             let links = self.links.get_mut().unwrap_or_else(PoisonError::into_inner);
             links
-                .iter()
+                .all()
                 .filter_map(|link| link.place.upgrade())
                 .collect()
         };
@@ -177,8 +221,8 @@ impl Drop for Placement {
         }
         for other in &met {
             let mut links = lock(&other.links);
-            links.retain(|link| !std::ptr::eq(link.place.as_ptr(), me));
-            let linked = !links.is_empty();
+            links.drop_to(me);
+            let linked = links.take_part(other.moved.is_some());
             if other.linked.swap(linked, Relaxed) && !linked {
                 self.heap.linked(false);
             }
@@ -186,8 +230,8 @@ impl Drop for Placement {
     }
 }
 
-/// Of the uses `uses` of resources, the ones of placements with links, with their accesses: the
-/// uses a command's marks and moves look at. Empty, and nothing allocated, where none has links.
+/// Of the uses `uses` of resources, the ones of placements that take part, with their accesses:
+/// the uses a command's marks and moves look at. Empty, and nothing allocated, where none does.
 pub(crate) fn uses<'a>(
     uses: impl Iterator<Item = (Option<&'a Arc<Placement>>, Access)>,
 ) -> Vec<(&'a Arc<Placement>, Access)> {
@@ -248,7 +292,7 @@ impl Marks {
         (uses.iter())
             .filter(|(place, access)| access.writes() && place.moved.is_some())
             .filter(|(place, _)| self.state(place) == State::Untouched)
-            .any(|(place, _)| lock(&place.links).iter().any(read_here))
+            .any(|(place, _)| lock(&place.links).all().any(read_here))
     }
 
     /// The command's uses `uses` in segment `segment` (from 0), whose part is `part`: the checks
@@ -282,7 +326,7 @@ impl Marks {
         for (place, access) in uses {
             if access.writes() && self.state(place) != State::Fresh {
                 self.mark(place.key(), || Arc::downgrade(place)).state = State::Fresh;
-                for link in lock(&place.links).iter() {
+                for link in lock(&place.links).textures.iter() {
                     let key = link.place.as_ptr() as usize;
                     self.mark(key, || link.place.clone()).state = State::Stale;
                 }
@@ -327,7 +371,7 @@ pub(crate) fn stage(
         .collect();
     for place in &part.writes {
         place.stale.store(false, Relaxed);
-        for link in lock(&place.links).iter() {
+        for link in lock(&place.links).textures.iter() {
             link.stale.store(true, Relaxed);
         }
     }
