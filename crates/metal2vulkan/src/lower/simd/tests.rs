@@ -64,12 +64,12 @@ fn in_fragment(g: GroupPlan) -> GroupPlan {
 /// `OpGroupNonUniformAll` (vote), a `Cluster32` one a ballot word; a `Direct` reduction or product
 /// is arithmetic, a `Cluster32` one clustered; a `Cluster32` prefix sum or product is ballot and
 /// shuffles; a rotate up is a shuffle; a quad broadcast or shuffle-xor by a constant is the quad
-/// class where the stage takes quad instructions and a shuffle elsewhere; a fragment's quad
-/// reduction, prefix sum, vote, first active lane's broadcast, ballot, active mask and `is_first`
-/// are the quad class.
+/// class where the stage takes quad instructions and a shuffle elsewhere; every fragment quad
+/// operation is the quad class, but a fill by a constant modulo whose segment is wider than the
+/// quad (8 lanes for a modulo of 8), a shuffle.
 #[test]
 fn operation_classes_follow_the_tier() {
-    let cases: [(GroupPlan, OpBits, OpBits); 30] = [
+    let cases: [(GroupPlan, OpBits, OpBits); 34] = [
         (
             plan(S::Simdgroup, G::Shuffle, F32, None),
             OpBits::SHUFFLE,
@@ -219,6 +219,26 @@ fn operation_classes_follow_the_tier() {
             in_fragment(plan(S::Quad, G::IsFirst, BOOL, None)),
             OpBits::QUAD,
             OpBits::QUAD,
+        ),
+        (
+            in_fragment(plan(S::Quad, G::Shuffle, F32, None)),
+            OpBits::QUAD,
+            OpBits::QUAD,
+        ),
+        (
+            in_fragment(plan(S::Quad, G::Broadcast, F32, Some(1))),
+            OpBits::QUAD,
+            OpBits::QUAD,
+        ),
+        (
+            in_fragment(plan(S::Quad, G::ShuffleAndFillDown, F32, Some(4))),
+            OpBits::QUAD,
+            OpBits::QUAD,
+        ),
+        (
+            in_fragment(plan(S::Quad, G::ShuffleAndFillUp, F32, Some(8))),
+            OpBits::SHUFFLE,
+            OpBits::SHUFFLE,
         ),
     ];
     for (g, d, c) in cases {

@@ -1542,12 +1542,12 @@ fn vertex_lane_reads_past_the_draw_name_no_inactive_lane() {
 
 /// A fragment function whose group operations read, combine, or count other lanes declares
 /// `RequireFullQuadsKHR` on every committed profile with `shaderQuadControl`, needs that feature,
-/// and reads every lane by a shuffle through the ballot of the live lanes (a quad may lack a
-/// lane), except a quad reduction, prefix scan or first lane's broadcast (`fragment_quad_scans`),
-/// whose quad broadcasts, four for each value it reads, follow its block's four quad votes; a
-/// profile without it (`moltenvk-m3`) whose stage has the classes refuses the function, needing
-/// the feature. A fragment that only reads its quad lane (`simd_masks`' `quad_lane_f`) declares no
-/// such mode and needs no such feature anywhere.
+/// reads every lane of its quad by quad broadcasts, four for each value it reads, that follow its
+/// block's four quad votes, and every other lane of its simdgroup (`fragment_simd_fills`) by a
+/// shuffle through the ballot of the live lanes (a simdgroup may lack a lane); a profile without it
+/// (`moltenvk-m3`) whose stage has the classes refuses the function, needing the feature. A
+/// fragment that only reads its quad lane (`simd_masks`' `quad_lane_f`) declares no such mode and
+/// needs no such feature anywhere.
 #[test]
 fn fragment_group_operations_run_full_quads() {
     use crate::error::{Capability, Unsupported};
@@ -1750,17 +1750,18 @@ fn fragment_quad_votes_are_quad_vote_instructions() {
     assert!(fragments > 0, "no committed profile has quad control");
 }
 
-/// A fragment's quad prefix sums and products, first active lane's broadcast, `quad_ballot` and
-/// `quad_active_threads_mask` read their quad through quad instructions alone, which Vulkan runs
-/// over the quad's helpers in every entry (section 9.31): on every committed profile with
-/// `shaderQuadControl`, `fragment_quad_scans` (a product and two prefix scans of one value and a
-/// first lane's broadcast of another, in one block) asks `OpGroupNonUniformQuadAnyKHR` 4 times,
-/// once for each quad lane, and reads 8 lanes by `OpGroupNonUniformQuadBroadcast`, each value's
-/// four, as the block's operations share them; `fragment_helper_threads` (two ballots and the
-/// active mask) votes 12 times and reads none; neither holds a ballot. A kernel's quad scans
-/// (`quad_float_scans`), whose quads hold no helpers, take no quad vote.
+/// A fragment's quad operations read their quad through quad instructions alone, which Vulkan
+/// runs over the quad's helpers in every entry (section 9.31), and the operations of one block
+/// share their votes and lanes: on every committed profile with `shaderQuadControl`,
+/// `fragment_quad_scans` (a product and two prefix scans of one value and a first lane's broadcast
+/// of another) asks `OpGroupNonUniformQuadAnyKHR` 4 times, once for each quad lane, and reads 8
+/// lanes by `OpGroupNonUniformQuadBroadcast`, each value's four; `fragment_helper_threads` (two
+/// ballots and the active mask) votes 12 times and reads none; `fragment_quad_fills` (four fills
+/// of one data value and one fill value) and `fragment_quad_fills_and_rotations` (two fills and two
+/// rotations of the same values) vote 4 times and read 8 lanes; none holds a ballot. A kernel's
+/// quad scans (`quad_float_scans`), whose quads hold no helpers, take no quad vote.
 #[test]
-fn fragment_quad_scans_and_masks_read_their_quads_by_quad_instructions() {
+fn fragment_quad_operations_read_their_quads_by_quad_instructions() {
     let (Some(quads), Some(helpers)) = (assemble("gsm2_quad_ops"), assemble("gsm2_helper_threads"))
     else {
         return;
@@ -1774,6 +1775,8 @@ fn fragment_quad_scans_and_masks_read_their_quads_by_quad_instructions() {
         for (bc, entry, votes, reads) in [
             (&quads, "fragment_quad_scans", 4, 8),
             (&helpers, "fragment_helper_threads", 12, 0),
+            (&quads, "fragment_quad_fills", 4, 8),
+            (&quads, "fragment_quad_fills_and_rotations", 4, 8),
         ] {
             let a = compile(bc, entry, &p).expect("compile");
             let (_, words) = link_and_validate(&a, &p).expect("valid");
