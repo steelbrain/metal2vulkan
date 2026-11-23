@@ -407,6 +407,9 @@ struct View {
     /// lists, but the device's image format query made the image without the storage usage for it
     /// ([`Plan`]'s `extended`): it has no storage element ([`StorageElementCase::Unextended`]).
     unextended: bool,
+    /// The view has a storage element through the storage usage its image took for the view's
+    /// format alone ([`Plan`]'s `extended`): the image holds no storage view of its own format.
+    extended: bool,
 }
 
 /// A texture view's image views, which the reaper frees once the view is gone.
@@ -4102,6 +4105,7 @@ impl Texture {
             && !plan.storage
             && image.view_formats.contains(&plan.format)
             && !image.surface();
+        let extended = plan.storage && image.storage.is_none();
         if !usable.contains(vk::ImageUsageFlags::SAMPLED) {
             plan.sampled = None;
         }
@@ -4224,6 +4228,7 @@ impl Texture {
                 reads,
                 views,
                 unextended,
+                extended,
             }),
             emulation: plan.emulation,
             attachments: Mutex::new(Vec::new()),
@@ -5173,6 +5178,13 @@ pub(crate) trait TextureObject {
         let written = (d.usage.is_empty() || d.usage.contains(TextureUsage::SHADER_WRITE))
             && !multisampled(d.texture_type);
         (written && !self.object().stores()).then_some(d.pixel_format)
+    }
+
+    /// Whether it is a view with a storage element through the storage usage its image took for
+    /// the view's format alone (`View`'s `extended`), which
+    /// [`Metrics::extended_view_dispatches`](crate::Metrics::extended_view_dispatches) counts.
+    fn extended_view(&self) -> bool {
+        (self.object().view.as_ref()).is_some_and(|view| view.extended)
     }
 
     /// Where it has a storage element the device cannot write without a format: a texture buffer

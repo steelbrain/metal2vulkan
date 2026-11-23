@@ -1382,7 +1382,8 @@ made, with no lock, and never rewritten for layouts.
   linear image too where the linear query makes it and the format's linear tiling holds the
   storage, else it stays in place plain. Its home is then the general layout, and its own
   format's views take the usage that format holds. So its view of the stored format has a storage
-  element; with no such image it has none (`StorageElementCase::Unextended`).
+  element, and `Metrics::extended_view_dispatches` counts the dispatches that write such a view at
+  a slot; with no such image it has none (`StorageElementCase::Unextended`).
 - The sampled element's view is the format's, through its component mapping with the
   descriptor's swizzle composed over it; a depth or stencil format's view takes its depth, else
   its stencil. The storage element is written where the usage has shader write and the device

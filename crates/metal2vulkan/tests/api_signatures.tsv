@@ -1429,6 +1429,7 @@ field	metal2vulkan-runtime::Metrics.export_claims	pub export_claims: Timed
 field	metal2vulkan-runtime::Metrics.export_handles	pub export_handles: Timed
 field	metal2vulkan-runtime::Metrics.export_makes	pub export_makes: Timed
 field	metal2vulkan-runtime::Metrics.exported_blocks_addressed	pub exported_blocks_addressed: u64
+field	metal2vulkan-runtime::Metrics.extended_view_dispatches	pub extended_view_dispatches: u64
 field	metal2vulkan-runtime::Metrics.external_acquires	pub external_acquires: u64
 field	metal2vulkan-runtime::Metrics.external_releases	pub external_releases: u64
 field	metal2vulkan-runtime::Metrics.failed_finishes	pub failed_finishes: u64

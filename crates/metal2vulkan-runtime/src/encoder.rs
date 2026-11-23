@@ -293,6 +293,10 @@ struct DispatchFacts {
     /// (`Ring::nil`), else 0, and the zero range's where the kernels check a load (`Ring::zero`),
     /// else 0, found with the alignments.
     nil: (u64, u64),
+    /// A texture slot the kernel writes is bound to a view through the storage usage its image
+    /// took for the view's format alone ([`TextureObject::extended_view`]), found with the
+    /// alignments.
+    extended: bool,
 }
 
 /// Which of its state's modules a dispatch runs.
@@ -1105,6 +1109,10 @@ impl ComputeCommandEncoder {
                     backing: gap.backing,
                 }));
             }
+            self.facts.extended = (interface.textures.iter()).any(|&(slot, access)| {
+                access.writes()
+                    && matches!(self.textures.get(slot as usize), Some(Some(t)) if t.extended_view())
+            });
             self.facts.aligned = true;
         }
         let core = &*self.core;
@@ -1326,6 +1334,9 @@ impl ComputeCommandEncoder {
                 true => Metric::PartialVariantRaggedGrids,
                 false => Metric::PartialVariantWholeGrids,
             });
+        }
+        if recorded.is_ok() && self.facts.extended {
+            recording(&mut self.building).count(Metric::ExtendedViewDispatches);
         }
         recorded
     }

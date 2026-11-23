@@ -231,6 +231,8 @@ pub(crate) enum Metric {
     PartialVariantWholeGrids,
     /// [`Metrics::partial_variant_ragged_grids`].
     PartialVariantRaggedGrids,
+    /// [`Metrics::extended_view_dispatches`].
+    ExtendedViewDispatches,
     /// [`Metrics::private_arena_pieces`].
     PrivateArenaPieces,
     /// [`Metrics::private_arena_blocks`].
@@ -324,6 +326,7 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::EmulatedSimdgroupDispatches,
     Metric::PartialVariantWholeGrids,
     Metric::PartialVariantRaggedGrids,
+    Metric::ExtendedViewDispatches,
     Metric::PrivateArenaPieces,
     Metric::PrivateArenaBlocks,
     Metric::Translations,
@@ -704,6 +707,7 @@ struct Atomics {
     emulated_simdgroup_dispatches: AtomicU64,
     partial_variant_whole_grids: AtomicU64,
     partial_variant_ragged_grids: AtomicU64,
+    extended_view_dispatches: AtomicU64,
     private_arena_pieces: AtomicU64,
     private_arena_blocks: AtomicU64,
     shared_long_reuses: AtomicU64,
@@ -908,6 +912,7 @@ impl Counters {
             Metric::EmulatedSimdgroupDispatches => &a.emulated_simdgroup_dispatches,
             Metric::PartialVariantWholeGrids => &a.partial_variant_whole_grids,
             Metric::PartialVariantRaggedGrids => &a.partial_variant_ragged_grids,
+            Metric::ExtendedViewDispatches => &a.extended_view_dispatches,
             Metric::PrivateArenaPieces => &a.private_arena_pieces,
             Metric::PrivateArenaBlocks => &a.private_arena_blocks,
             Metric::Translations => &a.translations,
@@ -1785,6 +1790,7 @@ impl Counters {
             emulated_simdgroup_dispatches: a.emulated_simdgroup_dispatches.load(Relaxed),
             partial_variant_whole_grids: a.partial_variant_whole_grids.load(Relaxed),
             partial_variant_ragged_grids: a.partial_variant_ragged_grids.load(Relaxed),
+            extended_view_dispatches: a.extended_view_dispatches.load(Relaxed),
             private_arena_pieces: a.private_arena_pieces.load(Relaxed),
             private_arena_blocks: a.private_arena_blocks.load(Relaxed),
             translations: a.translations.load(Relaxed),
@@ -2410,6 +2416,12 @@ pub struct Metrics {
     /// variant cannot take is refused, and counted nowhere. No Metal counterpart: Metal runs the
     /// grid on the one function it compiled.
     pub partial_variant_ragged_grids: u64,
+    /// Dispatches whose kernel writes, at one of its texture slots, a view through the storage
+    /// usage its texture's image took for that view's format alone: a texture made for shader
+    /// writes whose own format the device does not store, made with
+    /// `VK_IMAGE_CREATE_EXTENDED_USAGE_BIT` for a format it lists that the device stores (an 8-bit
+    /// sRGB texture's unorm view). No Metal counterpart: Metal writes any view of such a texture.
+    pub extended_view_dispatches: u64,
     /// Functions the translator lowered, each a module of a pipeline content the device did not
     /// hold compiled: of a compute content, one for its partial-threadgroups variant, one more for
     /// the plain module of an observing kernel whose state keeps one beside the variant, and one
