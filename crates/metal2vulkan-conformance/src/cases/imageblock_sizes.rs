@@ -8,7 +8,7 @@
 //! at a size other than the encoder's reads another extent and other neighbours. The first
 //! dispatch is Metal's answer for a size never set: 1 by 1.
 //!
-//! The output buffer is made holding [`GUARD`] and compared whole, the bytes past each dispatch's
+//! The output buffer is made holding `GUARD` and compared whole, the bytes past each dispatch's
 //! threads and the tail past the last slot included, so a dispatch that wrote more than its
 //! threadgroup's words shows. Every word is an integer or the bits of a small integral float, so
 //! every byte compares exactly. Nothing here can fault a GPU: one pass of three dispatches of one
