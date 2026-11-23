@@ -606,7 +606,6 @@ fn draws(
     let translated = &pipeline.interface;
     if translated.needs_pointer_translation
         || translated.needs_handle_translation
-        || translated.reaches_command_buffers
         || !pipeline.layout.sets.iter().all(of_the_device)
     {
         return Err(draw_input());

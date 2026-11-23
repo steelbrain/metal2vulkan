@@ -39,7 +39,8 @@
 //!     signed run-time index (`engine/icb_encoder_tail.ll`): a kernel's threads read and write
 //!     words there, the encoder's own bytes kept; a vertex function with rasterization disabled
 //!     rebinds each command's vertex and fragment buffer 0 from the addresses there, and the
-//!     commands draw as the same draws direct through those buffers.
+//!     commands, executed by a later render encoder of the draw's command buffer, draw as the
+//!     same draws direct through those buffers.
 //!   - a command's slots go unchecked on both sides: a vertex function that reads four elements
 //!     before its slot's address, inside the buffer, reads the buffer's bytes there, and one that
 //!     reads past the end of the buffer its command named reads the bytes past it, each drawing
@@ -1343,6 +1344,8 @@ mod on_device {
     /// the addresses past its encoder at entries `2 iid` and `2 iid + 1`, which a signed run-time
     /// index reads, over the commands `icb_indexed_16` encoded: command `i` then draws its
     /// triangles as the same draw direct with the scene's mark and tint of command `N - 1 - i`.
+    /// The draw and the execution are two render encoders of one command buffer: an execution
+    /// that read the commands as the kernel left them would draw command `i`'s own mark.
     #[test]
     fn every_device_binds_commands_from_the_words_past_an_encoder() {
         let Some(indexed) = library(&engine_dir().join("icb_merged_indexed.ll")) else {
@@ -1378,20 +1381,43 @@ mod on_device {
             d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA32Uint));
             d.rasterization_enabled = false;
             let producer = state(name, &device, &d);
-            drawn(name, &device, &producer, |e| {
-                ok(name, e.set_vertex_buffer(Some(&encoder), 0, 0));
-                ok(
-                    name,
-                    e.use_resource(
-                        Resource::IndirectCommandBuffer(&commands),
-                        ResourceUsage::WRITE,
-                    ),
-                );
-                ok(name, e.draw_primitives(PrimitiveType::Point, 0, 1, N, 0));
-            });
-            let executed = drawn(name, &device, &drawing, |e| {
-                ok(name, e.execute_commands_in_buffer(&commands, 0..N))
-            });
+            let unseen = target(
+                &device,
+                PixelFormat::RGBA32Uint,
+                TextureUsage::RENDER_TARGET,
+            );
+            let color = target(
+                &device,
+                PixelFormat::RGBA32Uint,
+                TextureUsage::RENDER_TARGET,
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut e = ok(
+                name,
+                command_buffer.render_command_encoder(&pass(&unseen, None)),
+            );
+            ok(name, e.set_render_pipeline_state(&producer));
+            ok(name, e.set_vertex_buffer(Some(&encoder), 0, 0));
+            ok(
+                name,
+                e.use_resource(
+                    Resource::IndirectCommandBuffer(&commands),
+                    ResourceUsage::WRITE,
+                ),
+            );
+            ok(name, e.draw_primitives(PrimitiveType::Point, 0, 1, N, 0));
+            e.end_encoding();
+            let mut e = ok(
+                name,
+                command_buffer.render_command_encoder(&pass(&color, None)),
+            );
+            ok(name, e.set_render_pipeline_state(&drawing));
+            e.set_cull_mode(CullMode::None);
+            ok(name, e.execute_commands_in_buffer(&commands, 0..N));
+            e.end_encoding();
+            run(name, &command_buffer);
+            let executed = read(&color, 16);
             let direct = drawn(name, &device, &drawing, |e| {
                 for i in 0..N {
                     let at = 4 * u64::from(picked(i));
@@ -1416,8 +1442,8 @@ mod on_device {
             let rows: Vec<u32> = (0..2 * N).map(|row| MARK + picked(row / 2)).collect();
             assert_eq!(marks(name, &executed), rows, "{name}");
             println!(
-                "{name}: {N} commands rebound from the addresses past an encoder draw as their \
-                 draws direct"
+                "{name}: {N} commands a draw rebound from the addresses past an encoder, executed \
+                 later in its command buffer, draw as their draws direct"
             );
         });
     }

@@ -4518,9 +4518,11 @@ cache is answered compile-required on both.
 `Device::new_indirect_command_buffer` (`newIndirectCommandBufferWithDescriptor:maxCommandCount:options:`)
 makes a buffer of indexed draw commands on a device that enables `VK_EXT_device_generated_commands`
 and `VK_KHR_maintenance5` (`floor::INDIRECT_COMMANDS`, in the Floor's extensions). The runtime builds
-the commands a kernel encodes: indexed triangle draws (`MTLIndirectCommandTypeDrawIndexed` alone)
-that inherit the executing encoder's pipeline state (`inheritPipelineState`) and bind their own
-vertex and fragment buffers (`inheritBuffers` false), at most 31 of each stage.
+the commands a kernel or a render pipeline state's function encodes: indexed triangle draws
+(`MTLIndirectCommandTypeDrawIndexed` alone) that inherit the executing encoder's pipeline state
+(`inheritPipelineState`) and bind their own vertex and fragment buffers (`inheritBuffers` false), at
+most 31 of each stage. What a draw writes into the commands, an execution in a later encoder of its
+command buffer reads: a render pass's end orders its writes before every later command.
 
 - Its records are a Private block in the layout `metal2vulkan::pipeline::IndirectDrawLayout` names:
   a 24-byte header (the capacity, the vertex and fragment slots a command holds, the stride, and
@@ -4528,7 +4530,7 @@ vertex and fragment buffers (`inheritBuffers` false), at most 31 of each stage.
   index buffer token's 16 bytes, 4 bytes for the sequence index and the indexed draw's 20 bytes
   (152 bytes for 7 vertex and 7 fragment slots, 536 at most). `gpu_resource_id` is the header's
   device address, which the consumer writes into an argument buffer's `command_buffer` member; a
-  kernel's `set_vertex_buffer`, `set_fragment_buffer`, `draw_indexed_primitives` and `reset` of a
+  function's `set_vertex_buffer`, `set_fragment_buffer`, `draw_indexed_primitives` and `reset` of a
   `render_command` write the command's fields through it, under the identity domains. `size` is
   the `maxCommandCount`.
 - A new buffer's commands are copies of the device's template of reset commands of its layout (up
@@ -4733,7 +4735,7 @@ vertex and fragment buffers (`inheritBuffers` false), at most 31 of each stage.
 - Commands draw with the executing encoder's render states whatever the descriptor's other
   `inherit*` properties say. Not built: commands the CPU encodes (`indirectRenderCommandAtIndex:`),
   `copyIndirectCommandBuffer:sourceRange:destination:destinationIndex:`, compute commands, and a
-  kernel's draws other than indexed triangles, which the translator refuses
+  function's draws other than indexed triangles, which the translator refuses
   (`Unsupported{GpuEncodedIndirectCommands, NotImplemented}`).
 
 ## Presenting
