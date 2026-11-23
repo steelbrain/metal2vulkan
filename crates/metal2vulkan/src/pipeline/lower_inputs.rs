@@ -393,8 +393,8 @@ pub struct LoweringInputs {
     /// its simdgroup operations run on the live lanes, Metal's partial simdgroup. Every lane read
     /// ballots its live lanes (`simd::partly_live`). It declares `MultiRegion` and reads the
     /// region whatever builtins it reads, and states `RuntimeFact::PartialThreadgroups`. A tile
-    /// function, a stage-input region, compute derivatives, an imageblock slice write every
-    /// invocation shares, emulated simdgroups (the input
+    /// function, compute derivatives, an imageblock slice write every invocation shares, emulated
+    /// simdgroups (the input
     /// `emulated_simdgroups` or a kernel whose lockstep order needs them), `flat_grid`,
     /// `folded_groups` and `replay_bindings` are `Unsupported{PartialThreadgroups,
     /// NotImplemented}`, and a body whose uniform barriers' vote word its workgroup memory cannot

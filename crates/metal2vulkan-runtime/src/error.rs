@@ -1977,8 +1977,8 @@ pub enum PartialThreadgroupsSite {
         max: u32,
     },
     /// The translator refused the variant for another of the kernel's structures: SIMD groups it
-    /// emulates, a stage-in region, compute derivatives, an imageblock slice write every
-    /// invocation shares, or another refusal of the variant's lowering or compile.
+    /// emulates, compute derivatives, an imageblock slice write every invocation shares, or
+    /// another refusal of the variant's lowering or compile.
     Translator,
     /// The threadgroup is not whole SIMD groups of the variant, whose tier runs only whole ones.
     SimdGroups {

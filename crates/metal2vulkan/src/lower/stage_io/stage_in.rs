@@ -22,6 +22,13 @@
 //!   0th thread), and so is a vertex or tessellation step in a compute layout
 //!   (`StageInFetch::of`): Metal's compute pipeline creation stops at an assertion for one.
 //!
+//! **A partial threadgroup** (`LoweringInputs::partial_threadgroups`, `lower::dispatch`'s partial
+//! threadgroups) adds nothing to the fetch. An invocation past its threadgroup's threads returns in
+//! `dispatch::emit_entry`, which runs before the fetch, or, where the body is walked predicated for
+//! its barriers, fetches and runs none of the body: its position in the threadgroup is `lin`
+//! unflattened over the threads left, so along x and y, the axes a step reads, it is a thread's of
+//! the grid, and its element is one Metal's thread there fetches too.
+//!
 //! **The stride** of a layout is its descriptor's, compiled in, whatever stride the encoder binds
 //! the buffer with: Metal reads a bound stride only for a layout of
 //! `MTLBufferLayoutStrideDynamic` (an M4 read a fixed 16 under a bound 8).

@@ -1254,8 +1254,8 @@ push constants, and each distinct specialization is one `VkPipeline`. A kernel's
 partial-threadgroups variant (`LoweringInputs::partial_threadgroups`) runs a grid that is not
 whole threadgroups as the threadgroups its threads fill at the dispatch's threadgroup size, the
 last along an axis Metal's partial threadgroup, so every remainder takes the same `VkPipeline`; a
-kernel the variant cannot run exactly (a tile function, a stage-input region, compute
-derivatives, emulated simdgroups) is refused it, `Unsupported{PartialThreadgroups,
+kernel the variant cannot run exactly (a tile function, compute derivatives, emulated
+simdgroups) is refused it, `Unsupported{PartialThreadgroups,
 NotImplemented}`. On the identity domains the variant of a kernel that does not observe its
 threadgroup partition (`KernelFacts::partition_oblivious`) runs its grid in tiles instead
 (`RuntimeFact::GridTiles`): a direct dispatch's threads run in `pipeline::grid_tile`'s tiles, one
