@@ -605,6 +605,17 @@ fn the_version_327_members_round_trip() {
     assert_eq!(decode::<VkExtension>(&encode(&extension)), Ok(extension));
 }
 
+/// The member format version 593 appends encodes and decodes as itself: a deep kernel's workgroup
+/// size on one axis.
+#[test]
+fn the_version_593_member_round_trips() {
+    use crate::pipeline::sym::{Axis, SpecKey};
+    for axis in [Axis::X, Axis::Y, Axis::Z] {
+        let key = SpecKey::WorkgroupSize(axis);
+        assert_eq!(decode::<SpecKey>(&encode(&key)), Ok(key));
+    }
+}
+
 /// The members format version 234 appends encode and decode, each as itself: the object function's
 /// specialization keys and the task stage's and the payload's limits.
 #[test]
