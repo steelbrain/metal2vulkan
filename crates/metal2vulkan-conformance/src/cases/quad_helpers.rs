@@ -34,10 +34,11 @@
 //! quad the draw covers no pixel of, so its ballot of the helper query counts 5 lanes where Metal's
 //! counts 1, its active mask 8 where Metal's counts 4, and its reductions take in those lanes'
 //! words. The case declares that difference under `fragment-simdgroup-grouping` at the elements
-//! such lanes can move and nowhere else (`grouping_elements`): each covered pixel's three
-//! reductions in `qs_arith` and `qs_bits`, and its two counts in `qs_votes`. The vote, the `dfdx`
-//! channel and every texel the draw leaves at the clear value compare exactly on every device, so a
-//! device whose simdgroup leaves the helper out still differs: its vote reads 2.
+//! such lanes can move and nowhere else (`grouping_elements`): at each covered pixel, the three
+//! reductions of `qs_arith`, the OR and XOR of `qs_bits` (the quad's AND is 0 already) and the two
+//! counts of `qs_votes`. The vote, the AND, the `dfdx` channel and every texel the draw leaves at
+//! the clear value compare exactly on every device, so a device whose simdgroup leaves the helper
+//! out still differs: its vote reads 2.
 //!
 //! **What Metal defines.** An active thread is a thread that is executing, the simdgroup and quad
 //! functions act on the active threads, and a helper thread is active until it has computed its
@@ -217,14 +218,16 @@ fn covered(pass: &Pass) -> Vec<(u32, u32)> {
 
 /// The byte offsets in a pass's texels of the elements a fragment subgroup wider than the drawn
 /// quad plus its helpers can move, where its other lanes are lanes of its own, helpers of a quad
-/// the draw covers no pixel of: at each covered pixel of a simdgroup pass, the three reductions
-/// of `qs_arith` and `qs_bits`, which take in those lanes' words, and the two counts of
-/// `qs_votes`, which count them. The vote does not move (another helper leaves "any lane a helper"
-/// true and "no lane one" false), nor `dfdx` (the answers are one value over the quad), nor a
-/// texel the draw leaves at the clear value. None for a quad pass.
+/// the draw covers no pixel of: at each covered pixel of a simdgroup pass, the sum, minimum and
+/// maximum of `qs_arith` and the OR and XOR of `qs_bits`, which take in those lanes' words, and
+/// the two counts of `qs_votes`, which count them. The AND of `qs_bits` does not move (the
+/// quad's four words share no bit, so no other lane's word clears one), nor the vote (another
+/// helper leaves "any lane a helper" true and "no lane one" false), nor `dfdx` (the answers are
+/// one value over the quad), nor a texel the draw leaves at the clear value. None for a quad pass.
 fn grouping_elements(pass: &Pass) -> Vec<usize> {
     let channels: &[u32] = match pass.fragment {
-        "qs_arith" | "qs_bits" => &[0, 1, 2],
+        "qs_arith" => &[0, 1, 2],
+        "qs_bits" => &[1, 2],
         "qs_votes" => &[1, 2],
         _ => &[],
     };
