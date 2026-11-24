@@ -4010,9 +4010,9 @@ impl TextureInner {
         self.imaged().usage
     }
 
-    /// For the device tests: the formats its image lists for views of another format, empty where
-    /// it is not mutable.
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    /// For the Direct3D 11 device tests: the formats its image lists for views of another format,
+    /// empty where it is not mutable.
+    #[cfg(all(test, windows, m2v_gpu))]
     pub(crate) fn image_view_formats(&self) -> &[vk::Format] {
         &self.imaged().view_formats
     }
