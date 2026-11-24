@@ -5122,4 +5122,33 @@ pub(crate) mod on_device {
             drop((first, second, third, one, two, arena, device));
         });
     }
+
+    /// A thread that waits for a command buffer not yet enqueued or committed wakes as its status
+    /// changes: its enqueue and commit find the waiter and wake it, and the wait returns once the
+    /// command buffer completed, its write done.
+    #[test]
+    fn every_device_wakes_a_wait_begun_before_the_commit() {
+        each_device("command_wait_before_commit", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let written = arena.buffer();
+            let queue = queue(&device);
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            fill(&command_buffer, &written, 7);
+            thread::scope(|scope| {
+                let waiter = scope.spawn(|| command_buffer.wait_until_completed());
+                within(name, || command_buffer.waiters() == 1);
+                command_buffer.commit().expect("a commit");
+                (waiter.join().expect("the waiter")).expect("the wait");
+            });
+            assert_eq!(
+                command_buffer.status(),
+                CommandBufferStatus::Completed,
+                "{name}"
+            );
+            assert_eq!(command_buffer.waiters(), 0, "{name}: the wait left");
+            assert_eq!(word(&written), 7, "{name}: the write done");
+            drop((command_buffer, queue));
+            drop((written, arena, device));
+        });
+    }
 }

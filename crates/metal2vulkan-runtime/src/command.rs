@@ -179,6 +179,9 @@ struct CbState {
     encoding: bool,
     /// From its commit until it retires: its pair of timestamp queries, where it took one.
     stamps: Option<Pair>,
+    /// The threads waiting on `changed` ([`CommandBuffer::wait`]): its enqueue and commit wake
+    /// them only where one waits, each wake a system call whether or not one does.
+    waiters: usize,
 }
 
 impl CbState {
@@ -453,6 +456,7 @@ impl CommandBuffer {
                     times: Times::default(),
                     encoding: false,
                     stamps: None,
+                    waiters: 0,
                 }),
                 changed: Condvar::new(),
             }),
@@ -646,7 +650,9 @@ impl CommandBuffer {
         if state.status == CommandBufferStatus::NotEnqueued {
             work.enqueue(&self.inner);
             state.status = CommandBufferStatus::Enqueued;
-            self.inner.changed.notify_all();
+            if state.waiters > 0 {
+                self.inner.changed.notify_all();
+            }
         }
         Ok(())
     }
@@ -731,7 +737,9 @@ impl CommandBuffer {
             timed: stamps.is_some(),
         };
         state.status = CommandBufferStatus::Committed;
-        self.inner.changed.notify_all();
+        if state.waiters > 0 {
+            self.inner.changed.notify_all();
+        }
         let ended = state.ended;
         drop(state);
         // Where it is the last handle, the device ends below, once no lock is held.
@@ -843,11 +851,18 @@ impl CommandBuffer {
         self.inner.queue.is(queue)
     }
 
-    fn wait<'a>(&self, state: MutexGuard<'a, CbState>) -> MutexGuard<'a, CbState> {
-        self.inner
-            .changed
-            .wait(state)
-            .unwrap_or_else(PoisonError::into_inner)
+    /// Waits for a change of `state`, counted among its waiters while it waits.
+    fn wait<'a>(&self, mut state: MutexGuard<'a, CbState>) -> MutexGuard<'a, CbState> {
+        state.waiters += 1;
+        let mut state = (self.inner.changed.wait(state)).unwrap_or_else(PoisonError::into_inner);
+        state.waiters -= 1;
+        state
+    }
+
+    /// For the device tests: the threads waiting on its status.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn waiters(&self) -> usize {
+        self.state().waiters
     }
 
     /// `status`.
