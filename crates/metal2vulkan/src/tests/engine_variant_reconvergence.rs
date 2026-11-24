@@ -24,6 +24,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::cache::VariantKey;
+use crate::device::profile::DeviceProfile;
 use crate::lower::select::LowerInputs;
 use crate::pipeline::artifact::{PrecisionNote, Reconvergence};
 use crate::pipeline::sym::Stage;
@@ -166,7 +167,7 @@ fn a_flat_grid_s_shuffle_after_a_merge_takes_the_profile_s_mode() {
     key.flat_grid = true;
     key.call_threadgroups = true;
     let flat = key.lowering_inputs(Stage::Kernel);
-    let reading = |inputs: &LowerInputs, stem: &str, p| {
+    let reading = |inputs: &LowerInputs, stem: &str, p: &DeviceProfile| {
         let a = compile_with(&bc, "k", p, inputs).ok()?;
         let (_, words) = link_and_validate(&a, p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
         let text = spirv_dis(&words);
