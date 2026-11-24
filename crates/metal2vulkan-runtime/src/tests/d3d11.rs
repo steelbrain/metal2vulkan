@@ -25,6 +25,17 @@
 //! list no format past their own, their texture's and that one's sRGB sibling (the 10-bit luma's
 //! image not mutable), and a swizzled view in a third format of their class (`R8Uint`, `RG8Uint`,
 //! `R16Uint`) is `Gap::TextureView` of `SurfacePixelFormat`.
+//!
+//! Under `m2v_gpu`, on every device, the real-size pictures' planes (`real_size.rs`): luma
+//! `R16_UNORM` at 3840x2160 with chroma `R32_UINT` at 1920x1080 (which rt views as `RG16Unorm`),
+//! and luma `R8_UNORM` with chroma `R16_UINT` (`RG8Unorm`), made as above, each imported with an
+//! index. Direct3D 11 draws each plane's complement and then its words; then rt samples every
+//! texel, reads it through `read()`, copies it out and samples it again, Direct3D 11 reads it
+//! back through a staging copy, and rt samples it a third time, each read printed with its count
+//! of wrong texels; then Direct3D 11 draws the complement, and rt's next sample reads it. Two
+//! images over the same textures in the form the import made before its images took their
+//! textures' bind flags (one with storage usage, one with the long format list) are each sampled
+//! after a fresh draw and printed, not asserted.
 
 #[cfg(all(windows, any(m2v_gpu, m2v_cpu_icd)))]
 mod on_device {
@@ -227,7 +238,7 @@ mod on_device {
         }
 
         /// The device's LUID (`VkPhysicalDeviceIDProperties`), where it is valid.
-        fn luid(device: &Device) -> Option<[u8; 8]> {
+        pub(super) fn luid(device: &Device) -> Option<[u8; 8]> {
             let raw = device.raw();
             let mut id = vk::PhysicalDeviceIDProperties::default();
             let mut properties = vk::PhysicalDeviceProperties2::default().push_next(&mut id);
@@ -967,6 +978,334 @@ mod on_device {
         }
     }
 
+    /// The real-size pictures' planes (`PICTURES` of `real_size.rs`) as Direct3D 11 makes them:
+    /// shared textures of default usage, render target and shader resource, shared by NT handle,
+    /// written by a Direct3D 11 draw through a render target view in the texture's own format,
+    /// then imported by rt and read, every texel compared. Beside the import, two images of the
+    /// form the import made before its images took their textures' bind flags, each over the same
+    /// textures, sampled and printed, not compared to a bar.
+    #[cfg(m2v_gpu)]
+    mod real_size {
+        use super::d3d::{self, D3d, SharedTexture};
+        use super::picture::luid;
+        use super::{RENDER_TARGET, SHADER_RESOURCE};
+        use crate::d3d11::import_query;
+        use crate::hazard::HeapId;
+        use crate::tests::command::on_device::each_device;
+        use crate::tests::real_size::on_device::{
+            copy_out, differs, library, read, sampled, Cells, Plane, Readers, PICTURES,
+        };
+        use crate::texture::TextureObject;
+        use crate::{D3d11Plane, Device, IndexClass, PixelFormat, TextureDescriptor, TextureType};
+        use ash::vk;
+        use std::os::windows::io::AsHandle;
+
+        /// The planes' bind flags, as the consumer makes them.
+        const BIND: u32 = SHADER_RESOURCE | RENDER_TARGET;
+
+        /// The DXGI format of a plane's image.
+        fn dxgi(plane: &Plane) -> u32 {
+            match plane.image {
+                PixelFormat::R16Unorm => d3d::DXGI_FORMAT_R16_UNORM,
+                PixelFormat::R32Uint => d3d::DXGI_FORMAT_R32_UINT,
+                PixelFormat::R8Unorm => d3d::DXGI_FORMAT_R8_UNORM,
+                PixelFormat::R16Uint => d3d::DXGI_FORMAT_R16_UINT,
+                other => panic!("no plane of {other:?}"),
+            }
+        }
+
+        /// The pixel shader that draws `plane`'s words (`Plane::word`), complemented where
+        /// `complemented`: a normalized image's as the word over its maximum, which its format
+        /// stores as the word, and an integer image's as the word.
+        fn pixel_shader(plane: &Plane, complemented: bool) -> String {
+            let mask = plane.mask();
+            let flip = if complemented { mask } else { 0 };
+            let hash = "uint hash(uint x, uint y) {
+    uint v = (x * 0x9e3779b1u) ^ (y * 0x85ebca77u);
+    v ^= v >> 15;
+    v *= 0x2c1b3c6du;
+    return v ^ (v >> 12);
+}
+";
+            let word = format!("((hash(q.x, q.y) & {mask}u) ^ {flip}u)");
+            let main = match plane.image {
+                PixelFormat::R16Unorm | PixelFormat::R8Unorm => format!(
+                    "float main(float4 p : SV_Position) : SV_Target {{
+    uint2 q = uint2(p.xy);
+    return float({word}) / {mask}.0;
+}}"
+                ),
+                _ => format!(
+                    "uint main(float4 p : SV_Position) : SV_Target {{
+    uint2 q = uint2(p.xy);
+    return {word};
+}}"
+                ),
+            };
+            format!("{hash}{main}")
+        }
+
+        /// Direct3D 11 draws each plane's words, complemented where `complemented`, and waits.
+        fn draw(d3d: &D3d, textures: &[SharedTexture; 2], planes: &[Plane; 2], complemented: bool) {
+            for (texture, plane) in textures.iter().zip(planes) {
+                let [width, height] = plane.size;
+                d3d.draw(texture, (width, height), &pixel_shader(plane, complemented));
+            }
+            d3d.finish();
+        }
+
+        /// The image usage and format list the import gave a plane before its images took their
+        /// textures' bind flags (development at 3073230664), recomputed: sampled, rendered,
+        /// copied from and into, and storage, with the descriptor's own usage, each where the
+        /// view's format's optimal tiling holds it and the import query takes it with the image's
+        /// and the view's formats; the feedback usage where the plane asks it and the query takes
+        /// it; and the list of the image's format, the view's and every format the descriptor's
+        /// texture views as, where it is longer than the pair and the query takes it with that
+        /// usage, else the pair where the two formats differ, else none.
+        fn old_form(
+            device: &Device,
+            plane: &D3d11Plane<'_>,
+        ) -> (vk::ImageUsageFlags, Vec<vk::Format>) {
+            let core = device.core();
+            let d = &plane.descriptor;
+            let plan = device.plane_plan(d).expect("the plane's plan");
+            let mut own = *d;
+            own.pixel_format = plane.image_format;
+            let format = device.plane_plan(&own).expect("the image's plan").format;
+            let view = plan.format;
+            let pair = match format == view {
+                true => Vec::new(),
+                false => vec![format, view],
+            };
+            let (_, held) = core.format_features(view);
+            let holds = |bit: vk::ImageUsageFlags| {
+                let feature = match bit {
+                    vk::ImageUsageFlags::SAMPLED => vk::FormatFeatureFlags2::SAMPLED_IMAGE,
+                    vk::ImageUsageFlags::COLOR_ATTACHMENT => {
+                        vk::FormatFeatureFlags2::COLOR_ATTACHMENT
+                    }
+                    vk::ImageUsageFlags::TRANSFER_SRC => vk::FormatFeatureFlags2::TRANSFER_SRC,
+                    vk::ImageUsageFlags::TRANSFER_DST => vk::FormatFeatureFlags2::TRANSFER_DST,
+                    vk::ImageUsageFlags::STORAGE => vk::FormatFeatureFlags2::STORAGE_IMAGE,
+                    _ => return false,
+                };
+                held.contains(feature)
+            };
+            let imports = |usage: vk::ImageUsageFlags, list: &[vk::Format]| {
+                (import_query(core, format, usage, list)).is_ok_and(|features| {
+                    features.contains(vk::ExternalMemoryFeatureFlags::IMPORTABLE)
+                })
+            };
+            let wanted = vk::ImageUsageFlags::SAMPLED
+                | vk::ImageUsageFlags::COLOR_ATTACHMENT
+                | vk::ImageUsageFlags::TRANSFER_SRC
+                | vk::ImageUsageFlags::TRANSFER_DST
+                | vk::ImageUsageFlags::STORAGE
+                | plan.usage;
+            let usage = (0..32)
+                .map(|bit| vk::ImageUsageFlags::from_raw(1u32 << bit))
+                .filter(|&bit| wanted.contains(bit) && holds(bit) && imports(bit, &pair))
+                .fold(vk::ImageUsageFlags::empty(), |all, bit| all | bit);
+            let looped = usage | vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT;
+            let usage = match plan.looped && imports(looped, &pair) {
+                true => looped,
+                false => usage,
+            };
+            let mut full = vec![format];
+            for &listed in [view].iter().chain(&plan.view_formats) {
+                if !full.contains(&listed) {
+                    full.push(listed);
+                }
+            }
+            if full.len() == 1 {
+                full.clear();
+            }
+            let list = match full.len() > pair.len() && imports(usage, &full) {
+                true => full,
+                false => pair,
+            };
+            (usage, list)
+        }
+
+        /// The planes of `textures`, as the consumer imports them, at the indices from `at`.
+        fn imported<'a>(
+            textures: &'a [SharedTexture; 2],
+            planes: &[Plane; 2],
+            at: u32,
+        ) -> Vec<D3d11Plane<'a>> {
+            (textures.iter().zip(planes).zip(at..))
+                .map(|((texture, plane), index)| D3d11Plane {
+                    handle: texture.handle.as_handle(),
+                    image_format: plane.image,
+                    bind_flags: BIND,
+                    descriptor: TextureDescriptor::new(
+                        TextureType::Type2D,
+                        plane.view,
+                        plane.size[0],
+                        plane.size[1],
+                    ),
+                    index: Some(index),
+                })
+                .collect()
+        }
+
+        /// The formats of a list, raw.
+        fn raw(list: &[vk::Format]) -> Vec<i32> {
+            list.iter().map(|format| format.as_raw()).collect()
+        }
+
+        /// Each picture's two planes made by Direct3D 11 and imported by rt (the product's form),
+        /// drawn by Direct3D 11, first their complement and then their words; then, each read
+        /// printed as it reads: rt samples each, reads each through `read()`, copies each out,
+        /// samples each again; Direct3D 11 reads each back through a staging copy; rt samples each
+        /// a third time; then Direct3D 11 draws the complement, and rt's sample reads it. Every
+        /// one of these is compared, and the test fails on any texel wrong.
+        ///
+        /// Then two images of the old form over each of the same textures, each after Direct3D
+        /// 11 drew the complement and the words again, so each image's first read follows a
+        /// draw: OLD-A, the import's usage with storage where the old form took it, and the
+        /// import's list; OLD-B, the import's usage with the old form's list. Each is sampled
+        /// once, every texel, and printed, not compared to a bar: on a driver where the old form
+        /// reads wrong and the import right, the line that differs names the half that does. The
+        /// old images are only read while they live, never written, as the hazard sets do not
+        /// know they alias the import.
+        #[test]
+        fn every_device_reads_real_size_direct3d_11_planes_every_texel() {
+            let Some(library) = library() else {
+                return;
+            };
+            each_device("real_size_d3d11", |name, _, device| {
+                let luid = luid(&device).unwrap_or_else(|| panic!("{name}: no valid LUID"));
+                let d3d = D3d::on_luid(luid)
+                    .unwrap_or_else(|| panic!("{name}: no DXGI adapter of LUID {luid:02x?}"));
+                let readers = Readers::new(name, &device, &library);
+                let first = IndexClass::Texture.range().start;
+                (device.grant_indices(IndexClass::Texture, first, 4))
+                    .unwrap_or_else(|error| panic!("{name}: a texture grant: {error}"));
+                let queue = device.new_command_queue(4).expect("a queue");
+                let on = (&device, &queue);
+                let mut cells = Cells::new(name);
+                for planes in &PICTURES {
+                    let textures = planes
+                        .each_ref()
+                        .map(|plane| d3d.shared_texture(plane.size[0], plane.size[1], dxgi(plane)));
+                    let surface = (device
+                        .import_d3d11_surface(&imported(&textures, planes, first)))
+                    .unwrap_or_else(|error| panic!("{name}: the import: {error}"));
+                    draw(&d3d, &textures, planes, true);
+                    draw(&d3d, &textures, planes, false);
+                    surface.external_writes_done().expect("the acquire");
+                    let wants = planes
+                        .each_ref()
+                        .map(|plane| (plane.words(false, 4), plane.words(false, plane.texel)));
+                    let cell = |plane: &Plane, how: &str| {
+                        format!("Direct3D 11 {}, drawn by Direct3D 11: {how}", plane.what)
+                    };
+                    let sample = |cells: &mut Cells, how: &str| {
+                        for ((texture, plane), (words, _)) in
+                            (surface.planes().iter().zip(planes)).zip(&wants)
+                        {
+                            let at = (texture, plane.size);
+                            let got = sampled(name, on, &readers, at, &plane.pack(), words);
+                            cells.check(&cell(plane, how), got, words, (4, plane.size[0]));
+                        }
+                    };
+                    sample(&mut cells, "rt sampled, first");
+                    for ((texture, plane), (words, _)) in
+                        (surface.planes().iter().zip(planes)).zip(&wants)
+                    {
+                        let at = (texture, plane.size);
+                        let got = read(name, on, &readers, at, &plane.pack(), words);
+                        cells.check(&cell(plane, "rt read()"), got, words, (4, plane.size[0]));
+                    }
+                    for ((texture, plane), (_, image)) in
+                        (surface.planes().iter().zip(planes)).zip(&wants)
+                    {
+                        let got = copy_out(name, on, (texture, plane.size), plane.texel, image);
+                        let texel = (plane.texel as usize, plane.size[0]);
+                        cells.check(&cell(plane, "rt copied out"), got, image, texel);
+                    }
+                    sample(&mut cells, "rt sampled, second");
+                    for ((texture, plane), (_, image)) in (textures.iter().zip(planes)).zip(&wants)
+                    {
+                        let [width, height] = plane.size;
+                        let row = width * plane.texel;
+                        let got = d3d.read(texture, width, height, dxgi(plane), row);
+                        let texel = (plane.texel as usize, width);
+                        cells.check(&cell(plane, "Direct3D 11 read back"), Ok(got), image, texel);
+                    }
+                    sample(&mut cells, "rt sampled, third");
+                    // Direct3D 11's next draw, the complement, is what rt samples next.
+                    draw(&d3d, &textures, planes, true);
+                    surface.external_writes_done().expect("the acquire");
+                    for (texture, plane) in surface.planes().iter().zip(planes) {
+                        let words = plane.words(true, 4);
+                        let at = (texture, plane.size);
+                        let got = sampled(name, on, &readers, at, &plane.pack(), &words);
+                        let how = "rt sampled after Direct3D 11 drew the complement";
+                        cells.check(&cell(plane, how), got, &words, (4, plane.size[0]));
+                    }
+
+                    // The old form's two halves, each over the same textures, at the two indices
+                    // past the import's.
+                    let ours = imported(&textures, planes, first + 2);
+                    let forms: Vec<_> = (surface.planes().iter().zip(&ours))
+                        .map(|(texture, plane)| {
+                            let object = texture.object();
+                            let new = (object.image_usage(), object.image_view_formats().to_vec());
+                            (new, old_form(&device, plane))
+                        })
+                        .collect();
+                    for half in ["OLD-A", "OLD-B"] {
+                        draw(&d3d, &textures, planes, true);
+                        draw(&d3d, &textures, planes, false);
+                        surface.external_writes_done().expect("the acquire");
+                        for ((plane, ours), ((new_usage, new_list), (old_usage, old_list))) in
+                            (planes.iter().zip(&ours)).zip(&forms)
+                        {
+                            let (usage, list) = match half {
+                                "OLD-A" => (
+                                    *new_usage | (*old_usage & vk::ImageUsageFlags::STORAGE),
+                                    new_list,
+                                ),
+                                _ => (*new_usage, old_list),
+                            };
+                            let what = format!(
+                                "Direct3D 11 {}, drawn by Direct3D 11: {half} (usage {:#x}, list {:?}; \
+                                 the import's usage {:#x}, list {:?}): rt sampled first, PRINTED, \
+                                 not asserted",
+                                plane.what,
+                                usage.as_raw(),
+                                raw(list),
+                                new_usage.as_raw(),
+                                raw(new_list),
+                            );
+                            let unit = HeapId::unit(device.core());
+                            let made = device.d3d11_plane_texture(ours, usage, list.clone(), unit);
+                            let line = match made {
+                                Err(error) => format!("not made: {error} ({error:?})"),
+                                Ok(texture) => {
+                                    let words = plane.words(false, 4);
+                                    let at = (&texture, plane.size);
+                                    match sampled(name, on, &readers, at, &plane.pack(), &words) {
+                                        Err(why) => format!("REFUSED: {why}"),
+                                        Ok(got) => match differs(&got, &words, 4, plane.size[0]) {
+                                            None => "exact".to_owned(),
+                                            Some(how) => format!("WRONG: {how}"),
+                                        },
+                                    }
+                                }
+                            };
+                            println!("real-size: {name}: {what}: {line}");
+                        }
+                    }
+                    drop(surface);
+                }
+                cells.all_exact();
+            });
+        }
+    }
+
     /// Direct3D 11 and DXGI, bound by hand: the calls the test makes, at their vtable slots in
     /// the Windows SDK's `d3d11.h`, `dxgi.h`, `dxgi1_2.h` and `d3dcommon.h` (`ID3DBlob`), and
     /// `D3DCompile` (`d3dcompiler.h`), loaded from `d3dcompiler_47.dll`.
@@ -976,6 +1315,7 @@ mod on_device {
         use std::os::windows::io::{FromRawHandle, OwnedHandle, RawHandle};
         use std::time::{Duration, Instant};
 
+        pub(super) const DXGI_FORMAT_R32_UINT: u32 = 42;
         pub(super) const DXGI_FORMAT_R16_UNORM: u32 = 56;
         pub(super) const DXGI_FORMAT_R16_UINT: u32 = 57;
         pub(super) const DXGI_FORMAT_R8_UNORM: u32 = 61;
