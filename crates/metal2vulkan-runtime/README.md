@@ -5048,7 +5048,9 @@ The test `tests::one_path` reads the crate's sources and fails on the first thre
 ## Encoder calls
 
 An encoder call executes no locked instruction on its success path: no atomic read-modify-write,
-no mutex and no reference count change. Each encoder holds the device once; a command borrows it,
+no mutex and no reference count change. The one exception is a fence: the first time a command
+buffer's encoders update or wait on a fence, the command buffer keeps it, which is one reference
+count change. Each encoder holds the device once; a command borrows it,
 the pipeline state and the bound resources, and counts into the encoder's own tally, which the
 device's counters take once, at the encoder's end. What a draw or a dispatch learns from its
 bindings (the vertex buffers it binds, the alignments it checks, whether it reads an attachment,
