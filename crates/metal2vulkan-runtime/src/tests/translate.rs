@@ -2576,8 +2576,18 @@ attributes #1 = { convergent nounwind willreturn }
     /// reads the stage-in region or takes a private arena, its storage reads, formatless slots and
     /// unbound accesses, its threadgroup arguments, SIMD-group multiples and subgroup size, and the
     /// buffer alignments it takes. So a ragged grid, which runs the variant, finds what the
-    /// state's plain module answers. Prints how many kernels it
-    /// compared, and each one it could not, with why.
+    /// state's plain module answers.
+    ///
+    /// One exception: on a device without maximal reconvergence, the variant may carry
+    /// [`PrecisionNote::DeviceReconvergence`] where the plain module does not. The variant's
+    /// invocations past the grid return before the body, and SPIR-V states reconvergence over all
+    /// invocations, returned ones included (SPIR-V 1.6 section 2.2.5, "Dynamic Instance":
+    /// "Invocations may only resume executing the same dynamic instances when all invocations
+    /// reach the same static instruction"). Only `MaximallyReconvergesKHR` lets an invocation
+    /// that returned escape reconvergence, so without it the variant's tangled instructions
+    /// reconverge as the device does, even where the plain module's are reached together. With
+    /// maximal reconvergence the notes are equal too. Prints how many kernels it compared, how
+    /// many took the exception, and each one it could not compare, with why.
     #[test]
     fn every_device_s_observers_answer_the_same_on_their_variant() {
         use metal2vulkan::library::FunctionStage;
@@ -2620,7 +2630,9 @@ attributes #1 = { convergent nounwind willreturn }
             let translator = device.translator();
             let budget = Budget::standard();
             let entries = StageEntries::new();
+            let maximal = translator.profile().subgroups().maximal_reconvergence;
             let (mut compared, mut skipped, mut alone) = (0, unread.clone(), Vec::new());
+            let mut noted = 0;
             for (file, library) in &libraries {
                 for info in library.functions() {
                     if info.stage != FunctionStage::Kernel {
@@ -2688,7 +2700,17 @@ attributes #1 = { convergent nounwind willreturn }
                         ModuleAnswers::of(pipeline, *imageblock, translator.profile().push_window())
                     };
                     match (of(&plain), of(&variant)) {
-                        (Ok(plain), Ok(variant)) => {
+                        (Ok(plain), Ok(mut variant)) => {
+                            // The one exception (the doc comment's): without maximal
+                            // reconvergence the variant may add the device's reconvergence.
+                            let note = PrecisionNote::DeviceReconvergence;
+                            if !maximal
+                                && !plain.notes.contains(&note)
+                                && variant.notes.contains(&note)
+                            {
+                                variant.notes.retain(|n| *n != note);
+                                noted += 1;
+                            }
                             assert_eq!(variant, plain, "{name}: {what}: the variant's answers");
                             compared += 1;
                         }
@@ -2708,8 +2730,9 @@ attributes #1 = { convergent nounwind willreturn }
             }
             println!(
                 "{name}: {compared} observing kernels answer the same on their variant as on \
-                 their plain module; {} whose plain module alone the translator refuses; {} not \
-                 compared",
+                 their plain module, {noted} of them but for the variant's DeviceReconvergence \
+                 (maximal reconvergence {maximal}); {} whose plain module alone the translator \
+                 refuses; {} not compared",
                 alone.len(),
                 skipped.len()
             );

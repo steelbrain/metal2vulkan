@@ -399,7 +399,14 @@ pub struct LoweringInputs {
     /// `folded_groups` and `replay_bindings` are `Unsupported{PartialThreadgroups,
     /// NotImplemented}`, and a body whose uniform barriers' vote word its workgroup memory cannot
     /// hold is `Unsupported{PartialThreadgroups}` needing the `Limit` of
-    /// `maxComputeSharedMemorySize` the word passes. Any other function compiles as without it.
+    /// `maxComputeSharedMemorySize` the word passes. Any other function compiles as without it,
+    /// but for its reconvergence: its tangled instructions take the profile's mode even where
+    /// the plain module's are reached together, since its invocations past the grid return before
+    /// the body and SPIR-V reconverges only over all invocations, those that returned included
+    /// (SPIR-V 1.6 section 2.2.5, "Dynamic Instance"); so on a device without maximal
+    /// reconvergence it records `Reconvergence::ImplementationDefined` and
+    /// `PrecisionNote::DeviceReconvergence` where the plain module may record `Guaranteed` and
+    /// none.
     #[cfg_attr(feature = "serde", serde(default))]
     pub partial_threadgroups: bool,
     /// Texture slots bound in one of Apple's extended-range formats

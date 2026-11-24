@@ -755,7 +755,14 @@ fn reads_live_lanes(s: &Strategy) -> bool {
 /// every invocation of its workgroup executes together, the same number of times (`uniform`,
 /// under the kernel's unit axes: `divergent::workgroup_uniformity`): from `uniform` where
 /// `partly_live` computed it, else computed here where some tangled instruction is neither a
-/// threadgroup barrier nor one the lockstep pass placed. Empty for every other function.
+/// threadgroup barrier nor one the lockstep pass placed. Empty for every other function. A
+/// kernel compiled with partial threadgroups has none: its invocations past the grid return
+/// before the body, and SPIR-V reconverges only over all invocations, those that returned
+/// included ("Invocations may only resume executing the same dynamic instances when all
+/// invocations reach the same static instruction", SPIR-V 1.6 section 2.2.5); only
+/// `MaximallyReconvergesKHR` lets a returned invocation escape reconvergence. So its tangled
+/// instructions take the profile's mode, and, without maximal reconvergence, its
+/// `DeviceReconvergence` note, where the plain module's are reached together.
 fn together(
     cx: &SelectCx<'_>,
     uniform: Option<&uniform::Uniformity>,

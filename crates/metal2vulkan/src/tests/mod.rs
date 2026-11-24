@@ -196,6 +196,7 @@ mod engine_uniform_varyings;
 mod engine_unmeasured_speculation;
 mod engine_unread_attribute;
 mod engine_unspecialized;
+mod engine_variant_reconvergence;
 mod engine_vertex_fetch;
 mod engine_vertex_variants;
 mod engine_volatile;
