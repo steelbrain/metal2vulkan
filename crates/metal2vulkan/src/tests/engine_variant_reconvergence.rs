@@ -155,14 +155,14 @@ fn a_simdgroup_barrier_s_variant_is_guaranteed_only_under_maximal_reconvergence(
 
 /// [`AFTER_MERGE`]'s plain module states no mode and records `Guaranteed` with no note on every
 /// committed profile, and on each with `shaderMaximalReconvergence` (and `shaderQuadControl`,
-/// which requires it) cleared and with `shaderSubgroupUniformControlFlow` cleared too (no
-/// committed profile without maximal
-/// reconvergence takes a flat variant: it needs device addresses and full subgroups). Its flat
-/// variant of the call's threadgroups (`VariantKey::flat_grid`, `VariantKey::call_threadgroups`),
-/// whose invocations past the grid return before the body, takes the profile's mode wherever it
-/// compiles: `MaximallyReconvergesKHR` and `Guaranteed` with maximal reconvergence, else
+/// which requires it) cleared and with `shaderSubgroupUniformControlFlow` cleared too, so that
+/// each of the three modes below has profiles. Its flat variant of the call's threadgroups
+/// (`VariantKey::flat_grid`, `VariantKey::call_threadgroups`), whose invocations past the grid
+/// return before the body, takes the profile's mode wherever it compiles:
+/// `MaximallyReconvergesKHR` and `Guaranteed` with maximal reconvergence, else
 /// `SubgroupUniformControlFlowKHR` where offered, or no mode, with `ImplementationDefined` and
-/// `DeviceReconvergence`. Both modules pass `spirv-val`.
+/// `DeviceReconvergence`. Both modules pass `spirv-val`. A profile that refuses the flat variant
+/// is listed in the failure where a mode has none.
 #[test]
 fn a_flat_grid_s_shuffle_after_a_merge_takes_the_profile_s_mode() {
     let Some(bc) = assemble("after_merge", AFTER_MERGE) else {
@@ -173,7 +173,7 @@ fn a_flat_grid_s_shuffle_after_a_merge_takes_the_profile_s_mode() {
     key.call_threadgroups = true;
     let flat = key.lowering_inputs(Stage::Kernel);
     let reading = |inputs: &LowerInputs, stem: &str, p: &DeviceProfile| {
-        let a = compile_with(&bc, "k", p, inputs).ok()?;
+        let a = compile_with(&bc, "k", p, inputs).map_err(|e| e.to_string())?;
         let (_, words) = link_and_validate(&a, p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
         let text = spirv_dis(&words);
         let mode = match (
@@ -185,7 +185,7 @@ fn a_flat_grid_s_shuffle_after_a_merge_takes_the_profile_s_mode() {
             (false, false) => "none",
             (true, true) => "both",
         };
-        Some((
+        Ok((
             mode,
             a.reconvergence,
             a.precision.contains(&PrecisionNote::DeviceReconvergence),
@@ -223,16 +223,21 @@ fn a_flat_grid_s_shuffle_after_a_merge_takes_the_profile_s_mode() {
         }
     }
     let (mut with, mut without_ucf, mut without) = (0, 0, 0);
+    let mut refused = Vec::new();
     for (stem, p) in profiles {
         let plain = reading(&LowerInputs::new(), &stem, &p)
-            .unwrap_or_else(|| panic!("{stem}: the plain module refused"));
+            .unwrap_or_else(|e| panic!("{stem}: the plain module refused: {e}"));
         assert_eq!(
             plain,
             ("none", Reconvergence::Guaranteed, false),
             "{stem}: the plain module"
         );
-        let Some(flat) = reading(&flat, &stem, &p) else {
-            continue;
+        let flat = match reading(&flat, &stem, &p) {
+            Ok(flat) => flat,
+            Err(e) => {
+                refused.push(format!("{stem}: {e}"));
+                continue;
+            }
         };
         let sg = p.fields().subgroup;
         let expected = if sg.maximal_reconvergence {
@@ -250,6 +255,6 @@ fn a_flat_grid_s_shuffle_after_a_merge_takes_the_profile_s_mode() {
     assert!(
         with > 0 && without_ucf > 0 && without > 0,
         "flat modules compiled: {with} with maximal reconvergence, {without_ucf} with only \
-         subgroup-uniform control flow, {without} with neither"
+         subgroup-uniform control flow, {without} with neither; refused: {refused:#?}"
     );
 }
