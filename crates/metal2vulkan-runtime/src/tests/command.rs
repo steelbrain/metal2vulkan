@@ -5054,72 +5054,89 @@ pub(crate) mod on_device {
     /// A completion that cannot leave room pokes no submit pass (`Work::completed`): while a
     /// queue holds X behind a group sent member by member, S, A and L, and one more submission,
     /// Y, the members ahead of the group's last complete without poking the submit thread, and
-    /// the last's completion, which leaves room, pokes it once. S and L run about 10 ms each, so
-    /// X is held before S completes, and L completes well after S.
+    /// the last's completion, which leaves room, pokes it once. S's copies are sized to about
+    /// 100 ms, so X is held before S completes, and doubled for another attempt where the
+    /// completion thread had seen S complete by then; L's to about 10 ms.
     #[test]
     fn every_device_pokes_the_submit_thread_for_a_completion_that_leaves_room() {
         use std::sync::atomic::AtomicU64;
-        const TARGET: u64 = 10_000_000;
+        const S_RUN: u64 = 100_000_000;
+        const L_RUN: u64 = 10_000_000;
         each_device("command_group_apart_pokes", |name, _, device| {
             let mut arena = Arena::new(&device);
             let (first, second, third) = (arena.buffer(), arena.buffer(), arena.buffer());
             let (one, two) = (private(&device), private(&device));
-            let queue = queue(&device);
-            let copies = halves_for(name, &queue, &one, TARGET);
+            let sizing = queue(&device);
+            let mut s_copies = halves_for(name, &sizing, &one, S_RUN);
+            let l_copies = halves_for(name, &sizing, &two, L_RUN);
             let core = device.core();
-            let s = halves(&queue, &one, copies);
-            let a = queue.command_buffer().expect("a command buffer");
-            fill(&a, &first, 1);
-            let l = halves(&queue, &two, copies);
-            let at_last = Arc::new(AtomicU64::new(0));
-            let (stamp, inner) = (Arc::clone(&at_last), Arc::clone(core));
-            (l.add_completed_handler(move |_| {
-                stamp.store(inner.work.pokes.load(Ordering::SeqCst), Ordering::SeqCst);
-            }))
-            .expect("a handler");
-            let y = queue.command_buffer().expect("a command buffer");
-            fill(&y, &second, 2);
-            let x = queue.command_buffer().expect("a command buffer");
-            fill(&x, &third, 3);
-            let mut before = 0;
-            behind_busy(name, &device, &queue, |busy, submitted, _| {
-                for command_buffer in [&s, &a, &l] {
-                    command_buffer.commit().expect("a commit");
+            for attempt in 1.. {
+                let queue = queue(&device);
+                let s = halves(&queue, &one, s_copies);
+                let a = queue.command_buffer().expect("a command buffer");
+                fill(&a, &first, 1);
+                let l = halves(&queue, &two, l_copies);
+                let at_last = Arc::new(AtomicU64::new(0));
+                let (stamp, inner) = (Arc::clone(&at_last), Arc::clone(core));
+                (l.add_completed_handler(move |_| {
+                    stamp.store(inner.work.pokes.load(Ordering::SeqCst), Ordering::SeqCst);
+                }))
+                .expect("a handler");
+                let y = queue.command_buffer().expect("a command buffer");
+                fill(&y, &second, 2);
+                let x = queue.command_buffer().expect("a command buffer");
+                fill(&x, &third, 3);
+                let (mut before, mut early) = (0, false);
+                behind_busy(name, &device, &queue, |busy, submitted, _| {
+                    for command_buffer in [&s, &a, &l] {
+                        command_buffer.commit().expect("a commit");
+                    }
+                    for command_buffer in [&s, &a, &l] {
+                        within(name, || {
+                            command_buffer.status() != CommandBufferStatus::Committed
+                        });
+                    }
+                    let count = || device.counters().metrics().submissions - submitted;
+                    assert_eq!(count(), AHEAD, "{name}: S, A and L held in one group");
+                    let busy_last = core.work.progress();
+                    // A long run seen before the group goes: it goes member by member.
+                    l.queue().ran(1_000_000_000);
+                    busy.open();
+                    within(name, || count() == AHEAD + 3);
+                    y.commit().expect("a commit");
+                    within(name, || count() == AHEAD + 4);
+                    x.commit().expect("a commit");
+                    within(name, || x.status() != CommandBufferStatus::Committed);
+                    before = core.work.pokes.load(Ordering::SeqCst);
+                    // A round raises what the completion thread has seen before it pokes: seen
+                    // no further than the busy work here, S's round pokes, if at all, after
+                    // `before` was read.
+                    early = core.done.completed() > busy_last;
+                    assert_eq!(count(), AHEAD + 4, "{name}: X held behind the group and Y");
+                    for command_buffer in [&s, &a, &l, &y, &x] {
+                        finished(name, command_buffer);
+                    }
+                });
+                if early && attempt < 4 {
+                    println!(
+                        "{name}: S seen complete before X was held: again with {} copies",
+                        s_copies * 2
+                    );
+                    s_copies = (s_copies * 2).min(4096);
+                    drop((s, a, l, y, x, queue));
+                    continue;
                 }
-                for command_buffer in [&s, &a, &l] {
-                    within(name, || {
-                        command_buffer.status() != CommandBufferStatus::Committed
-                    });
-                }
-                let count = || device.counters().metrics().submissions - submitted;
-                assert_eq!(count(), AHEAD, "{name}: S, A and L held in one group");
-                // A long run seen before the group goes: it goes member by member.
-                l.queue().ran(1_000_000_000);
-                busy.open();
-                within(name, || count() == AHEAD + 3);
-                y.commit().expect("a commit");
-                within(name, || count() == AHEAD + 4);
-                x.commit().expect("a commit");
-                within(name, || x.status() != CommandBufferStatus::Committed);
-                before = core.work.pokes.load(Ordering::SeqCst);
-                assert_eq!(count(), AHEAD + 4, "{name}: X held behind the group and Y");
-                assert_ne!(
-                    s.status(),
-                    CommandBufferStatus::Completed,
-                    "{name}: S ran on as X was held"
+                assert!(!early, "{name}: S seen complete before X was held");
+                let poked = at_last.load(Ordering::SeqCst) - before;
+                println!("{name}: {poked} pokes of the submit thread from X's hold to L's handler");
+                assert_eq!(
+                    poked, 1,
+                    "{name}: the group's last completion alone poked it"
                 );
-                for command_buffer in [&s, &a, &l, &y, &x] {
-                    finished(name, command_buffer);
-                }
-            });
-            let poked = at_last.load(Ordering::SeqCst) - before;
-            println!("{name}: {poked} pokes of the submit thread from X's hold to L's handler");
-            assert_eq!(
-                poked, 1,
-                "{name}: the group's last completion alone poked it"
-            );
-            drop((s, a, l, y, x, queue));
-            drop((first, second, third, one, two, arena, device));
+                drop((s, a, l, y, x, queue));
+                break;
+            }
+            drop((first, second, third, one, two, sizing, arena, device));
         });
     }
 
