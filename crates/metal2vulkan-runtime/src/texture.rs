@@ -3925,7 +3925,7 @@ impl TextureInner {
     /// `use_heap` declaration names.
     pub(crate) fn heap_block(&self) -> Option<BlockId> {
         match &self.image_of()?._under {
-            Some(Under::Heap { block, .. }) => Some(block.id),
+            Some(Under::Heap { block, .. }) => Some(block.memory.id),
             _ => None,
         }
     }

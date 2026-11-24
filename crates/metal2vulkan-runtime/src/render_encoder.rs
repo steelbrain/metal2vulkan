@@ -3141,15 +3141,16 @@ impl RenderCommandEncoder {
         // A draw that may read beyond its slots, while a declared read covers an attachment the
         // pass holds out of its home layout: such a read names the texture's own element, whose
         // layout is the home one (`Metrics::unslotted_attachment_reads`).
-        let pass = &self.pass;
-        let resolves = (pass.resolving.then(|| pass.resolves()))
-            .into_iter()
-            .flatten();
-        let unslotted = (draws.reads_unbound || commands)
-            && (pass.targets())
+        let unslotted = (draws.reads_unbound || commands) && {
+            let pass = &self.pass;
+            let resolves = (pass.resolving.then(|| pass.resolves()))
+                .into_iter()
+                .flatten();
+            (pass.targets())
                 .map(|t| (&t.texture, t.moves()))
                 .chain(resolves.map(|r| (&r.texture, r.moves())))
-                .any(|(texture, moved)| moved && self.declared.reads(texture));
+                .any(|(texture, moved)| moved && self.declared.reads(texture))
+        };
         let tables = &self.tables;
         let factors = (self.factors.as_ref())
             .filter(|_| draws.patches)
