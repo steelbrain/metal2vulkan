@@ -24,6 +24,12 @@
 //!   may change. A copy in that a submission skips, a texel, a 4 KiB block or a row the copy
 //!   misses, a wrong pitch or offset, or a kernel that runs one thread a workgroup, each shows as
 //!   texels of the complement.
+//! - `every_device_samples_icons_over_a_shared_block_refilled_each_frame_every_texel`: textures
+//!   over a Shared block of rt's own at icon sizes (`BGRA8Unorm` at 48x48, 76x76, 108x108 and
+//!   256x256, `RGBA16Float` at 48x48 and 384x384, tight rows), whose buffer the CPU rewrites before
+//!   each of three frames (the pattern, its complement, the pattern), each frame sampled and every
+//!   texel compared; each cell names the form the texture took, copied for its cause or in place
+//!   with its linear image's row pitch and offset.
 //! - `every_device_samples_its_attachment_in_its_own_pass_at_icon_size_every_texel`: a
 //!   `BGRA8Unorm` and an `RGBA16Float` render target at 256x256 and 1024x1024, holding the
 //!   pattern, then drawn by a pass that clears it and samples it at each pixel's centre while it
@@ -115,6 +121,7 @@ mod on_device {
         StageSource, StorageMode, Texture, TextureDescriptor, TexturePlace, TextureType,
         TextureUsage,
     };
+    use ash::vk;
     use metal2vulkan_devtools::{llvm_assemble_text, AssembleError};
     use std::alloc::Layout;
     use std::ptr::NonNull;
@@ -820,10 +827,7 @@ declare <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float>)
                 d.usage = shape.usage;
                 let texture = (buffer.new_texture(&d, Some(index), shape.offset, shape.row))
                     .unwrap_or_else(|error| panic!("{name}: {what}: {error}"));
-                let form = match texture.copied_over() {
-                    Some((_, copy)) => format!("copied for {:?}", copy.kind.cause),
-                    None => "in place".to_owned(),
-                };
+                let form = held_as(&device, &texture);
                 let copies = || device.counters().metrics().over_copies;
                 let before = copies();
                 let at = (&texture, shape.size, t);
@@ -858,6 +862,108 @@ declare <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float>)
                     "real-size: {name}: {what}: {form}, {} over-copies counted",
                     copies() - before
                 );
+                drop((texture, buffer));
+                under.release(&device);
+            }
+            cells.all_exact();
+        });
+    }
+
+    /// How `texture`, over a buffer, holds its texels: copied for its cause, or in place, with
+    /// the row pitch and offset its linear image's subresource layout reports.
+    fn held_as(device: &Device, texture: &Texture) -> String {
+        if let Some((_, copy)) = texture.copied_over() {
+            return format!("copied for {:?}", copy.kind.cause);
+        }
+        let color = vk::ImageSubresource {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            mip_level: 0,
+            array_layer: 0,
+        };
+        // SAFETY: the texture's image, linear, of one level and layer of a colour format.
+        let layout =
+            unsafe { (device.core().device).get_image_subresource_layout(texture.image(), color) };
+        format!(
+            "in place, row pitch {} offset {}",
+            layout.row_pitch, layout.offset
+        )
+    }
+
+    /// The icons' textures over a Shared block that the CPU refills each frame, read by shaders:
+    /// `BGRA8Unorm` at 48x48, 76x76, 108x108 and 256x256 and `RGBA16Float` at 48x48 and 384x384,
+    /// in tight rows from the buffer's start.
+    const FRAMED: [Shape; 6] = [
+        icon("BGRA8Unorm 48x48 rows 192", Texels::Bgra8, 48, (0, 192)),
+        icon("BGRA8Unorm 76x76 rows 304", Texels::Bgra8, 76, (0, 304)),
+        icon("BGRA8Unorm 108x108 rows 432", Texels::Bgra8, 108, (0, 432)),
+        icon(
+            "BGRA8Unorm 256x256 rows 1024",
+            Texels::Bgra8,
+            256,
+            (0, 1024),
+        ),
+        icon(
+            "RGBA16Float 48x48 rows 384",
+            Texels::Rgba16Float,
+            48,
+            (0, 384),
+        ),
+        icon(
+            "RGBA16Float 384x384 rows 3072",
+            Texels::Rgba16Float,
+            384,
+            (0, 3072),
+        ),
+    ];
+
+    /// What the CPU writes into a [`FRAMED`] texture's buffer before each frame: the pattern, its
+    /// complement, the pattern.
+    const FRAMES: [bool; 3] = [false, true, false];
+
+    /// Textures over a Shared block of rt's own ([`FRAMED`]), each sampled once a frame after the
+    /// CPU rewrote its buffer ([`FRAMES`]), every texel compared. Each cell names how the texture
+    /// holds its texels: copied for its cause, or in place with its linear image's row pitch and
+    /// offset beside the buffer's rows.
+    #[test]
+    fn every_device_samples_icons_over_a_shared_block_refilled_each_frame_every_texel() {
+        let Some(libraries) = libraries() else {
+            return;
+        };
+        each_device("real_size_icon_frames", |name, _, device| {
+            let reading = Reading::new(name, &device, &libraries);
+            let first = IndexClass::Texture.range().start;
+            (device.grant_indices(IndexClass::Texture, first, FRAMED.len() as u32))
+                .unwrap_or_else(|error| panic!("{name}: a texture grant: {error}"));
+            let queue = device.new_command_queue(4).expect("a queue");
+            let on = (&device, &queue);
+            let mut cells = Cells::new(name);
+            for (index, shape) in (first..).zip(FRAMED.iter()) {
+                let len = shape.offset + shape.row * u64::from(shape.size[1]);
+                let Some((buffer, under)) = under(name, &device, Memory::Shared, len) else {
+                    continue;
+                };
+                let t = shape.texels;
+                let [width, height] = shape.size;
+                let mut d = TextureDescriptor::new(TextureType::Type2D, t.format(), width, height);
+                d.usage = shape.usage;
+                let texture = (buffer.new_texture(&d, Some(index), shape.offset, shape.row))
+                    .unwrap_or_else(|error| panic!("{name}: {}: {error}", shape.what));
+                let what = format!(
+                    "{} over a Shared block, {}",
+                    shape.what,
+                    held_as(&device, &texture)
+                );
+                for (frame, &complemented) in FRAMES.iter().enumerate() {
+                    under.write(&shape.memory(complemented));
+                    let want = shape.words(complemented);
+                    let got = reading.read(name, on, true, (&texture, shape.size, t), &want);
+                    let holds = match complemented {
+                        true => "the complement",
+                        false => "the pattern",
+                    };
+                    let cell = format!("{what}: frame {frame}, {holds}, sampled");
+                    cells.check(&cell, got, &want, (t.word() as usize, width));
+                }
                 drop((texture, buffer));
                 under.release(&device);
             }
