@@ -595,6 +595,13 @@ struct Declarations {
     unstored_write: Option<StorageGap>,
     /// The heaps' blocks `use_heap` declared, each once.
     heaps: Vec<BlockId>,
+    /// A read declaration covers an attachment the pass holds out of its home layout
+    /// ([`Pass::held`]): a draw that may read beyond its slots then counts in
+    /// [`Metrics::unslotted_attachment_reads`](crate::Metrics::unslotted_attachment_reads).
+    /// Settled as a declaration is made and as an attachment moves to the feedback layout, so a
+    /// draw tests it alone; once set it holds for the pass, whose declarations and moves last
+    /// until its end.
+    held: bool,
 }
 
 impl Declarations {
@@ -1747,6 +1754,9 @@ impl RenderCommandEncoder {
                 t.layout = looped;
             }
         }
+        // A read declaration that covers an attachment now held out of its home layout.
+        let held = (self.pass.held()).any(|attachment| self.declared.reads(attachment));
+        self.declared.held |= held;
         self.moved.extend(moves.into_iter().map(|m| m.moved));
         self.push_filled = false;
         (self.drew, self.owed) = (false, false);
@@ -1996,7 +2006,12 @@ impl RenderCommandEncoder {
         let Some(access) = usage.access() else {
             return Ok(());
         };
+        // A read of an attachment the pass holds out of its home layout: of it, of a view of its
+        // image or of the buffer it lies over in place, all of which name its hazard id.
+        let held =
+            access.reads() && (self.pass.held()).any(|attachment| attachment.hazard_id() == id[0]);
         let declared = &mut self.declared;
+        declared.held |= held;
         declared.host_write |= access.writes() && host;
         if access.writes() && declared.unstored_write.is_none() {
             declared.unstored_write = unstored;
@@ -2030,6 +2045,9 @@ impl RenderCommandEncoder {
         building.keep_block(&block);
         if !self.declared.heaps.contains(&heap) {
             self.declared.heaps.push(heap);
+            // An attachment in the heap that the pass holds out of its home layout.
+            self.declared.held |= (self.pass.held())
+                .any(|attachment| TextureObject::object(attachment).heap_block() == Some(heap));
         }
         Ok(())
     }
@@ -2529,7 +2547,6 @@ impl RenderCommandEncoder {
             || arguments.is_some_and(|buffer| buffer.managed_overs().is_some())
             || factors.is_some_and(|(buffer, _)| buffer.managed_overs().is_some())
             || overs;
-        let unbound = draws.reads_unbound || commands;
         self.draw_aliases()?;
         match each {
             true => self.draw_reaches(reads, [index_buffer, arguments], overs, commands)?,
@@ -2541,20 +2558,15 @@ impl RenderCommandEncoder {
                 self.overs_after(commands);
             }
         }
-        // A draw that may read beyond its slots, while a declared read covers an attachment the
-        // pass holds out of its home layout once the draw's own moves are recorded: such a read
-        // names the texture's own element, whose layout is the home one
-        // (`Metrics::unslotted_attachment_reads`).
-        let unslotted = unbound && {
-            let pass = &self.pass;
-            let resolves = (pass.resolving.then(|| pass.resolves()))
-                .into_iter()
-                .flatten();
-            (pass.targets())
-                .map(|t| (&t.texture, t.moves()))
-                .chain(resolves.map(|r| (&r.texture, r.moves())))
-                .any(|(texture, moved)| moved && self.declared.reads(texture))
-        };
+        // A draw that may read beyond its slots while a read declaration covers an attachment the
+        // pass holds out of its home layout, the draw's own moves included: such a read names the
+        // texture's own element, whose layout is the home one
+        // (`Metrics::unslotted_attachment_reads`). The declarations settle the fact as they and
+        // the moves are made, so a draw tests it alone.
+        let unslotted = self.declared.held
+            && (commands
+                || (self.pipeline.as_ref())
+                    .is_some_and(|state| state.inner.compiled.draws.reads_unbound));
         let building = (self.building.as_mut())
             .expect("an encoder holds its command buffer's recording until it ends");
         if unslotted {

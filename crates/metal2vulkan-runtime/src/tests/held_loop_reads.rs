@@ -16,6 +16,7 @@
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
+    use crate::pass::TARGET_WALKS;
     use crate::tests::blit::on_device::settled;
     use crate::tests::command::on_device::each_device;
     use crate::tests::draw::on_device::{
@@ -23,10 +24,11 @@ mod on_device {
     };
     use crate::{
         ColorAttachmentDescriptor, FunctionDescriptor, HostBytes, IndexClass, PixelFormat,
-        PrimitiveType, Region, RenderPipelineDescriptor, Resource, ResourceUsage,
-        SamplerDescriptor, StageSource,
+        PrimitiveType, Region, RenderCommandEncoder, RenderPipelineDescriptor, Resource,
+        ResourceUsage, SamplerDescriptor, StageSource,
     };
     use metal2vulkan_devtools::engine_dir;
+    use std::cell::Cell;
 
     /// The attachment's index (the control texture's the next), and the sampler's.
     const TEXTURE: u32 = 4096;
@@ -174,6 +176,119 @@ mod on_device {
                     );
                 }
             }
+        });
+    }
+
+    /// The draws after the first since a change walk none of their pass's attachments
+    /// (`crate::pass::TARGET_WALKS`): whether a draw counts in
+    /// `Metrics::unslotted_attachment_reads` is settled as the encoder's declarations and its
+    /// pass's moves are made, and a draw tests it alone. In a pass over a shader-read render
+    /// target, which the pass holds in the attachment layout: draws of a pipeline state whose
+    /// functions read nothing beyond their slots, before the target is declared read and after,
+    /// count none; draws of the argument-buffer pipeline state, which may read beyond its slots,
+    /// count one each.
+    #[test]
+    fn every_device_walks_no_attachment_at_a_draw_after_no_change() {
+        const DRAWS: u64 = 64;
+        let (Some(examples), Some(engine)) =
+            (examples(), library(&engine_dir().join("resident_draws.ll")))
+        else {
+            return;
+        };
+        let plain = descriptor(&examples, "colored_fragment", PixelFormat::RGBA8Unorm);
+        let function = |name| {
+            StageSource::Function(FunctionDescriptor::new(
+                engine.function(name).expect("the function"),
+            ))
+        };
+        let mut held = RenderPipelineDescriptor::new(function("rd_entry_vertex"));
+        held.fragment = Some(function("rd_entry_fragment"));
+        held.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
+        each_device("held_read_walks", |name, _, device| {
+            if !device.core().attachment_reads {
+                println!("{name}: SKIPPED: the device reads no attachment through a texture");
+                return;
+            }
+            let _grants = [
+                (IndexClass::Texture, TEXTURE, 1),
+                (IndexClass::Sampler, SAMPLER, 1),
+            ]
+            .map(|(class, first, count)| {
+                (device.grant_indices(class, first, count))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"))
+            });
+            let plain = state(name, &device, &plain);
+            let held = state(name, &device, &held);
+            let color = readable(&device, PixelFormat::RGBA8Unorm, 1, TEXTURE);
+            let sampler = (device.new_sampler_state(&SamplerDescriptor::new(), SAMPLER))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let mut buffers = Buffers::new(&device);
+            let whole = buffers.of(&device, &floats(&[-1.0, -1.0, 3.0, -1.0, -1.0, 3.0]));
+            let colors = buffers.of(&device, &floats(&[0.0; 12]));
+            let position = buffers.of(&device, &floats(&[0.0, 0.0, 0.0, 1.0]));
+            let words = [
+                position.gpu_address(),
+                color.gpu_resource_id().to_bits(),
+                sampler.gpu_resource_id().to_bits(),
+            ];
+            let bytes: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+            let entry = buffers.of(&device, &bytes);
+            let queue = device.new_command_queue(4).expect("a queue");
+            // The upload that moves the new target to its home layout, in a submission apart.
+            let upload = queue.command_buffer().expect("a command buffer");
+            (upload.record_for_test(&[], |_, _| {})).expect("a command buffer's commands");
+            run(name, &upload);
+            let counters = device.counters();
+            settled(&device);
+            let before = counters.metrics();
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let draw = |result: Result<(), crate::Error>| {
+                result.unwrap_or_else(|error| panic!("{name}: {error}"))
+            };
+            // A draw, then `DRAWS` more with nothing changed, and the attachment walks of those.
+            let after_first = |encoder: &mut RenderCommandEncoder| {
+                draw(encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0));
+                let walks = || TARGET_WALKS.with(Cell::get);
+                let start = walks();
+                for _ in 0..DRAWS {
+                    draw(encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0));
+                }
+                walks() - start
+            };
+            draw(encoder.set_vertex_buffer(Some(&whole), 0, 0));
+            draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+            draw(encoder.set_render_pipeline_state(&plain));
+            let undeclared = after_first(&mut encoder);
+            draw(encoder.use_resource(Resource::Texture(&color), ResourceUsage::READ));
+            draw(encoder.use_resource(Resource::Buffer(&position), ResourceUsage::READ));
+            let declared = after_first(&mut encoder);
+            draw(encoder.set_vertex_buffer(Some(&entry), 0, 0));
+            draw(encoder.set_fragment_buffer(Some(&entry), 0, 0));
+            draw(encoder.set_render_pipeline_state(&held));
+            let unbound = after_first(&mut encoder);
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            let after = counters.metrics();
+            let unslotted = after.unslotted_attachment_reads - before.unslotted_attachment_reads;
+            println!(
+                "held-read-walks: {name}: attachment walks of {DRAWS} draws after the first: \
+                 {undeclared} before the target's read declaration, {declared} after it, \
+                 {unbound} of the argument-buffer pipeline state; unslotted attachment reads \
+                 {unslotted}"
+            );
+            assert_eq!(
+                [undeclared, declared, unbound],
+                [0; 3],
+                "{name}: the attachments walked by {DRAWS} draws after the first: before the \
+                 target's read declaration, after it, and of the argument-buffer pipeline state"
+            );
+            assert_eq!(
+                unslotted,
+                DRAWS + 1,
+                "{name}: the unslotted attachment reads, one a draw of the argument-buffer state"
+            );
         });
     }
 }

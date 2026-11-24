@@ -632,12 +632,16 @@ pub(crate) struct Pass {
 thread_local! {
     /// The walks of a pass's resolves ([`Pass::resolves`]) on this thread, which a test reads.
     pub(crate) static RESOLVE_WALKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// The walks of a pass's attachments ([`Pass::targets`]) on this thread, which a test reads.
+    pub(crate) static TARGET_WALKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 impl Pass {
     /// Every attachment's image once, colors first: the stencil attachment's only where there is
     /// no depth attachment, whose image it otherwise is.
     pub(crate) fn targets(&self) -> impl Iterator<Item = &Target> {
+        #[cfg(test)]
+        TARGET_WALKS.with(|walks| walks.set(walks.get() + 1));
         let stencil = self.stencil.as_ref().filter(|_| self.depth.is_none());
         (self.colors.iter().flatten())
             .chain(&self.depth)
@@ -657,6 +661,17 @@ impl Pass {
             .filter_map(|t| t.resolve.as_deref())
             .chain(depth)
             .chain(stencil)
+    }
+
+    /// The texture of every attachment and resolve the pass holds out of its home layout: the
+    /// attachment layout of a shader-read one, or the feedback layout once a draw of the pass read
+    /// it through a slot. A pass that resolves nothing walks no resolve.
+    pub(crate) fn held(&self) -> impl Iterator<Item = &Texture> {
+        let resolves = (self.resolving.then(|| self.resolves()))
+            .into_iter()
+            .flatten();
+        (self.targets().filter(|t| t.moves()).map(|t| &t.texture))
+            .chain(resolves.filter(|r| r.moves()).map(|r| &r.texture))
     }
 
     /// Records `vkCmdBeginRendering` of the pass into `command`; `resumed`, again after the

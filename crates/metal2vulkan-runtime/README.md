@@ -5059,9 +5059,11 @@ the pipeline state and the bound resources, and counts into the encoder's own ta
 device's counters take once, at the encoder's end. What a draw or a dispatch learns from its
 bindings (the vertex buffers it binds, the alignments it checks, whether it reads an attachment,
 reaches a Managed buffer's device copy or writes what the host reads) it works out again only
-after the pipeline state or a binding changes. On RADV a recorded command lies in write-combining
-memory, and a locked instruction between two of them flushes it: a draw took about 490 ns more on
-a Radeon RX 7900 XTX with one.
+after the pipeline state or a binding changes. Whether a declaration of the encoder covers an
+attachment its pass holds out of its home layout (`Metrics::unslotted_attachment_reads`) is
+settled as each declaration and each move of an attachment is made, and a draw tests that answer
+alone. On RADV a recorded command lies in write-combining memory, and a locked instruction between
+two of them flushes it: a draw took about 490 ns more on a Radeon RX 7900 XTX with one.
 
 ## Floor
 
