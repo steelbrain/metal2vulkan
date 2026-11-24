@@ -192,7 +192,13 @@ pub struct LoweringInputs {
     /// the record beside its dispatch's group counts. The identity domains refuse it
     /// (`Unsupported{IdentityDomains}`). It needs device addresses, and refuses a
     /// stage-input region, a tile function and `emulated_simdgroups`
-    /// (`Unsupported{GpuEncodedIndirectCommands, NotImplemented}`).
+    /// (`Unsupported{GpuEncodedIndirectCommands, NotImplemented}`). Its tangled instructions take
+    /// the profile's reconvergence mode even where the plain module's are reached together, as
+    /// a partial-threadgroups variant's do ([`partial_threadgroups`](Self::partial_threadgroups)):
+    /// its invocations past the grid return before the body, and SPIR-V reconverges only over
+    /// all invocations, those that returned included (SPIR-V 1.6 section 2.2.5, "Dynamic
+    /// Instance"); so on a device without maximal reconvergence it records
+    /// `Reconvergence::ImplementationDefined` and `PrecisionNote::DeviceReconvergence`.
     #[cfg_attr(feature = "serde", serde(default))]
     pub flat_grid: bool,
     /// With [`flat_grid`](Self::flat_grid), the dispatch's threadgroups are the call's

@@ -1885,7 +1885,8 @@ pub enum PrecisionNote {
     /// threadgroup barrier, which Metal requires every thread of the threadgroup to reach; and a
     /// kernel's operation in a block every thread of the threadgroup runs together (every
     /// enclosing condition and loop exit the same for every thread, none skipping the block by a
-    /// `break`, `continue` or `return`; a kernel compiled for partial threadgroups has none: its
+    /// `break`, `continue` or `return`; a kernel compiled for partial threadgroups or a flat grid
+    /// has none: its
     /// invocations past the grid return before the body, and SPIR-V 1.6 section 2.2.5 reconverges
     /// only over all invocations, those that returned included, unless the entry states
     /// `MaximallyReconvergesKHR`).

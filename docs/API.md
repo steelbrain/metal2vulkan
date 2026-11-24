@@ -1589,12 +1589,13 @@ bound.
     computed from them), and no thread skips the block by a `break`, `continue` or `return`.
     A loop whose exit differs between threads is not proven uniform, even where a barrier on
     every path makes every thread run it as often. A kernel compiled for partial threadgroups
-    has no such block: its invocations past the grid return before the body, and SPIR-V states
+    or a flat grid (`LoweringInputs::flat_grid`) has no such block: its invocations past the
+    grid return before the body, and SPIR-V states
     reconvergence over all invocations, those that returned included (SPIR-V 1.6 section 2.2.5,
     "Dynamic Instance": "Invocations may only resume executing the same dynamic instances when
     all invocations reach the same static instruction"). Only `MaximallyReconvergesKHR` lets an
     invocation that returned escape reconvergence (`SPV_KHR_maximal_reconvergence`,
-    "Reconvergence"), so the variant takes the device's mode, and on a device without maximal
+    "Reconvergence"), so such a module takes the device's mode, and on a device without maximal
     reconvergence records this note where its plain module records none.
 
   An entry whose every group operation stands in a block the pass proves uniform for the

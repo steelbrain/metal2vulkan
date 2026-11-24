@@ -751,18 +751,22 @@ fn reads_live_lanes(s: &Strategy) -> bool {
     }
 }
 
-/// The tangled instructions of a kernel compiled without partial threadgroups that stand in a block
-/// every invocation of its workgroup executes together, the same number of times (`uniform`,
-/// under the kernel's unit axes: `divergent::workgroup_uniformity`): from `uniform` where
-/// `partly_live` computed it, else computed here where some tangled instruction is neither a
-/// threadgroup barrier nor one the lockstep pass placed. Empty for every other function. A
-/// kernel compiled with partial threadgroups has none: its invocations past the grid return
-/// before the body, and SPIR-V reconverges only over all invocations, those that returned
-/// included ("Invocations may only resume executing the same dynamic instances when all
-/// invocations reach the same static instruction", SPIR-V 1.6 section 2.2.5); only
-/// `MaximallyReconvergesKHR` lets a returned invocation escape reconvergence. So its tangled
-/// instructions take the profile's mode, and, without maximal reconvergence, its
-/// `DeviceReconvergence` note, where the plain module's are reached together.
+/// The tangled instructions of a kernel compiled without partial threadgroups or a flat grid that
+/// stand in a block every invocation of its workgroup executes together, the same number of times
+/// (`uniform`, under the kernel's unit axes: `divergent::workgroup_uniformity`): from `uniform`
+/// where `partly_live` computed it, else computed here where some tangled instruction is neither
+/// a threadgroup barrier nor one the lockstep pass placed. Empty for every other function. A
+/// kernel compiled with partial threadgroups or a flat grid (`LoweringInputs::flat_grid`) has
+/// none: its invocations past the grid return before the body, and SPIR-V reconverges only over
+/// all invocations, those that returned included ("Invocations may only resume executing the
+/// same dynamic instances when all invocations reach the same static instruction", SPIR-V 1.6
+/// section 2.2.5); only `MaximallyReconvergesKHR` lets a returned invocation escape
+/// reconvergence. So its tangled instructions take the profile's mode, and, without maximal
+/// reconvergence, its `DeviceReconvergence` note, where the plain module's are reached together.
+/// A block the workgroup uniformity proves uniform does not help here: the live invocations stay
+/// tangled only while they take no divergent branch (2.2.5, "Dynamic Instance"), and the lowering
+/// adds branches of its own the AIR does not hold (a bounds-checked load or store, an atomic's or
+/// a copy's loop), whose condition differs between invocations.
 fn together(
     cx: &SelectCx<'_>,
     uniform: Option<&uniform::Uniformity>,
@@ -773,7 +777,8 @@ fn together(
     let wanted = cx.tangled.iter().any(|&v| {
         crate::lower::sync::barrier::reconverges(barriers, v) && !barriers.threadgroup.contains(&v)
     });
-    if cx.stage != Stage::Kernel || cx.inputs.partial_threadgroups || !wanted {
+    let returns_early = cx.inputs.partial_threadgroups || cx.inputs.flat_grid;
+    if cx.stage != Stage::Kernel || returns_early || !wanted {
         return Ok(together);
     }
     let computed = match uniform {
