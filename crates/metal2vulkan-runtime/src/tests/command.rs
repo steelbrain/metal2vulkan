@@ -4832,50 +4832,14 @@ pub(crate) mod on_device {
         // L's GPU run aimed at: a span in `Metrics::gpu_end_to_handler`'s bucket 13.
         const TARGET: u64 = 10_000_000;
         const FLOOR: u64 = TARGET * 2 / 5;
-        const SIZING: u64 = 8;
         each_device("command_group_apart_signals", |name, _, device| {
             let mut arena = Arena::new(&device);
             let small = arena.buffer();
             let big = private(&device);
-            let half = big.length() / 2;
-            let long = |queue: &CommandQueue, copies: u64| {
-                let command_buffer = queue.command_buffer().expect("a command buffer");
-                let (target, offset) = big.device_range();
-                command_buffer
-                    .record_for_test(&[&big], |device, command| {
-                        let region = [vk::BufferCopy::default()
-                            .src_offset(offset)
-                            .dst_offset(offset + half)
-                            .size(half)];
-                        let barrier = [vk::MemoryBarrier2::default()
-                            .src_stage_mask(vk::PipelineStageFlags2::COPY)
-                            .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-                            .dst_stage_mask(vk::PipelineStageFlags2::COPY)
-                            .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)];
-                        let dependency = vk::DependencyInfo::default().memory_barriers(&barrier);
-                        for copy in 0..copies {
-                            if copy > 0 {
-                                // SAFETY: recording, outside any render pass.
-                                unsafe { device.cmd_pipeline_barrier2(command, &dependency) };
-                            }
-                            // SAFETY: recording; the two halves are the buffer's and apart.
-                            unsafe { device.cmd_copy_buffer(command, target, target, &region) };
-                        }
-                    })
-                    .expect("the copies");
-                command_buffer
-            };
-            // L's copies, from eight copies' run on this device, the second of two.
+            let long = |queue: &CommandQueue, copies: u64| halves(queue, &big, copies);
+            // L's copies, from eight copies' run on this device.
             let queue = queue(&device);
-            let mut run = 1;
-            for _ in 0..2 {
-                let eight = long(&queue, SIZING);
-                eight.commit().expect("a commit");
-                finished(name, &eight);
-                run = (eight.gpu_end_time() - eight.gpu_start_time()).max(1);
-            }
-            let mut copies = (TARGET * SIZING).div_ceil(run).clamp(1, 4096);
-            println!("{name}: {SIZING} copies of {half} bytes ran {run} ns: L makes {copies}");
+            let mut copies = halves_for(name, &queue, &big, TARGET);
             let core = device.core();
             // SAFETY: the progress semaphore is the device's timeline semaphore.
             let counter = || unsafe { core.device.get_semaphore_counter_value(core.done.progress) };
@@ -4968,6 +4932,194 @@ pub(crate) mod on_device {
                 }
             }
             drop((small, big, arena, device));
+        });
+    }
+
+    /// A command buffer of `copies` copies of `big`'s first half to its second, each after a
+    /// barrier on the copy before it, so its GPU run grows with `copies`.
+    fn halves(queue: &CommandQueue, big: &Buffer, copies: u64) -> CommandBuffer {
+        let half = big.length() / 2;
+        let command_buffer = queue.command_buffer().expect("a command buffer");
+        let (target, offset) = big.device_range();
+        command_buffer
+            .record_for_test(&[big], |device, command| {
+                let region = [vk::BufferCopy::default()
+                    .src_offset(offset)
+                    .dst_offset(offset + half)
+                    .size(half)];
+                let barrier = [vk::MemoryBarrier2::default()
+                    .src_stage_mask(vk::PipelineStageFlags2::COPY)
+                    .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                    .dst_stage_mask(vk::PipelineStageFlags2::COPY)
+                    .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)];
+                let dependency = vk::DependencyInfo::default().memory_barriers(&barrier);
+                for copy in 0..copies {
+                    if copy > 0 {
+                        // SAFETY: recording, outside any render pass.
+                        unsafe { device.cmd_pipeline_barrier2(command, &dependency) };
+                    }
+                    // SAFETY: recording; the two halves are the buffer's and apart.
+                    unsafe { device.cmd_copy_buffer(command, target, target, &region) };
+                }
+            })
+            .expect("the copies");
+        command_buffer
+    }
+
+    /// The copies of [`halves`] of `big` that run about `target` ns on `queue`'s device, from
+    /// eight copies' run there, the second of two.
+    fn halves_for(name: &str, queue: &CommandQueue, big: &Buffer, target: u64) -> u64 {
+        const SIZING: u64 = 8;
+        let mut run = 1;
+        for _ in 0..2 {
+            let eight = halves(queue, big, SIZING);
+            eight.commit().expect("a commit");
+            finished(name, &eight);
+            run = (eight.gpu_end_time() - eight.gpu_start_time()).max(1);
+        }
+        let copies = (target * SIZING).div_ceil(run).clamp(1, 4096);
+        println!(
+            "{name}: {SIZING} copies of {} bytes ran {run} ns: {copies} copies",
+            big.length() / 2
+        );
+        copies
+    }
+
+    /// A member of a group sent member by member that completes before the group's last leaves
+    /// its queue's expected run and retirement count as they stood (`QueueInner::ran`): its run
+    /// feeds them as the last retires, where one signal for the group fed them, so what the
+    /// submit thread joins and parts meanwhile reads what it read then. A's handler, after A's
+    /// retirement, sees them as they stood; L's, after the last's, sees the count two higher and
+    /// the run fed twice, each run halving the way down from the long run the test set.
+    #[test]
+    fn every_device_feeds_an_early_members_run_to_its_queue_as_the_last_retires() {
+        each_device("command_group_apart_feeds_late", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let (first, second) = (arena.buffer(), arena.buffer());
+            let queue = queue(&device);
+            let a = queue.command_buffer().expect("a command buffer");
+            fill(&a, &first, 1);
+            let l = queue.command_buffer().expect("a command buffer");
+            fill(&l, &second, 2);
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            for command_buffer in [&a, &l] {
+                let (seen, inner) = (Arc::clone(&seen), Arc::clone(command_buffer.queue()));
+                (command_buffer.add_completed_handler(move |_| {
+                    lock(&seen).push((inner.retired(), inner.expected_run()));
+                }))
+                .expect("a handler");
+            }
+            behind_busy(name, &device, &queue, |busy, submitted, _| {
+                for command_buffer in [&a, &l] {
+                    command_buffer.commit().expect("a commit");
+                }
+                for command_buffer in [&a, &l] {
+                    within(name, || {
+                        command_buffer.status() != CommandBufferStatus::Committed
+                    });
+                }
+                let count = || device.counters().metrics().submissions - submitted;
+                assert_eq!(count(), AHEAD, "{name}: A and L held in one group");
+                // A long run seen before the group goes: it goes member by member.
+                l.queue().ran(1_000_000_000);
+                busy.open();
+                finished(name, &a);
+                finished(name, &l);
+                assert_eq!(count() - AHEAD, 2, "{name}: A and L, a submission each");
+            });
+            let seen = lock(&seen).clone();
+            let &[(a_retired, Some(a_run)), (l_retired, Some(l_run))] = seen.as_slice() else {
+                panic!("{name}: A's and L's handlers, each with an expected run: {seen:?}");
+            };
+            println!(
+                "{name}: at A's handler {a_retired} retired and a run of {a_run} ns expected, at \
+                 L's {l_retired} and {l_run} ns"
+            );
+            assert_eq!(
+                l_retired,
+                a_retired + 2,
+                "{name}: A's run fed its queue as L retired"
+            );
+            // Each run halves the way down to a short command buffer's: fed twice after A's
+            // handler, the run comes to about a quarter of what A's handler saw; once, a half.
+            assert!(
+                l_run * 3 < a_run,
+                "{name}: the run fed twice after A's handler"
+            );
+            drop((a, l, queue));
+            drop((first, second, arena, device));
+        });
+    }
+
+    /// A completion that cannot leave room pokes no submit pass (`Work::completed`): while a
+    /// queue holds X behind a group sent member by member, S, A and L, and one more submission,
+    /// Y, the members ahead of the group's last complete without poking the submit thread, and
+    /// the last's completion, which leaves room, pokes it once. S and L run about 10 ms each, so
+    /// X is held before S completes, and L completes well after S.
+    #[test]
+    fn every_device_pokes_the_submit_thread_for_a_completion_that_leaves_room() {
+        use std::sync::atomic::AtomicU64;
+        const TARGET: u64 = 10_000_000;
+        each_device("command_group_apart_pokes", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let (first, second, third) = (arena.buffer(), arena.buffer(), arena.buffer());
+            let (one, two) = (private(&device), private(&device));
+            let queue = queue(&device);
+            let copies = halves_for(name, &queue, &one, TARGET);
+            let core = device.core();
+            let s = halves(&queue, &one, copies);
+            let a = queue.command_buffer().expect("a command buffer");
+            fill(&a, &first, 1);
+            let l = halves(&queue, &two, copies);
+            let at_last = Arc::new(AtomicU64::new(0));
+            let (stamp, inner) = (Arc::clone(&at_last), Arc::clone(core));
+            (l.add_completed_handler(move |_| {
+                stamp.store(inner.work.pokes.load(Ordering::SeqCst), Ordering::SeqCst);
+            }))
+            .expect("a handler");
+            let y = queue.command_buffer().expect("a command buffer");
+            fill(&y, &second, 2);
+            let x = queue.command_buffer().expect("a command buffer");
+            fill(&x, &third, 3);
+            let mut before = 0;
+            behind_busy(name, &device, &queue, |busy, submitted, _| {
+                for command_buffer in [&s, &a, &l] {
+                    command_buffer.commit().expect("a commit");
+                }
+                for command_buffer in [&s, &a, &l] {
+                    within(name, || {
+                        command_buffer.status() != CommandBufferStatus::Committed
+                    });
+                }
+                let count = || device.counters().metrics().submissions - submitted;
+                assert_eq!(count(), AHEAD, "{name}: S, A and L held in one group");
+                // A long run seen before the group goes: it goes member by member.
+                l.queue().ran(1_000_000_000);
+                busy.open();
+                within(name, || count() == AHEAD + 3);
+                y.commit().expect("a commit");
+                within(name, || count() == AHEAD + 4);
+                x.commit().expect("a commit");
+                within(name, || x.status() != CommandBufferStatus::Committed);
+                before = core.work.pokes.load(Ordering::SeqCst);
+                assert_eq!(count(), AHEAD + 4, "{name}: X held behind the group and Y");
+                assert_ne!(
+                    s.status(),
+                    CommandBufferStatus::Completed,
+                    "{name}: S ran on as X was held"
+                );
+                for command_buffer in [&s, &a, &l, &y, &x] {
+                    finished(name, command_buffer);
+                }
+            });
+            let poked = at_last.load(Ordering::SeqCst) - before;
+            println!("{name}: {poked} pokes of the submit thread from X's hold to L's handler");
+            assert_eq!(
+                poked, 1,
+                "{name}: the group's last completion alone poked it"
+            );
+            drop((s, a, l, y, x, queue));
+            drop((first, second, third, one, two, arena, device));
         });
     }
 }

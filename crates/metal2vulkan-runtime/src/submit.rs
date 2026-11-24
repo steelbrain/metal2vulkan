@@ -213,6 +213,9 @@ pub(crate) struct Work {
     /// lock.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) asking: AtomicBool,
+    /// For the device tests: the times the thread was poked to pass again ([`Work::poke`]).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) pokes: AtomicU64,
 }
 
 pub(crate) struct WorkState {
@@ -663,6 +666,8 @@ impl Work {
             counting: AtomicBool::new(false),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             asking: AtomicBool::new(false),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            pokes: AtomicU64::new(0),
         }
     }
 
@@ -753,6 +758,8 @@ impl Work {
 
     /// A host value rose: held segments may go.
     pub(crate) fn poke(&self) {
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        self.pokes.fetch_add(1, Ordering::SeqCst);
         self.lock().dirty = true;
         self.wake();
     }
