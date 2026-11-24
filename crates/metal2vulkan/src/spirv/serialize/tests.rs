@@ -12,6 +12,7 @@ mod families_stage;
 mod forwarded;
 mod lazy;
 mod model_rules;
+mod specialize;
 
 use std::collections::BTreeMap;
 

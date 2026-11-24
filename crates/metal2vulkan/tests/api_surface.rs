@@ -308,6 +308,7 @@ surface! {
         const GRID_TILE_THREADS;
         const DEEP_THREADGROUP;
         fn threadgroup_constants;
+        fn specialize;
         const COMPILED_STAGE_WEIGHT;
         fn own_kernel;
         struct ExecutionCounts E;

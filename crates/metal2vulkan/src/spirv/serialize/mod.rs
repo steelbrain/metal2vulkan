@@ -31,8 +31,8 @@ use crate::spirv::ids::{BlockId, ConstId, FuncId, TypeId, Value};
 use crate::spirv::ir::{
     BinOp, Block, ConstKind, Constant, Contraction, Decl, Dim, ExecMode, ExecModel, GlobalKind,
     GlslOp, GroupInst, GroupOperation, ImageOperands, ImageQuery, ImageUsage, Inst, Interpolation,
-    IoDir, MemAccess, Merge, RayQueryInst, Sampling, SpecOp, StorageClass, Terminator, TexelMemory,
-    Type, TypedModule, UnOp, Unrolling, ValueOrigin,
+    IoDir, MemAccess, Merge, RayQueryInst, Sampling, StorageClass, Terminator, TexelMemory, Type,
+    TypedModule, UnOp, Unrolling, ValueOrigin,
 };
 use crate::spirv::requirements::{
     spirv_extension_name, uses_physical_storage_buffer, uses_vulkan_memory_model,
@@ -1474,15 +1474,7 @@ impl Ser<'_> {
                 w.inst(Op::SpecConstantComposite, &ops)
             }
             ConstKind::SpecOp { op, operands } => {
-                let opcode = match op {
-                    SpecOp::IAdd => Op::IAdd,
-                    SpecOp::IMul => Op::IMul,
-                    SpecOp::BitwiseAnd => Op::BitwiseAnd,
-                    SpecOp::ShiftRightLogical => Op::ShiftRightLogical,
-                    SpecOp::ULessThan => Op::ULessThan,
-                    SpecOp::Select => Op::Select,
-                };
-                let mut ops = vec![ty, id, opcode as u32];
+                let mut ops = vec![ty, id, op.opcode() as u32];
                 for p in operands.iter() {
                     ops.push(self.cid(*p)?);
                 }

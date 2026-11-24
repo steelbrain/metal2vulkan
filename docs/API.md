@@ -454,7 +454,15 @@ gives the specialization constants' keys, and with the stage's `stage_flags` and
 `DeepThreadgroup` and the `WorkgroupSize` parts on each axis. Write each of them the stage
 declares from it, never one alone: a kernel that declares `DeepThreadgroup` takes its Vulkan
 workgroup from the `WorkgroupSize` parts only, so one given its `LocalSize` without them runs
-workgroups of the parts' defaults. A required subgroup size needs `subgroupSizeControl` and the stage in
+workgroups of the parts' defaults. Hand the driver those values as fixed constants, not as a
+`VkSpecializationInfo`: `pipeline::specialize(words, values)`, with `values` the `(SpecId, bits)`
+of each constant, gives the stage's words with each specialization constant the plain constant of
+its value (its default where `values` names none), each `OpSpecConstantOp` the constant it
+computes, and a kernel's workgroup size its entry point's `LocalSize` literals in place of the
+`WorkgroupSize` composite, which is what Vulkan defines specialization as
+(VUID-VkPipelineShaderStageCreateInfo-pSpecializationInfo-06849). Make the shader module of those
+words and create the pipeline with no specialization, so no driver sizes a workgroup or an array
+from a constant's default. A required subgroup size needs `subgroupSizeControl` and the stage in
 `requiredSubgroupSizeStages`; full subgroups need `computeFullSubgroups`; a size that varies
 (`ALLOW_VARYING_SUBGROUP_SIZE`) needs `subgroupSizeControl`. A pipeline compiled for
 one device pins only what that device can take; `DeviceProfile::check` tells whether another

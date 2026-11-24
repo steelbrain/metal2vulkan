@@ -235,7 +235,7 @@ fn a_memory_breach_holds_to_its_ceiling_and_is_a_miss_above_it() {
 /// [`an_ended_breach_holds_to_its_helper_version_and_is_a_miss_below_it`] until
 /// `HELPER_VERSION` is bumped and the pair here is the new one.
 const HELPER_CODE: (u32, &str) = (
-    1,
+    2,
     "e07cb0488c4727ba561f38bd47ba8e978ddffececb964a5762d5e6b7384ef0d6",
 );
 
@@ -473,10 +473,6 @@ mod on_device {
             // SAFETY: as above.
             let after = unsafe { core.caches.data(&core.device) }.map(|data| data.len());
             assert_eq!(after, shared, "{name}: the device's own pipeline cache");
-            // The content holds no shader module: its make made one of its own and destroyed it
-            // once the create returned.
-            let whole = &state.inner.compiled.whole;
-            assert!(!whole.holds_module(), "{name}: the content's shader module");
             // A later variant, an indirect dispatch's at its own threadgroup size, asks for a
             // fill of its own, and once filled is made from its entry, with a module of its own.
             let (dispatch, size) = (Dispatch::Indirect, [8, 1, 1]);
@@ -493,7 +489,6 @@ mod on_device {
             let metrics = counters.metrics();
             assert_eq!(metrics.stage_fills, 2, "{name}");
             assert_eq!(metrics.pipelines_from_stage_fills, 2, "{name}");
-            assert!(!whole.holds_module(), "{name}: the content's shader module");
             drop(state);
             drop(device);
             let breached = |device: &Device| {

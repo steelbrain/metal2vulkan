@@ -3323,7 +3323,8 @@ heaviest such stage's weight.
   (`Metrics::stage_fills`), and answers the helper's own times, from its host clock
   (`StageSpans`: its device's creation and its one `vkCreateComputePipelines` call); the make
   then succeeds when asked again. A request holds the module's
-  words, the pipeline's entry point, specialization and pinned subgroup size, and the device's
+  words specialized for the pipeline (its specialization constants fixed at their values, as
+  every compute pipeline's module is), the pipeline's entry point and pinned subgroup size, and the device's
   `deviceUUID`, `driverUUID`, pipeline cache header and enables, so the helper opens the same
   device with the same features; a helper whose device differs is answered `StageFill::NoDevice`
   or `StageFill::Enables`, and one of another build of the runtime `StageFill::Version`.
@@ -3540,6 +3541,12 @@ cache is answered compile-required on both.
   cold cache it compiles in that call, where Metal changes these with no compile: on a cold play,
   `Metrics::first_use_waits` against `Metrics::made_ahead_variants` reads what the consumer's
   pre-pass left to the encoding threads.
+- Each compute `VkPipeline` is created from a shader module of its own, made of the kernel's
+  words with every specialization constant the fixed constant of its value
+  (`metal2vulkan::pipeline::specialize`) and destroyed once the create returns: the driver is
+  handed no `VkSpecializationInfo`, every array length is a plain constant, and the workgroup's
+  size is the entry point's `LocalSize` literals, so no driver can size a workgroup or an array
+  from a constant's default. Tests: `tests::deep_threadgroups`.
 - A kernel's module keeps 64 `VkPipeline`s of the threadgroup sizes, threadgroup memory lengths,
   imageblock sizes and tiles its dispatches give: the first 8 it made, and past them the 56
   dispatched last. A make past them evicts the least recently dispatched ones no command buffer

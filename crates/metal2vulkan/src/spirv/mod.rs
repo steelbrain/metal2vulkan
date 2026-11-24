@@ -19,6 +19,7 @@ pub mod requirements;
 pub mod roll;
 pub mod serialize;
 pub mod spec_bits;
+pub mod specialize;
 // Test support for the crate's own tests.
 #[cfg(test)]
 pub mod testing;

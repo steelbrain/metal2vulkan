@@ -154,6 +154,9 @@ pub use crate::lower::dispatch::{
     grid_tile, nonuniform_region_bytes, region_bytes, threadgroup_constants, DEEP_THREADGROUP,
     GRID_TILE_THREADS, NONUNIFORM,
 };
+// A module's specialization constants made the fixed constants of their values, which a consumer
+// hands the driver in place of a `VkSpecializationInfo`.
+pub use crate::spirv::specialize::specialize;
 // The threadgroup memory of an emulated-simdgroup module's arena (`RuntimeFact::SimdgroupEmulation`),
 // which a consumer of the identity domains counts with each dispatch's scratch.
 pub use crate::lower::simd::workgroup::arena_bytes;

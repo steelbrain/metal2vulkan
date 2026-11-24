@@ -8,8 +8,10 @@
 //! `VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT` ([`made`]), and the cache destroyed
 //! once the create returns: the device's own pipeline cache and its blob never hold it. The kernel
 //! keeps its module's words and no shader module: each such create is of a shader module made of
-//! the words for it alone, destroyed with the cache, as Vulkan lets a module go while pipelines
-//! made of it are in use, and two makes of one kernel's pipelines at once each make their own.
+//! the words specialized for it alone ([`Create::specialize`]), destroyed with the cache, as Vulkan
+//! lets a module go while pipelines made of it are in use, and two makes of one kernel's
+//! pipelines at once each make their own. A request carries those words, and the helper compiles
+//! them as they are.
 //! Where the directory holds no entry for the pipeline, the make (or the dispatch, or
 //! [`ComputePipelineState::prepare_dispatch`](crate::ComputePipelineState::prepare_dispatch)) is
 //! refused with [`Error::StageUnfilled`], carrying a [`StageRequest`]: the consumer runs its helper
@@ -49,6 +51,7 @@ use crate::error::{Error, Gap, StageGap};
 use crate::instance::Instance;
 use crate::times::host_time;
 use ash::vk;
+use metal2vulkan::pipeline::specialize;
 use sha2::{Digest, Sha256};
 use std::ffi::{CStr, CString};
 use std::fmt;
@@ -78,7 +81,7 @@ const STAGES: &str = "stages";
 /// The first bytes of a frame on the wire.
 const WIRE: &[u8; 8] = b"m2vstage";
 /// The wire's version: a frame of another is not read.
-const WIRE_VERSION: u32 = 2;
+const WIRE_VERSION: u32 = 3;
 /// The longest payload a frame is read with.
 const MAX_PAYLOAD: u64 = 1 << 30;
 /// An entry's kinds, after its key.
@@ -94,7 +97,7 @@ const ENABLES: u32 = 3;
 /// version is a miss and removed, so a fix of ours to a helper that ended asks the helper again.
 /// Bump it with every change to that code that changes what the helper does; a driver's fix needs
 /// none, as the stage key holds the driver's header.
-pub(crate) const HELPER_VERSION: u32 = 1;
+pub(crate) const HELPER_VERSION: u32 = 2;
 
 /// No Metal counterpart: what ended a helper's compile of a kernel past the stage bound, kept as
 /// the pipeline's entry ([`Device::record_stage_breach`], [`Device::fill_stage`]) so its makes are
@@ -198,7 +201,7 @@ impl fmt::Display for StageFill {
 pub(crate) struct Heavy {
     /// The module's entry weight.
     weight: u64,
-    words: Arc<[u32]>,
+    pub(crate) words: Arc<[u32]>,
     /// The digest of the words, which every stage key holds.
     digest: [u8; 32],
 }
@@ -248,9 +251,24 @@ pub(crate) struct Create<'a> {
     pub(crate) entry: &'a CStr,
     pub(crate) flags: vk::PipelineShaderStageCreateFlags,
     pub(crate) subgroup: Option<u32>,
-    /// The specialization constants' ids, each 4 bytes of `data` in order.
+    /// The specialization constants' ids, each 4 bytes of `data` in order: what the module is
+    /// specialized with ([`Create::specialize`]).
     pub(crate) ids: &'a [u32],
     pub(crate) data: &'a [u8],
+}
+
+impl Create<'_> {
+    /// `words`, the translator's module, with each specialization constant the fixed constant of
+    /// its value here (`metal2vulkan::pipeline::specialize`): the words a shader module of the
+    /// create is made of, so no driver is handed a specialization constant, and a kernel's
+    /// workgroup size is its entry point's `LocalSize` literals.
+    pub(crate) fn specialize(&self, words: &[u32]) -> Result<Vec<u32>, Error> {
+        let (data, _) = self.data.as_chunks::<4>();
+        let values: Vec<(u32, u64)> = (self.ids.iter().zip(data))
+            .map(|(&id, bytes)| (id, u64::from(u32::from_ne_bytes(*bytes))))
+            .collect();
+        specialize(words, &values).map_err(Error::translation)
+    }
 }
 
 /// No Metal counterpart: a `VkPipeline` of a kernel past the stage bound whose cache data the
@@ -267,12 +285,11 @@ struct Request {
     header: [u8; 32],
     uuids: [[u8; 16]; 2],
     enables: [u8; 32],
+    /// The module's words specialized for the pipeline ([`Create::specialize`]).
     words: Arc<[u32]>,
     entry: CString,
     flags: u32,
     subgroup: Option<u32>,
-    ids: Vec<u32>,
-    data: Vec<u8>,
 }
 
 impl StageRequest {
@@ -359,8 +376,9 @@ fn gap(weight: u64, cause: StageGap) -> Error {
 /// A compute `VkPipeline` of `heavy` that `make` creates through the cache and of the shader
 /// module it is given, with `VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT` in its
 /// create info: through a cache made of the pipeline's entry alone, and of a module made of
-/// `heavy`'s words for this create alone, both destroyed once `make` returns (the module docs).
-/// Counted as made, and its time (`Metrics::pipeline_creation_nanos`).
+/// `words`, `heavy`'s words specialized for this create ([`Create::specialize`]), alone, both
+/// destroyed once `make` returns (the module docs). Counted as made, and its time
+/// (`Metrics::pipeline_creation_nanos`).
 ///
 /// Err: [`Error::StageUnfilled`] where the directory holds no entry for it; [`Gap::StageSize`]
 /// where it holds a breach, where the driver answers compile-required for its data (kept as a
@@ -370,6 +388,7 @@ pub(crate) fn made(
     core: &Core,
     heavy: &Heavy,
     create: &Create<'_>,
+    words: Vec<u32>,
     make: impl FnOnce(
         vk::PipelineCache,
         vk::ShaderModule,
@@ -390,12 +409,10 @@ pub(crate) fn made(
                 header,
                 uuids: uuids(instance, physical),
                 enables,
-                words: Arc::clone(&heavy.words),
+                words: words.into(),
                 entry: create.entry.to_owned(),
                 flags: create.flags.as_raw(),
                 subgroup: create.subgroup,
-                ids: create.ids.to_vec(),
-                data: create.data.to_vec(),
             }))));
         }
         Some(Entry::Breach(breach, _)) => return Err(gap(weight, StageGap::Breach(breach))),
@@ -411,8 +428,9 @@ pub(crate) fn made(
             result,
         }
     })?;
-    let info = vk::ShaderModuleCreateInfo::default().code(&heavy.words);
-    // SAFETY: the words are the translator's SPIR-V, for the features device creation enabled.
+    let info = vk::ShaderModuleCreateInfo::default().code(&words);
+    // SAFETY: the words are the translator's SPIR-V with its specialization constants fixed, for
+    // the features device creation enabled.
     let module = match unsafe { core.device.create_shader_module(&info, None) } {
         Ok(module) => module,
         Err(result) => {
@@ -645,16 +663,6 @@ unsafe fn compile(core: &Core, request: &Request) -> Result<(Vec<u8>, u64), vk::
             return Err(result);
         }
     };
-    let entries: Vec<vk::SpecializationMapEntry> = (request.ids.iter().enumerate())
-        .map(|(index, &id)| vk::SpecializationMapEntry {
-            constant_id: id,
-            offset: (index * 4) as u32,
-            size: 4,
-        })
-        .collect();
-    let specialization = vk::SpecializationInfo::default()
-        .map_entries(&entries)
-        .data(&request.data);
     let mut required = (request.subgroup).map(|size| {
         vk::PipelineShaderStageRequiredSubgroupSizeCreateInfo::default()
             .required_subgroup_size(size)
@@ -663,8 +671,7 @@ unsafe fn compile(core: &Core, request: &Request) -> Result<(Vec<u8>, u64), vk::
         .flags(vk::PipelineShaderStageCreateFlags::from_raw(request.flags))
         .stage(vk::ShaderStageFlags::COMPUTE)
         .module(module)
-        .name(&request.entry)
-        .specialization_info(&specialization);
+        .name(&request.entry);
     if let Some(required) = &mut required {
         stage = stage.push_next(required);
     }
@@ -672,8 +679,7 @@ unsafe fn compile(core: &Core, request: &Request) -> Result<(Vec<u8>, u64), vk::
         .stage(stage)
         .layout(core.layout);
     let began = host_time();
-    // SAFETY: the module, the layout and the cache are the device's, and the specialization gives
-    // each constant a 4-byte value, as the parent's create does.
+    // SAFETY: the module, the layout and the cache are the device's.
     let made = unsafe { device.create_compute_pipelines(cache, &[info], None) };
     let nanos = host_time().saturating_sub(began);
     let data = match made {
@@ -853,12 +859,8 @@ fn put_bytes(out: &mut Vec<u8>, bytes: &[u8]) {
 
 /// A request's payload.
 fn request_payload(request: &Request) -> Vec<u8> {
-    // The fixed fields' 176 bytes, then the variable ones: the payload is made once, at its size.
-    let len = 176
-        + request.entry.as_bytes().len()
-        + request.ids.len() * 4
-        + request.data.len()
-        + request.words.len() * 4;
+    // The fixed fields' 160 bytes, then the variable ones: the payload is made once, at its size.
+    let len = 160 + request.entry.as_bytes().len() + request.words.len() * 4;
     let mut out = Vec::with_capacity(len);
     out.extend_from_slice(&request.key);
     out.extend(request.weight.to_le_bytes());
@@ -869,11 +871,6 @@ fn request_payload(request: &Request) -> Vec<u8> {
     put_bytes(&mut out, request.entry.to_bytes());
     out.extend(request.flags.to_le_bytes());
     out.extend(request.subgroup.unwrap_or(0).to_le_bytes());
-    out.extend((request.ids.len() as u64).to_le_bytes());
-    for id in &request.ids {
-        out.extend(id.to_le_bytes());
-    }
-    put_bytes(&mut out, &request.data);
     out.extend((request.words.len() as u64 * 4).to_le_bytes());
     for word in request.words.iter() {
         out.extend(word.to_le_bytes());
@@ -892,9 +889,6 @@ fn read_request(payload: &[u8]) -> Option<Request> {
     let entry = CString::new(r.bytes()?).ok()?;
     let flags = r.u32()?;
     let subgroup = Some(r.u32()?).filter(|&size| size != 0);
-    let count = usize::try_from(r.u64()?).ok()?;
-    let ids = (0..count).map(|_| r.u32()).collect::<Option<Vec<u32>>>()?;
-    let data = r.bytes()?.to_vec();
     let words = r.bytes()?;
     let (words, []) = words.as_chunks::<4>() else {
         return None;
@@ -910,8 +904,6 @@ fn read_request(payload: &[u8]) -> Option<Request> {
         entry,
         flags,
         subgroup,
-        ids,
-        data,
     })
 }
 

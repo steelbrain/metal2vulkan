@@ -10,8 +10,9 @@
 //! kernel with no SIMD-group function, so its workgroup is its threadgroup, and which reads its
 //! threadgroup's position and size, so it runs at its own size) stores `i + 1` at its index `i` in
 //! the grid, over threadgroups of `[1, 1, 96]` (one row), `[8, 8, 1]` and `[4, 4, 4]`, several
-//! of each. Each workgroup's size is its `WorkgroupSize` constants, which a driver reads from the
-//! composite's parts as declared.
+//! of each. The module each create hands the driver holds no specialization constant: the
+//! workgroup's size is its entry point's `LocalSize` literals (`Create::specialize`), so no driver
+//! can size a workgroup from a constant's default.
 //!
 //! `llvm-as` assembles the fixtures; without it the tests skip visibly.
 
@@ -200,6 +201,62 @@ entry:
                 println!("{name}: {grid:?} in threadgroups of {threadgroup:?}: {words} words");
                 drop(output);
                 (device.release_block(block)).unwrap_or_else(|e| panic!("{name}: {e}"));
+            }
+        });
+    }
+
+    /// The words each create of `grid_words` makes its shader module of hold no specialization
+    /// constant (`OpSpecConstant*`), and its workgroup's size is its `LocalSize` mode's literals:
+    /// the threadgroup's own, or one row of its threads for the deep one.
+    #[test]
+    fn a_kernel_reaches_the_driver_with_its_workgroup_size_as_literals() {
+        let bitcode = match llvm_assemble_text(GRID_WORDS) {
+            Ok(bitcode) => bitcode,
+            Err(AssembleError::Missing(why)) => {
+                eprintln!("SKIPPED: {why}");
+                return;
+            }
+            Err(error) => panic!("grid_words: {error:?}"),
+        };
+        let library = Library::from_air(&bitcode).expect("the library");
+        let function = library.function("grid_words").expect("the kernel");
+        let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
+            FunctionDescriptor::new(function),
+        ));
+        let cases: [([u32; 3], [u32; 3]); 3] = [
+            ([1, 1, DEPTH], [DEPTH, 1, 1]),
+            ([8, 8, 1], [8, 8, 1]),
+            ([4, 4, 4], [4, 4, 4]),
+        ];
+        each_device("deep_threadgroups literal sizes", |name, _, device| {
+            let state = device
+                .new_compute_pipeline_state(&descriptor, crate::tests::no_constexpr_samplers)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let whole = &state.inner.compiled.whole;
+            for (threadgroup, workgroup) in cases {
+                let variant = crate::pipeline::Variant {
+                    size: threadgroup,
+                    lengths: crate::encoder::Lengths::zeros(0),
+                    tiles: false,
+                };
+                let words = (whole.driver_words(&variant))
+                    .unwrap_or_else(|error| panic!("{name}: {threadgroup:?}: {error}"));
+                let mut at = 5;
+                let mut sizes = Vec::new();
+                while at < words.len() {
+                    let (count, opcode) = ((words[at] >> 16) as usize, words[at] & 0xFFFF);
+                    // OpSpecConstantTrue (48) through OpSpecConstantOp (52).
+                    assert!(
+                        !(48..=52).contains(&opcode),
+                        "{name}: {threadgroup:?}: a specialization constant, opcode {opcode}"
+                    );
+                    // OpExecutionMode (16) LocalSize (17).
+                    if opcode == 16 && words[at + 2] == 17 {
+                        sizes.push(words[at + 3..at + 6].to_vec());
+                    }
+                    at += count;
+                }
+                assert_eq!(sizes, [workgroup.to_vec()], "{name}: {threadgroup:?}");
             }
         });
     }

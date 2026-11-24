@@ -388,8 +388,6 @@ pub(crate) enum Lowered {
     /// The variant reads what the compute encoder does not supply ([`Gap::KernelInput`] of the
     /// kind).
     Unsupplied(KernelInputKind),
-    /// `vkCreateShaderModule` failed.
-    Failed(vk::Result),
 }
 
 /// Why the translator refused a kernel's variant, which the cache directory keeps with the
@@ -466,13 +464,24 @@ pub(crate) struct Kernel {
 
 /// What a kernel's `VkPipeline`s are created from.
 enum Code {
-    /// A module at or under the stage bound: its shader module, made with the kernel and named
-    /// by each of its `VkPipeline`s' creates.
-    Module(vk::ShaderModule),
+    /// A module at or under the stage bound: its words, of which each `VkPipeline`'s create
+    /// makes a shader module of its own, specialized for it (`Create::specialize`) and destroyed
+    /// once the create returns.
+    Module(Arc<[u32]>),
     /// A module past the stage bound: each `VkPipeline` is made from its helper's cache data
-    /// alone, through a shader module of that make's own, made from the module's words and
-    /// destroyed once the create returns (`crate::stage`). The kernel holds no shader module.
+    /// alone, through a shader module of that make's own, made from the module's words
+    /// specialized for it and destroyed once the create returns (`crate::stage`).
     Heavy(Heavy),
+}
+
+impl Code {
+    /// The module's words.
+    fn words(&self) -> &[u32] {
+        match self {
+            Code::Module(words) => words,
+            Code::Heavy(heavy) => &heavy.words,
+        }
+    }
 }
 
 /// The variants of a kernel that each have a cell of their own.
@@ -1459,8 +1468,7 @@ fn made_variant(core: &Core, pipeline: ComputePipeline, required: Option<[u32; 3
     let notes = pipeline.stage.precision_notes.clone();
     match Kernel::new(core, pipeline, required) {
         Ok(kernel) => Lowered::Made(Box::new(kernel), notes),
-        Err(Unmade::Unsupplied(kind)) => Lowered::Unsupplied(kind),
-        Err(Unmade::Failed(result)) => Lowered::Failed(result),
+        Err(kind) => Lowered::Unsupplied(kind),
     }
 }
 
@@ -1484,7 +1492,7 @@ fn made(
     required: Option<[u32; 3]>,
 ) -> Result<(Kernel, Vec<PrecisionNote>), Error> {
     let notes = pipeline.stage.precision_notes.clone();
-    Ok((Kernel::new(core, pipeline, required)?, notes))
+    Ok((Kernel::new(core, pipeline, required).map_err(gap)?, notes))
 }
 
 /// The lowering of `FunctionCompileKey` digest `key` a device kept in the cache directory, where
@@ -1940,27 +1948,6 @@ pub(crate) fn gap(kind: KernelInputKind) -> Error {
     Error::Unsupported(Gap::KernelInput { kind })
 }
 
-/// Why [`Kernel::new`] made no module.
-enum Unmade {
-    /// The kernel reads what the compute encoder does not supply ([`Gap::KernelInput`] of the
-    /// kind).
-    Unsupplied(KernelInputKind),
-    /// `vkCreateShaderModule` failed.
-    Failed(vk::Result),
-}
-
-impl From<Unmade> for Error {
-    fn from(unmade: Unmade) -> Error {
-        match unmade {
-            Unmade::Unsupplied(kind) => gap(kind),
-            Unmade::Failed(result) => Error::Vulkan {
-                call: "vkCreateShaderModule",
-                result,
-            },
-        }
-    }
-}
-
 /// Whether `set` of a pipeline's layout is the device's: set 1 the device's texture and sampler
 /// arrays (those of them its functions read), any other set empty.
 pub(crate) fn of_the_device(set: &DescriptorSetLayout) -> bool {
@@ -2266,11 +2253,8 @@ impl ComputePipelineState {
         interface: Interface,
     ) -> Result<ComputePipelineState, Error> {
         let core = Arc::clone(device.core());
-        // SAFETY: the words are a valid SPIR-V module.
-        let module = unsafe { Kernel::module(&core, words) }
-            .map_err(Error::vulkan("vkCreateShaderModule"))?;
         let whole = Kernel {
-            code: Code::Module(module),
+            code: Code::Module(words.into()),
             entry: c"main".to_owned(),
             interface,
             variants: Variants::default(),
@@ -2349,10 +2333,7 @@ impl Compiled {
         };
         match self.variant(which)? {
             Lowered::Made(kernel, _) => Some(&**kernel),
-            Lowered::Refused(_)
-            | Lowered::Translation(_)
-            | Lowered::Unsupplied(_)
-            | Lowered::Failed(_) => None,
+            Lowered::Refused(_) | Lowered::Translation(_) | Lowered::Unsupplied(_) => None,
         }
     }
 
@@ -2439,37 +2420,28 @@ impl Lowered {
             &Lowered::Refused(why) => Err(refused(why)),
             Lowered::Translation(error) => Err(Error::translation(error.clone())),
             &Lowered::Unsupplied(kind) => Err(gap(kind)),
-            &Lowered::Failed(result) => Err(Error::Vulkan {
-                call: "vkCreateShaderModule",
-                result,
-            }),
         }
     }
 }
 
 impl Kernel {
-    /// The translator's `pipeline` as a module of the device, with its interface: its shader
-    /// module made now, or, past the stage bound, its words kept for each make's own.
+    /// The translator's `pipeline` as a module of the device, with its interface: its words,
+    /// kept for each make's own shader module. Err: what the kernel reads that the compute
+    /// encoder does not supply.
     fn new(
         core: &Core,
         pipeline: ComputePipeline,
         required_size: Option<[u32; 3]>,
-    ) -> Result<Kernel, Unmade> {
+    ) -> Result<Kernel, KernelInputKind> {
         let window = core.translator.profile().push_window();
-        let interface = interface(&pipeline, required_size, window).map_err(Unmade::Unsupplied)?;
+        let interface = interface(&pipeline, required_size, window)?;
         let stage = pipeline.stage;
         let heavy = Heavy::of(&stage);
         // The translator's entry points hold no NUL; one that did would name no entry point.
-        let entry = CString::new(stage.entry_point)
-            .map_err(|_| Unmade::Unsupplied(KernelInputKind::EntryPoint))?;
+        let entry = CString::new(stage.entry_point).map_err(|_| KernelInputKind::EntryPoint)?;
         let code = match heavy {
             Some(heavy) => Code::Heavy(heavy),
-            None => {
-                // SAFETY: the words are the translator's SPIR-V, for the features device creation
-                // enabled.
-                let module = unsafe { Kernel::module(core, &stage.spirv) };
-                Code::Module(module.map_err(Unmade::Failed)?)
-            }
+            None => Code::Module(stage.spirv),
         };
         Ok(Kernel {
             code,
@@ -2477,23 +2449,6 @@ impl Kernel {
             interface,
             variants: Variants::default(),
         })
-    }
-
-    /// A shader module of `words`.
-    ///
-    /// # Safety
-    ///
-    /// `words` are a valid SPIR-V module for the features device creation enabled.
-    unsafe fn module(core: &Core, words: &[u32]) -> Result<vk::ShaderModule, vk::Result> {
-        let info = vk::ShaderModuleCreateInfo::default().code(words);
-        // SAFETY: the caller's contract.
-        unsafe { core.device.create_shader_module(&info, None) }
-    }
-
-    /// For the device tests: whether the kernel holds a shader module of its own.
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    pub(crate) fn holds_module(&self) -> bool {
-        matches!(self.code, Code::Module(_))
     }
 
     /// Whether the kernel is past the stage bound: each of its `VkPipeline`s is made from its
@@ -2627,17 +2582,11 @@ impl Kernel {
         Ok(pipeline)
     }
 
-    fn make(&self, core: &Core, variant: &Variant) -> Result<vk::Pipeline, Error> {
+    /// The ids of the kernel's specialization constants and their values for `variant`, 4 bytes
+    /// each, in order.
+    fn specialization(&self, variant: &Variant) -> (Vec<u32>, Vec<u8>) {
         let constants = &self.interface.constants;
-        let entries: Vec<vk::SpecializationMapEntry> = constants
-            .iter()
-            .enumerate()
-            .map(|(index, &(id, _))| vk::SpecializationMapEntry {
-                constant_id: id,
-                offset: (index * 4) as u32,
-                size: 4,
-            })
-            .collect();
+        let ids: Vec<u32> = constants.iter().map(|&(id, _)| id).collect();
         let threadgroup = threadgroup_constants(variant.size);
         let values: Vec<u8> = constants
             .iter()
@@ -2652,9 +2601,31 @@ impl Kernel {
             })
             .flat_map(u32::to_ne_bytes)
             .collect();
-        let specialization = vk::SpecializationInfo::default()
-            .map_entries(&entries)
-            .data(&values);
+        (ids, values)
+    }
+
+    /// What the create of a `VkPipeline` specialized by `ids` and `data` gives its stage.
+    fn create<'a>(&'a self, ids: &'a [u32], data: &'a [u8]) -> Create<'a> {
+        Create {
+            entry: &self.entry,
+            flags: self.interface.stage_flags,
+            subgroup: self.interface.required_subgroup_size,
+            ids,
+            data,
+        }
+    }
+
+    /// For the device tests: the words a create of `variant` makes its shader module of.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn driver_words(&self, variant: &Variant) -> Result<Vec<u32>, Error> {
+        let (ids, data) = self.specialization(variant);
+        self.create(&ids, &data).specialize(self.code.words())
+    }
+
+    fn make(&self, core: &Core, variant: &Variant) -> Result<vk::Pipeline, Error> {
+        let (ids, data) = self.specialization(variant);
+        let stage = self.create(&ids, &data);
+        let words = stage.specialize(self.code.words())?;
         // The translator pins a size only for a stage the device lists in
         // `requiredSubgroupSizeStages`, and the encoder dispatches such a kernel only in whole
         // subgroups of it, so its full-subgroups flag holds.
@@ -2662,15 +2633,16 @@ impl Kernel {
             vk::PipelineShaderStageRequiredSubgroupSizeCreateInfo::default()
                 .required_subgroup_size(size)
         });
-        // The pipeline's one create, of `module` through `cache` with `flags`.
+        // The pipeline's one create, of `module` through `cache` with `flags`. The module holds
+        // the variant's values as literals (`Create::specialize`), so the create names no
+        // specialization.
         let mut create =
             |module: vk::ShaderModule, cache: vk::PipelineCache, flags: vk::PipelineCreateFlags| {
                 let mut stage = vk::PipelineShaderStageCreateInfo::default()
                     .flags(self.interface.stage_flags)
                     .stage(vk::ShaderStageFlags::COMPUTE)
                     .module(module)
-                    .name(&self.entry)
-                    .specialization_info(&specialization);
+                    .name(&self.entry);
                 if let Some(required) = &mut required {
                     stage = stage.push_next(required);
                 }
@@ -2678,26 +2650,28 @@ impl Kernel {
                     .flags(flags)
                     .stage(stage)
                     .layout(core.layout);
-                // SAFETY: the module, the layout and the cache are the device's, and the
-                // specialization gives each of the kernel's constants a 4-byte value.
+                // SAFETY: the module, the layout and the cache are the device's.
                 unsafe { core.device.create_compute_pipelines(cache, &[info], None) }
             };
         match &self.code {
-            Code::Module(module) => made_through_cache(core, "vkCreateComputePipelines", |cache| {
-                create(*module, cache, vk::PipelineCreateFlags::empty())
-            }),
+            Code::Module(_) => {
+                let info = vk::ShaderModuleCreateInfo::default().code(&words);
+                // SAFETY: the words are the translator's SPIR-V with its specialization constants
+                // fixed, for the features device creation enabled.
+                let module = unsafe { core.device.create_shader_module(&info, None) }
+                    .map_err(Error::vulkan("vkCreateShaderModule"))?;
+                let made = made_through_cache(core, "vkCreateComputePipelines", |cache| {
+                    create(module, cache, vk::PipelineCreateFlags::empty())
+                });
+                // SAFETY: the module is the device's, and the create that used it has returned; a
+                // module may be destroyed while pipelines made of it are in use.
+                unsafe { core.device.destroy_shader_module(module, None) };
+                made
+            }
             Code::Heavy(heavy) => {
-                let ids: Vec<u32> = constants.iter().map(|&(id, _)| id).collect();
-                let stage = Create {
-                    entry: &self.entry,
-                    flags: self.interface.stage_flags,
-                    subgroup: self.interface.required_subgroup_size,
-                    ids: &ids,
-                    data: &values,
-                };
                 // The cache is made of the pipeline's entry alone, and the module of the
                 // kernel's words for this create alone.
-                crate::stage::made(core, heavy, &stage, |cache, module| {
+                crate::stage::made(core, heavy, &stage, words, |cache, module| {
                     let flags = vk::PipelineCreateFlags::FAIL_ON_PIPELINE_COMPILE_REQUIRED;
                     create(module, cache, flags)
                 })
@@ -2705,14 +2679,10 @@ impl Kernel {
         }
     }
 
-    /// Gives its `VkPipeline`s, and a kernel's at or under the stage bound its module, to the
-    /// reaper.
+    /// Gives its `VkPipeline`s to the reaper.
     fn release(&mut self, core: &Core) {
         for pipeline in self.variants.drain() {
             give_back(core, pipeline);
-        }
-        if let Code::Module(module) = self.code {
-            core.reaper.give(Job::Free(Free::ShaderModule(module)));
         }
     }
 }

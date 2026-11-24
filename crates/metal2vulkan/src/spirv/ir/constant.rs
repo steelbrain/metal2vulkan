@@ -84,6 +84,16 @@ pub enum SpecOp {
 }
 
 impl SpecOp {
+    /// Every operation.
+    pub const ALL: [SpecOp; 6] = [
+        SpecOp::IAdd,
+        SpecOp::IMul,
+        SpecOp::BitwiseAnd,
+        SpecOp::ShiftRightLogical,
+        SpecOp::ULessThan,
+        SpecOp::Select,
+    ];
+
     /// The number of operands.
     pub fn arity(self) -> usize {
         match self {
@@ -92,11 +102,30 @@ impl SpecOp {
         }
     }
 
+    /// The opcode an `OpSpecConstantOp` names for the operation.
+    pub fn opcode(self) -> crate::spv::Op {
+        use crate::spv::Op;
+        match self {
+            SpecOp::IAdd => Op::IAdd,
+            SpecOp::IMul => Op::IMul,
+            SpecOp::BitwiseAnd => Op::BitwiseAnd,
+            SpecOp::ShiftRightLogical => Op::ShiftRightLogical,
+            SpecOp::ULessThan => Op::ULessThan,
+            SpecOp::Select => Op::Select,
+        }
+    }
+
+    /// The operation an `OpSpecConstantOp` names by `opcode`, if it is one of these.
+    pub fn of_opcode(opcode: u32) -> Option<SpecOp> {
+        SpecOp::ALL
+            .into_iter()
+            .find(|op| op.opcode() as u32 == opcode)
+    }
+
     /// The operation on scalar bits. `width` is the width of the integer operands (for
     /// [`SpecOp::Select`], of the arms), never the result's: [`SpecOp::ULessThan`] compares two
     /// `width`-bit integers and yields a `bool`. `bool` is 0 or 1. `None` for a wrong operand
     /// count.
-    #[cfg(test)]
     pub fn eval(self, width: u8, operands: &[u64]) -> Option<u64> {
         let mask = if width >= 64 {
             u64::MAX
