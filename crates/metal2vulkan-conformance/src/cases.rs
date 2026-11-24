@@ -71,6 +71,7 @@ pub mod compute_threadgroups;
 pub mod copy_out_strides;
 pub mod denormal_word_fetches;
 pub mod depth_resolve_pairs;
+pub mod depth_stencil_copies;
 pub mod depth_stencil_space;
 pub mod depth_texel_reads;
 pub mod device_queries;
@@ -335,6 +336,7 @@ pub fn all() -> Vec<Box<dyn Case>> {
     for case in format_copies::all() {
         cases.push(Box::new(case));
     }
+    cases.push(Box::new(depth_stencil_copies::DepthStencilCopies));
     cases.push(Box::new(copy_out_strides::CopyOutStrides));
     for case in nearest_positions::all() {
         cases.push(Box::new(case));

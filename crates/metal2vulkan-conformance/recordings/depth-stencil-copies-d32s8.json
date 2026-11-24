@@ -1,0 +1,241 @@
+{
+  "format": 1,
+  "case": "depth-stencil-copies-d32s8",
+  "suite_version": 1,
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "copy",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "218eabbf3d4f8040973e033948f046b747df33925c1ea28f42c4a9cb50c3a938"
+                        }
+                      }
+                    },
+                    {
+                      "name": "bytes:source-depth",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "6ec14bb9254e65e1227764f58b5415b1139dc42965cc62ca2de6033ba1a864cd"
+                        }
+                      }
+                    },
+                    {
+                      "name": "bytes:source-stencil",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "83b7a8ed859053c81d818870fab1f8b1ae44d06a98a9665d369a8fd7d2838ded"
+                        }
+                      }
+                    },
+                    {
+                      "name": "bytes:destination-depth",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "294cf3fff8e89a61a93b696095d65d8d70cb3a7bf4ebc5faeadb2c4045685533"
+                        }
+                      }
+                    },
+                    {
+                      "name": "bytes:destination-stencil",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "ec071e0a0136c837c051cee6a7713edbaea6936712d1a3ca37e84fee3226e61d"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "work",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "destination-depth",
+                  "observed": {
+                    "value": {
+                      "bytes": "AAAAPwAAAj8AAAQ/AAAGPwAACD8AAAo/AAAMPwAADj8AABA/AAASPwAAFD8AABY/AAAYPwAAGj8AABw/AAAePwAAID8AACI/AAAgPgAAMD4AAEA+AABQPgAAYD4AAC4/AAAwPwAAMj8AAJA+AACYPgAAoD4AAKg+AACwPgAAPj8="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 128
+                          }
+                        },
+                        "element": "u32",
+                        "row_offset": 0,
+                        "row_elements": 8,
+                        "row_pitch": 32,
+                        "rows": 4,
+                        "image_pitch": 128,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "destination-stencil",
+                  "observed": {
+                    "value": {
+                      "bytes": "wMHCw8TFxsfIycrLzM3Oz9DRWH2ix+zX2NmApcrvFN8="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 32
+                          }
+                        },
+                        "element": "u8",
+                        "row_offset": 0,
+                        "row_elements": 8,
+                        "row_pitch": 8,
+                        "rows": 4,
+                        "image_pitch": 32,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "source-depth",
+                  "observed": {
+                    "value": {
+                      "bytes": "AACAPAAAAD0AAEA9AACAPQAAoD0AAMA9AADgPQAAAD4AABA+AAAgPgAAMD4AAEA+AABQPgAAYD4AAHA+AACAPgAAiD4AAJA+AACYPgAAoD4AAKg+AACwPgAAuD4AAMA+AADIPgAA0D4AANg+AADgPgAA6D4AAPA+AAD4PgAAAD8="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 128
+                          }
+                        },
+                        "element": "u32",
+                        "row_offset": 0,
+                        "row_elements": 8,
+                        "row_pitch": 32,
+                        "rows": 4,
+                        "image_pitch": 128,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "source-stencil",
+                  "observed": {
+                    "value": {
+                      "bytes": "CzBVep/E6Q4zWH2ix+wRNluApcrvFDleg6jN8hc8YYY="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 32
+                          }
+                        },
+                        "element": "u8",
+                        "row_offset": 0,
+                        "row_elements": 8,
+                        "row_pitch": 8,
+                        "rows": 4,
+                        "image_pitch": 32,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "statuses",
+                  "observed": {
+                    "value": {
+                      "lines": [
+                        "Completed"
+                      ]
+                    }
+                  }
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": "ran"
+    }
+  ]
+}
