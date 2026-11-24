@@ -24,14 +24,15 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::cache::VariantKey;
-use crate::device::profile::DeviceProfile;
+use crate::device::requirements::VkFeature;
+use crate::device::{Device, DevicePolicy, DeviceProfile};
 use crate::lower::select::LowerInputs;
 use crate::pipeline::artifact::{PrecisionNote, Reconvergence};
 use crate::pipeline::sym::Stage;
 use crate::pipeline::testing::{
     compile_with, engine_dir, link_and_validate, llvm_assemble, AssembleError,
 };
-use crate::spirv::testing::{committed_profiles, spirv_dis};
+use crate::spirv::testing::{committed_descriptions, committed_profiles, spirv_dis};
 
 /// `k(b0, p, l)`: each thread stores 1 or 2 at `b0[p + 4096]` by its parity, then, past the merge
 /// of that selection, the shuffle of the stored value from lane 0 plus its lane `l` at `b0[p]`;
@@ -153,11 +154,14 @@ fn a_simdgroup_barrier_s_variant_is_guaranteed_only_under_maximal_reconvergence(
 }
 
 /// [`AFTER_MERGE`]'s plain module states no mode and records `Guaranteed` with no note on every
-/// committed profile. Its flat variant of the call's threadgroups (`VariantKey::flat_grid`,
-/// `VariantKey::call_threadgroups`), whose invocations past the grid return before the body,
-/// takes the profile's mode wherever it compiles: `MaximallyReconvergesKHR` and `Guaranteed` with
-/// maximal reconvergence, else `SubgroupUniformControlFlowKHR` where offered, or no mode, with
-/// `ImplementationDefined` and `DeviceReconvergence`. Both modules pass `spirv-val`.
+/// committed profile, and on each with `shaderMaximalReconvergence` cleared and with both it and
+/// `shaderSubgroupUniformControlFlow` cleared (no committed profile without maximal
+/// reconvergence takes a flat variant: it needs device addresses and full subgroups). Its flat
+/// variant of the call's threadgroups (`VariantKey::flat_grid`, `VariantKey::call_threadgroups`),
+/// whose invocations past the grid return before the body, takes the profile's mode wherever it
+/// compiles: `MaximallyReconvergesKHR` and `Guaranteed` with maximal reconvergence, else
+/// `SubgroupUniformControlFlowKHR` where offered, or no mode, with `ImplementationDefined` and
+/// `DeviceReconvergence`. Both modules pass `spirv-val`.
 #[test]
 fn a_flat_grid_s_shuffle_after_a_merge_takes_the_profile_s_mode() {
     let Some(bc) = assemble("after_merge", AFTER_MERGE) else {
@@ -186,8 +190,29 @@ fn a_flat_grid_s_shuffle_after_a_merge_takes_the_profile_s_mode() {
             a.precision.contains(&PrecisionNote::DeviceReconvergence),
         ))
     };
-    let (mut with, mut without) = (0, 0);
-    for (stem, p) in committed_profiles().expect("profiles") {
+    let mut profiles = committed_profiles().expect("profiles");
+    let cleared: [(&str, &[VkFeature]); 2] = [
+        ("no-maximal", &[VkFeature::ShaderMaximalReconvergence]),
+        (
+            "no-maximal-no-ucf",
+            &[
+                VkFeature::ShaderMaximalReconvergence,
+                VkFeature::ShaderSubgroupUniformControlFlow,
+            ],
+        ),
+    ];
+    for (stem, desc) in committed_descriptions().expect("descriptions") {
+        for (what, features) in cleared {
+            let mut desc = desc.clone();
+            for f in features {
+                desc.features.remove(f);
+            }
+            let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
+            profiles.push((format!("{stem} {what}"), dev.profile().clone()));
+        }
+    }
+    let (mut with, mut without_ucf, mut without) = (0, 0, 0);
+    for (stem, p) in profiles {
         let plain = reading(&LowerInputs::new(), &stem, &p)
             .unwrap_or_else(|| panic!("{stem}: the plain module refused"));
         assert_eq!(
@@ -203,7 +228,7 @@ fn a_flat_grid_s_shuffle_after_a_merge_takes_the_profile_s_mode() {
             with += 1;
             ("maximal", Reconvergence::Guaranteed, false)
         } else if sg.uniform_control_flow {
-            without += 1;
+            without_ucf += 1;
             ("ucf", Reconvergence::ImplementationDefined, true)
         } else {
             without += 1;
@@ -212,7 +237,8 @@ fn a_flat_grid_s_shuffle_after_a_merge_takes_the_profile_s_mode() {
         assert_eq!(flat, expected, "{stem}: the flat module");
     }
     assert!(
-        with > 0 && without > 0,
-        "flat modules compiled: {with} with maximal reconvergence, {without} without"
+        with > 0 && without_ucf > 0 && without > 0,
+        "flat modules compiled: {with} with maximal reconvergence, {without_ucf} with only \
+         subgroup-uniform control flow, {without} with neither"
     );
 }
