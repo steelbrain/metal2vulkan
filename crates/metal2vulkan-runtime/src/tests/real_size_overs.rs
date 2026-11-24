@@ -11,9 +11,11 @@
 //!   memory's import, which rt holds in an image of its own that the device copies the bytes into
 //!   on every device, and over a Shared block of rt's own, in place where the device's linear
 //!   image takes them and else copied the same way: at an icon's size
-//!   (`every_device_reads_icon_size_textures_over_a_buffer_every_texel`: `BGRA8Unorm` at 256x256
-//!   and 1024x1024 and `RGBA16Float` at 256x256, each in tight rows from the buffer's start and in
-//!   rows 64 bytes wider from 192 bytes in) and at a picture's
+//!   (`every_device_reads_icon_size_textures_over_a_buffer_every_texel`: `BGRA8Unorm` at 48x48,
+//!   76x76, 108x108, 256x256 and 1024x1024 and `RGBA16Float` at 48x48 and 256x256 in tight rows
+//!   from the buffer's start, the 256x256 and 1024x1024 ones also in rows 64 bytes wider from 192
+//!   bytes in, and `BGRA8Unorm` at 1024x1024 in rows of 10,240 bytes, also a render target) and at
+//!   a picture's
 //!   (`every_device_reads_picture_size_textures_over_a_buffer_every_texel`: `BGRA8Unorm` at
 //!   3840x2160 in rows of 15,360 bytes and at 2845x1600 in rows of 11,392 bytes, three texels
 //!   past the width). The CPU writes the complement into the buffer and a sampled read takes it;
@@ -523,14 +525,15 @@ declare <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float>)
         }
     }
 
-    /// A texture over a buffer: its texels, its size, its first texel's offset in the buffer and
-    /// its rows' bytes there.
+    /// A texture over a buffer: its texels, its size, its first texel's offset in the buffer, its
+    /// rows' bytes there and its usage.
     struct Shape {
         what: &'static str,
         texels: Texels,
         size: [u32; 2],
         offset: u64,
         row: u64,
+        usage: TextureUsage,
     }
 
     /// The bytes a buffer holds that are not a texel.
@@ -575,53 +578,87 @@ declare <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float>)
         }
     }
 
-    /// The textures over a buffer at an icon's size: `BGRA8Unorm` at 256x256 and 1024x1024 and
-    /// `RGBA16Float` at 256x256, each in tight rows from the buffer's start, and in rows 64 bytes
-    /// wider from 192 bytes in.
-    const ICONS: [Shape; 6] = [
+    /// Read by shaders.
+    const READ: TextureUsage = TextureUsage::SHADER_READ;
+
+    /// The textures over a buffer at an icon's size, read by shaders: `BGRA8Unorm` at 48x48,
+    /// 76x76, 108x108, 256x256 and 1024x1024 and `RGBA16Float` at 48x48 and 256x256 in tight rows
+    /// from the buffer's start; `BGRA8Unorm` at 256x256 and 1024x1024 and `RGBA16Float` at 256x256
+    /// in rows 64 bytes wider from 192 bytes in; and `BGRA8Unorm` at 1024x1024 in rows of 10,240
+    /// bytes (2,560 texels), also a render target.
+    const ICONS: [Shape; 11] = [
+        icon("BGRA8Unorm 48x48 rows 192", Texels::Bgra8, 48, (0, 192)),
+        icon("BGRA8Unorm 76x76 rows 304", Texels::Bgra8, 76, (0, 304)),
+        icon("BGRA8Unorm 108x108 rows 432", Texels::Bgra8, 108, (0, 432)),
+        icon(
+            "BGRA8Unorm 256x256 rows 1024",
+            Texels::Bgra8,
+            256,
+            (0, 1024),
+        ),
+        icon(
+            "BGRA8Unorm 256x256 rows 1088 from 192",
+            Texels::Bgra8,
+            256,
+            (192, 1088),
+        ),
+        icon(
+            "RGBA16Float 48x48 rows 384",
+            Texels::Rgba16Float,
+            48,
+            (0, 384),
+        ),
+        icon(
+            "RGBA16Float 256x256 rows 2048",
+            Texels::Rgba16Float,
+            256,
+            (0, 2048),
+        ),
+        icon(
+            "RGBA16Float 256x256 rows 2112 from 192",
+            Texels::Rgba16Float,
+            256,
+            (192, 2112),
+        ),
+        icon(
+            "BGRA8Unorm 1024x1024 rows 4096",
+            Texels::Bgra8,
+            1024,
+            (0, 4096),
+        ),
+        icon(
+            "BGRA8Unorm 1024x1024 rows 4160 from 192",
+            Texels::Bgra8,
+            1024,
+            (192, 4160),
+        ),
         Shape {
-            what: "BGRA8Unorm 256x256 rows 1024",
-            texels: Texels::Bgra8,
-            size: [256, 256],
-            offset: 0,
-            row: 1024,
-        },
-        Shape {
-            what: "BGRA8Unorm 256x256 rows 1088 from 192",
-            texels: Texels::Bgra8,
-            size: [256, 256],
-            offset: 192,
-            row: 1088,
-        },
-        Shape {
-            what: "RGBA16Float 256x256 rows 2048",
-            texels: Texels::Rgba16Float,
-            size: [256, 256],
-            offset: 0,
-            row: 2048,
-        },
-        Shape {
-            what: "RGBA16Float 256x256 rows 2112 from 192",
-            texels: Texels::Rgba16Float,
-            size: [256, 256],
-            offset: 192,
-            row: 2112,
-        },
-        Shape {
-            what: "BGRA8Unorm 1024x1024 rows 4096",
+            what: "BGRA8Unorm 1024x1024 rows 10240, a render target too",
             texels: Texels::Bgra8,
             size: [1024, 1024],
             offset: 0,
-            row: 4096,
-        },
-        Shape {
-            what: "BGRA8Unorm 1024x1024 rows 4160 from 192",
-            texels: Texels::Bgra8,
-            size: [1024, 1024],
-            offset: 192,
-            row: 4160,
+            row: 10_240,
+            usage: READ.union(TextureUsage::RENDER_TARGET),
         },
     ];
+
+    /// A square icon's texture over a buffer of `side` texels a side, from `offset` in rows of
+    /// `row` bytes, read by shaders.
+    const fn icon(
+        what: &'static str,
+        texels: Texels,
+        side: u32,
+        (offset, row): (u64, u64),
+    ) -> Shape {
+        Shape {
+            what,
+            texels,
+            size: [side, side],
+            offset,
+            row,
+            usage: READ,
+        }
+    }
 
     /// The textures over a buffer at a picture's size: `BGRA8Unorm` at 3840x2160 in rows of
     /// 15,360 bytes, and at 2845x1600 in rows of 11,392 bytes, three texels past the width.
@@ -632,6 +669,7 @@ declare <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float>)
             size: [3840, 2160],
             offset: 0,
             row: 15_360,
+            usage: READ,
         },
         Shape {
             what: "BGRA8Unorm 2845x1600 rows 11392",
@@ -639,6 +677,7 @@ declare <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float>)
             size: [2845, 1600],
             offset: 0,
             row: 11_392,
+            usage: READ,
         },
     ];
 
@@ -778,7 +817,7 @@ declare <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float>)
                     shape.size[0],
                     shape.size[1],
                 );
-                d.usage = TextureUsage::SHADER_READ;
+                d.usage = shape.usage;
                 let texture = (buffer.new_texture(&d, Some(index), shape.offset, shape.row))
                     .unwrap_or_else(|error| panic!("{name}: {what}: {error}"));
                 let form = match texture.copied_over() {
@@ -985,10 +1024,11 @@ declare <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float>)
                     size: [side, side],
                     offset: 0,
                     row: u64::from(side * texels.texel()),
+                    usage: TextureUsage::RENDER_TARGET | READ,
                 };
                 let what = format!("{format:?} {side}x{side} sampled in its own pass");
                 let mut d = TextureDescriptor::new(TextureType::Type2D, format, side, side);
-                d.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+                d.usage = shape.usage;
                 d.storage_mode = StorageMode::Private;
                 let texture = (device.new_texture(&d, Some(index)))
                     .unwrap_or_else(|error| panic!("{name}: {what}: {error}"));
@@ -1144,6 +1184,7 @@ declare <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float>)
             size: PICTURE,
             offset: 0,
             row: u64::from(PICTURE[0]) * 8,
+            usage: TextureUsage::RENDER_TARGET | TextureUsage::SHADER_WRITE | READ,
         };
         let stale = shape.image(true);
         let image = shape.image(false);
@@ -1157,9 +1198,7 @@ declare <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float>)
                 .unwrap_or_else(|error| panic!("{name}: a texture grant: {error}"));
             let format = PixelFormat::RGBA16Float;
             let mut d = TextureDescriptor::new(TextureType::Type2D, format, PICTURE[0], PICTURE[1]);
-            d.usage = TextureUsage::RENDER_TARGET
-                | TextureUsage::SHADER_WRITE
-                | TextureUsage::SHADER_READ;
+            d.usage = shape.usage;
             d.storage_mode = StorageMode::Private;
             let texture = (device.new_texture(&d, Some(first)))
                 .unwrap_or_else(|error| panic!("{name}: {}: {error}", shape.what));
