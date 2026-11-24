@@ -950,8 +950,9 @@ descriptor's format where it differs (a chroma plane of `R16Uint` under an `RG8U
 same bytes per texel in Metal's same view class), and the descriptor's sRGB sibling, which a guest
 may view the plane through (`R8Unorm_sRGB` of an 8-bit luma), where the device holds it and the
 import query takes the list. A 10-bit luma (`R16Unorm`) lists none and is not mutable. A view of
-any other format is `Gap::TextureView` of `TextureViewKind::SurfacePixelFormat`. The consumer
-keeps and closes the handles.
+any other format has no in-place form on the import: it is `Gap::TextureView` of
+`TextureViewKind::SurfacePixelFormat`, and the consumer answers it with a counted copy of the
+plane (Known gaps of memory blocks). The consumer keeps and closes the handles.
 
 The import submits nothing and waits for nothing. Vulkan 1.4's section 12.5.2 says "When images
 created with external memory handle types listed in the external image implied layouts table are
@@ -1060,6 +1061,13 @@ the Direct3D 11 texture's payload until it is freed.
     and the Radeon 780M (the runtime's surface test, jobs m3-max-70391, m3-max-70425 and
     m3-max-70426), so the conformance cases `surface-textures-*` are refused at `replace_region`
     there; RADV on the same cards answers all ten exactly (jobs m3-max-70513 and m3-max-70514).
+- A plane of a Direct3D 11 import (`Device::import_d3d11_surface`) is viewed in place only in the
+  image's own format, the descriptor's and the descriptor's sRGB sibling, as its image lists no
+  other format (Exported surfaces). A view in another format, which `PixelFormatView` usage lets
+  a Metal texture over an IOSurface's plane take, is `Gap::TextureView` of
+  `TextureViewKind::SurfacePixelFormat`: the import has no in-place form for it. The consumer
+  takes the copy form of the same call for such a texture, a copy of the plane in a texture of
+  its own, which it counts.
 - On the Iris Xe (ANV, Mesa 26.2.6) a 4K dma-buf surface takes 3.05 ms for P010 and 1.80 ms for
   NV12 from the start of its make to the return of `Surface::wait_until_ready()` (medians of ten),
   where the M3 Max takes 1.62 and 1.22 ms to create an IOSurface of the same planes, make its two

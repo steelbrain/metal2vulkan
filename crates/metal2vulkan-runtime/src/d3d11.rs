@@ -14,7 +14,7 @@ use crate::hazard::HeapId;
 use crate::import::ImportHandle;
 use crate::memory;
 use crate::surface::{Surface, MAX_PLANES};
-use crate::texture::{discard_surface_image, Backing, SurfaceImage, TextureDescriptor};
+use crate::texture::{Backing, SurfaceImage, Texture, TextureDescriptor};
 use crate::PixelFormat;
 use ash::vk;
 use metal2vulkan::metal::format as formats;
@@ -165,47 +165,30 @@ impl Device {
             }));
         }
         let handle = ImportHandle::D3d11Texture;
-        let Some(win32) = core.exports.win32() else {
+        if core.exports.win32().is_none() {
             return Err(Error::Limit(Limit::NoImport { handle }));
-        };
-        let mut images: Vec<SurfaceImage> = Vec::with_capacity(planes.len());
-        let discard = |images: Vec<SurfaceImage>| {
-            for image in images {
-                // SAFETY: nothing uses the image or its memory.
-                unsafe { discard_surface_image(core, image) };
-            }
-        };
-        for plane in planes {
-            match self.d3d11_plane(core, win32, plane) {
-                Ok(image) => images.push(image),
-                Err(error) => {
-                    discard(images);
-                    return Err(error);
-                }
-            }
         }
+        // Every plane's usage and list, before any plane is made.
+        let forms = (planes.iter())
+            .map(|plane| self.d3d11_plane_form(core, plane))
+            .collect::<Result<Vec<_>, Error>>()?;
         let unit = HeapId::unit(core);
-        let mut textures = Vec::with_capacity(planes.len());
-        let mut images = images.into_iter();
-        for (plane, image) in planes.iter().zip(images.by_ref()) {
-            match self.surface_texture(&plane.descriptor, plane.index, image, Arc::clone(&unit)) {
-                Ok(texture) => textures.push(texture),
-                Err(error) => {
-                    discard(images.collect());
-                    return Err(error);
-                }
-            }
-        }
+        // A plane's error drops the textures made before it, which frees their images.
+        let textures = (planes.iter().zip(forms))
+            .map(|(plane, (usage, list))| {
+                self.d3d11_plane_texture(plane, usage, list, Arc::clone(&unit))
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
         Ok(Surface::imported(self.clone(), textures))
     }
 
-    /// One plane's image, imported from its handle and bound, in the general layout.
-    fn d3d11_plane(
+    /// One plane's image usage and the formats it lists, which the plane's bind flags and
+    /// descriptor give ([`Device::import_d3d11_surface`]).
+    fn d3d11_plane_form(
         &self,
         core: &Arc<Core>,
-        win32: &ash::khr::external_memory_win32::Device,
         plane: &D3d11Plane<'_>,
-    ) -> Result<SurfaceImage, Error> {
+    ) -> Result<(vk::ImageUsageFlags, Vec<vk::Format>), Error> {
         let handle = ImportHandle::D3d11Texture;
         let d = &plane.descriptor;
         let plan = self.plane_plan(d)?;
@@ -300,6 +283,35 @@ impl Device {
             Some(siblings) if imports(usage, &siblings) => siblings,
             _ => pair,
         };
+        Ok((usage, list))
+    }
+
+    /// One plane's texture under its descriptor, at its index: an optimal image of the plane's
+    /// `image_format` and `usage`, mutable over `list` where it is not empty, imported from the
+    /// plane's handle and bound, in the general layout. It takes `unit`'s id in the hazard sets
+    /// (the surface's). [`Device::import_d3d11_surface`] calls it with what
+    /// `d3d11_plane_form` gives; a test calls it with other values.
+    ///
+    /// Err: what [`Device::plane_plan`] refuses of the descriptor with the image's format;
+    /// [`Limit::NoImport`] where the device does not enable `VK_KHR_external_memory_win32`;
+    /// [`Limit::ImportType`]; [`Limit::MemoryAllocations`]; [`Error::Vulkan`]; what
+    /// [`Device::surface_texture`] refuses.
+    pub(crate) fn d3d11_plane_texture(
+        &self,
+        plane: &D3d11Plane<'_>,
+        usage: vk::ImageUsageFlags,
+        list: Vec<vk::Format>,
+        unit: Arc<HeapId>,
+    ) -> Result<Texture, Error> {
+        let handle = ImportHandle::D3d11Texture;
+        let core = self.core();
+        let Some(win32) = core.exports.win32() else {
+            return Err(Error::Limit(Limit::NoImport { handle }));
+        };
+        let d = &plane.descriptor;
+        let mut own = *d;
+        own.pixel_format = plane.image_format;
+        let format = self.plane_plan(&own)?.format;
         let device = &core.device;
         let mut external = vk::ExternalMemoryImageCreateInfo::default().handle_types(HANDLE);
         let mut listed = vk::ImageFormatListCreateInfo::default().view_formats(&list);
@@ -395,7 +407,7 @@ impl Device {
             core.counters.surface_import_freed(needs.size);
             return Err(Error::vulkan("vkBindImageMemory")(result));
         }
-        Ok(SurfaceImage {
+        let made = SurfaceImage {
             image,
             backing: Backing::Import(memory, needs.size),
             bytes: needs.size,
@@ -405,7 +417,8 @@ impl Device {
             block: None,
             d3d11: true,
             linear_attachment: false,
-        })
+        };
+        self.surface_texture(d, plane.index, made, unit)
     }
 }
 
