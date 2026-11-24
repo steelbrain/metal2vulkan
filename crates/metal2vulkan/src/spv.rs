@@ -141,7 +141,6 @@ pub enum Op {
     InBoundsPtrAccessChain = 70,
     Decorate = 71,
     MemberDecorate = 72,
-    #[cfg(test)]
     DecorationGroup = 73,
     #[cfg(test)]
     GroupDecorate = 74,
@@ -474,7 +473,6 @@ pub enum Op {
     MemoryNamedBarrier = 329,
     #[cfg(test)]
     ModuleProcessed = 330,
-    #[cfg(test)]
     ExecutionModeId = 331,
     #[cfg(test)]
     DecorateId = 332,
@@ -1631,7 +1629,6 @@ impl std::fmt::Debug for Op {
             Self::InBoundsPtrAccessChain => "InBoundsPtrAccessChain",
             Self::Decorate => "Decorate",
             Self::MemberDecorate => "MemberDecorate",
-            #[cfg(test)]
             Self::DecorationGroup => "DecorationGroup",
             #[cfg(test)]
             Self::GroupDecorate => "GroupDecorate",
@@ -1966,7 +1963,6 @@ impl std::fmt::Debug for Op {
             Self::MemoryNamedBarrier => "MemoryNamedBarrier",
             #[cfg(test)]
             Self::ModuleProcessed => "ModuleProcessed",
-            #[cfg(test)]
             Self::ExecutionModeId => "ExecutionModeId",
             #[cfg(test)]
             Self::DecorateId => "DecorateId",
@@ -3327,7 +3323,6 @@ impl Op {
             70 => Self::InBoundsPtrAccessChain,
             71 => Self::Decorate,
             72 => Self::MemberDecorate,
-            #[cfg(test)]
             73 => Self::DecorationGroup,
             #[cfg(test)]
             74 => Self::GroupDecorate,
@@ -3660,7 +3655,6 @@ impl Op {
             329 => Self::MemoryNamedBarrier,
             #[cfg(test)]
             330 => Self::ModuleProcessed,
-            #[cfg(test)]
             331 => Self::ExecutionModeId,
             #[cfg(test)]
             332 => Self::DecorateId,
@@ -5725,6 +5719,8 @@ pub enum ExecutionMode {
     OutputPoints = 27,
     #[cfg(test)]
     ContractionOff = 31,
+    #[cfg(test)]
+    LocalSizeId = 38,
     SubgroupUniformControlFlowKHR = 4421,
     DenormPreserve = 4459,
     SignedZeroInfNanPreserve = 4461,

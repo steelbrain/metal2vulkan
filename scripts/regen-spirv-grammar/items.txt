@@ -64,7 +64,7 @@ values RayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetKHR
 values RayQueryGetIntersectionGeometryIndexKHR RayQueryGetIntersectionPrimitiveIndexKHR
 values RayQueryGetIntersectionBarycentricsKHR RayQueryGetIntersectionFrontFaceKHR
 values RayQueryGetIntersectionObjectToWorldKHR RayQueryGetIntersectionWorldToObjectKHR
-values AtomicFAddEXT
+values AtomicFAddEXT ExecutionModeId DecorationGroup
 test-values *
 
 enum Capability
@@ -89,7 +89,7 @@ values Quads OutputVertices OutputPoints SubgroupUniformControlFlowKHR SignedZer
 values StencilRefReplacingEXT RequireFullQuadsKHR OutputLinesEXT OutputPrimitivesEXT
 values DerivativeGroupLinearKHR OutputTrianglesEXT PixelInterlockOrderedEXT
 values MaximallyReconvergesKHR DenormPreserve RoundingModeRTE
-test-values ContractionOff FPFastMathDefault
+test-values ContractionOff FPFastMathDefault LocalSizeId
 
 enum StorageClass
 values UniformConstant Input Uniform Output Workgroup Private Function PushConstant Image

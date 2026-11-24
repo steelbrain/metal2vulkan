@@ -26,10 +26,12 @@ enum Scalar {
 }
 
 /// The instructions the pass reads or rewrites; it copies every other as it is.
-const READ: [Op; 15] = [
+const READ: [Op; 17] = [
     Op::Decorate,
+    Op::DecorationGroup,
     Op::EntryPoint,
     Op::ExecutionMode,
+    Op::ExecutionModeId,
     Op::TypeBool,
     Op::TypeInt,
     Op::TypeFloat,
@@ -54,9 +56,11 @@ const READ: [Op; 15] = [
 /// literal workgroup size states it. The result is valid where `words` is, under the same
 /// requirements, and runs as `words` specialized by `values` does.
 ///
-/// Err: [`Error::Internal`] where the words are not such a module: a malformed instruction, a
-/// specialization operation of an opcode the translator does not write, or a `WorkgroupSize`
-/// beside a `LocalSize` mode or beside other than one entry point.
+/// Err: [`Error::Internal`], naming what it met, where the words are not such a module: a
+/// malformed instruction; an instruction the translator does not write, whose constants the pass
+/// would leave half specialized (an `OpExecutionModeId`, a `LocalSizeId` mode among them; an
+/// `OpDecorationGroup`; an `OpSpecConstantOp` of another opcode); or a `WorkgroupSize` beside a
+/// `LocalSize` mode or beside other than one entry point.
 pub fn specialize(words: &[u32], values: &[(u32, u64)]) -> Result<Vec<u32>, Error> {
     let header = words
         .get(..5)
@@ -98,6 +102,13 @@ pub fn specialize(words: &[u32], values: &[(u32, u64)]) -> Result<Vec<u32>, Erro
             {
                 workgroup = Some(operand(1)?);
                 continue;
+            }
+            // A mode of id operands (`LocalSizeId` among them) could name a size the pass would
+            // set a second time, and a group's decorations a `SpecId` it would miss.
+            Some(unknown @ (Op::ExecutionModeId | Op::DecorationGroup)) => {
+                return Err(malformed(format!(
+                    "an Op{unknown:?}, which the translator does not write"
+                )));
             }
             Some(Op::EntryPoint) => {
                 out.extend_from_slice(inst);
@@ -148,8 +159,9 @@ pub fn specialize(words: &[u32], values: &[(u32, u64)]) -> Result<Vec<u32>, Erro
             }
             Some(Op::SpecConstantOperation) => {
                 let (ty, id) = (operand(1)?, operand(2)?);
-                let op = SpecOp::of_opcode(operand(3)?)
-                    .ok_or_else(|| malformed("a specialization operation of another opcode"))?;
+                let code = operand(3)?;
+                let unknown = || malformed(format!("an OpSpecConstantOp of opcode {code}"));
+                let op = SpecOp::of_opcode(code).ok_or_else(unknown)?;
                 let operands: Vec<(u64, Scalar)> = (tail(4).iter())
                     .map(|o| known.get(o).copied())
                     .collect::<Option<_>>()
@@ -211,7 +223,7 @@ pub fn specialize(words: &[u32], values: &[(u32, u64)]) -> Result<Vec<u32>, Erro
     Ok(out)
 }
 
-fn malformed(detail: &str) -> Error {
+fn malformed(detail: impl std::fmt::Display) -> Error {
     Error::Internal(InternalError::new(
         InternalKind::Invariant,
         format!("specialize: {detail}"),

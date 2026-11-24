@@ -217,3 +217,72 @@ fn a_module_without_a_workgroup_composite_keeps_its_mode() {
         .count();
     assert_eq!(modes, 1);
 }
+
+/// `words` with `inst` after the first instruction of `after`, its id bound grown by `ids`.
+fn inserted(words: &[u32], after: Op, inst: &[u32], ids: u32) -> Vec<u32> {
+    let mut at = 5;
+    while words[at] & 0xFFFF != after as u32 {
+        at += (words[at] >> 16) as usize;
+    }
+    at += (words[at] >> 16) as usize;
+    let mut out = words.to_vec();
+    out.splice(at..at, inst.iter().copied());
+    out[3] += ids;
+    out
+}
+
+/// A module holding an instruction the translator does not write, whose constants the pass would
+/// leave half specialized, is refused, the refusal naming it: an `OpExecutionModeId` of
+/// `LocalSizeId`, an `OpDecorationGroup`, an `OpSpecConstantOp` of `ISub`.
+#[test]
+fn a_module_of_an_instruction_the_pass_does_not_specialize_is_refused() {
+    let (words, ids, _) = linked(deep_kernel());
+    let entry = (insts(&words).into_iter())
+        .find(|(op, _)| *op == Op::EntryPoint as u32)
+        .map(|(_, operands)| operands[1])
+        .expect("entry point");
+    let local = |axis| {
+        (ids.iter())
+            .find(|&&(key, _)| key == SpecKey::LocalSize(axis))
+            .map(|&(_, id)| id)
+            .expect("a LocalSize constant")
+    };
+    // The LocalSize constants' result ids, by the SpecId decorations that name them.
+    let decorated = |spec: u32| {
+        (insts(&words).into_iter())
+            .find(|(op, operands)| {
+                *op == Op::Decorate as u32 && operands[1..] == [Decoration::SpecId as u32, spec]
+            })
+            .map(|(_, operands)| operands[0])
+            .expect("a SpecId decoration")
+    };
+    let [x, y, z] = [Axis::X, Axis::Y, Axis::Z].map(|axis| decorated(local(axis)));
+    let mode_id = [
+        (6 << 16) | Op::ExecutionModeId as u32,
+        entry,
+        ExecutionMode::LocalSizeId as u32,
+        x,
+        y,
+        z,
+    ];
+    let bound = words[3];
+    let group = [(2 << 16) | Op::DecorationGroup as u32, bound];
+    let mut subtract = words.clone();
+    let mut at = 5;
+    while subtract[at] & 0xFFFF != Op::SpecConstantOperation as u32 {
+        at += (subtract[at] >> 16) as usize;
+    }
+    subtract[at + 3] = Op::ISub as u32;
+    for (module, named) in [
+        (inserted(&words, Op::EntryPoint, &mode_id, 0), "OpExecutionModeId"),
+        (inserted(&words, Op::Decorate, &group, 1), "OpDecorationGroup"),
+        (subtract, "OpSpecConstantOp of opcode 130"),
+    ] {
+        match specialize(&module, &[]) {
+            Err(crate::error::Error::Internal(error)) => {
+                assert!(error.detail.contains(named), "{named}: {error}");
+            }
+            other => panic!("{named}: {:?}", other.map(|w| w.len())),
+        }
+    }
+}
