@@ -1143,7 +1143,15 @@ the Direct3D 11 texture's payload until it is freed.
   by address (20 steps, 5,969 presents in 481 s), these copies came to 4.67 GB, 97.2% of the
   walk's 4.81 GB of over-copies, every one over a no-copy buffer on a guest program's own pages.
   On average that is 9.7% of a 1080p frame's bytes a present, and from 0.44% to 45.7% a present in
-  the steps that present more than once.
+  the steps that present more than once. On a discrete card the copy's time follows the link's
+  state. On the RTX 5080 Laptop GPU idling at P8, where its driver keeps PCIe at Gen1 x8, the
+  runtime's own command buffers moved 553.5 MB in 362.4 ms (1.53 GB/s), so one copy-in of a
+  10,240,000-byte texture took about 6.7 ms. At P0, P2 and P4 the same card's link runs Gen5 x8.
+  In a 30 s scrolling step of a guest walk (job m3-max-72689) these copies came to 534.8 MB in
+  52 copies of 20 textures, and 26 of the step's 50 GPU starts that came 8 ms or more after
+  their scheduling fell in 50 ms intervals holding such a copy of 10.24 MB or more.
+  Documented Metal asks for no call before a CPU write to a Shared buffer reaches a texture
+  over it, so the runtime has no call to hold the copy for.
 - A texture over a buffer in a dma-buf's one import is the counted copy too on a device that
   offers no linear image for a dma-buf import without a dedicated allocation (Imported blocks).
   On the Radeon 780M (RADV) the external image query refuses the dma-buf handle with linear
