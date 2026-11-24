@@ -735,9 +735,10 @@ records as text, and
     (`skipped_compute_states`), whose dispatches are skipped (`skipped_dispatches`);
   - parallel render encoders, and render encoders of a pass the runtime does not build
     (`skipped_encoders`): a pass whose setter records leave in it what the runtime's render pass
-    descriptor does not hold (a resolve texture, a depth plane other than 0, store action
-    options, a render target array length above 1, tile or imageblock sizes, or a skipped
-    texture or visibility result buffer), or one the runtime answers with a typed gap; and
+    descriptor does not hold (store action options, a render target array length above 1, tile
+    or imageblock sizes, or a skipped texture, resolve texture or visibility result buffer; a
+    color attachment's depth plane is played, and a depth or stencil attachment's, which Metal
+    reads of a 3D texture alone, is not), or one the runtime answers with a typed gap; and
     every call of a skipped object (`skipped_calls`, with `useResource:usage:` and `useHeap:` of
     one, and each skipped object of a `useResources:count:usage:` or `useHeaps:count:` list);
   - dispatches whose pipeline state or bound buffer or texture is a skipped object

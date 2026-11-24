@@ -3,8 +3,8 @@
 //! What the runtime does not build yet is skipped and counted: a render pipeline state it answers
 //! with a typed gap or the translator refuses (`render_states`, by the gap, with the first state
 //! and the runtime's answer of each); a render encoder whose pass the
-//! runtime's descriptor cannot hold (a depth plane, store action options, layered or tile
-//! rendering, a skipped texture, resolve texture or visibility result buffer) or that it answers
+//! runtime's descriptor cannot hold (store action options, layered or tile rendering, a skipped
+//! texture, resolve texture or visibility result buffer) or that it answers
 //! with a typed gap (`encoders`); a draw whose pipeline state, or a buffer or texture bound to
 //! either stage, is a skipped object (`draws`); and a render command the runtime answers with a
 //! typed gap, a draw it does not build and a visibility result mode in an `Accumulate` pass among
@@ -228,6 +228,11 @@ struct AttachmentSet {
     texture: Option<Option<rt::Texture>>,
     level: Option<u32>,
     slice: Option<u32>,
+    /// `depthPlane`, which the runtime's color attachment holds. A depth or stencil attachment's
+    /// is not played: Metal reads it of a 3D texture alone (Apple's page for `depthPlane`: "If the
+    /// texture isn't a 3D texture, then Metal ignores this property."), and the runtime refuses a
+    /// 3D texture's depth or stencil attachment by its type, whatever its plane.
+    depth_plane: Option<u32>,
     load_action: Option<rt::LoadAction>,
     store_action: Option<rt::StoreAction>,
     resolve_texture: Option<Option<rt::Texture>>,
@@ -429,7 +434,6 @@ impl NewRuntime {
             Some(None) => (Some(None), Some(false)),
             None => (None, None),
         };
-        let depth_plane = f.uint("depthPlane")?;
         let options = f.uint("storeActionOptions")?;
         let narrow = |key: &str| -> Result<Option<u32>, PlayError> {
             (f.uint(key)?)
@@ -439,6 +443,7 @@ impl NewRuntime {
         let set = AttachmentSet {
             level: narrow("level")?,
             slice: narrow("slice")?,
+            depth_plane: narrow("depthPlane")?,
             load_action: (f.uint("loadAction")?)
                 .map(|raw| load_action(call, raw))
                 .transpose()?,
@@ -462,9 +467,6 @@ impl NewRuntime {
         }
         if let Some(skipped) = resolve_skipped {
             pass.hold(at, "resolveTexture", !skipped);
-        }
-        if let Some(plane) = depth_plane {
-            pass.hold(at, "depthPlane", plane == 0);
         }
         if let Some(options) = options {
             pass.hold(at, "storeActionOptions", options == 0);
@@ -544,6 +546,9 @@ impl NewRuntime {
                     None => None,
                 };
                 let a = &mut self.pass(call.receiver).descriptor.color_attachments[at];
+                if let Some(plane) = set.depth_plane {
+                    a.depth_plane = plane;
+                }
                 set_attachment!(set, &mut *a);
                 if let Some(clear) = clear {
                     a.clear_color = clear;

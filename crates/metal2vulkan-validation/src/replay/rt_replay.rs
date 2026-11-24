@@ -662,6 +662,119 @@ fn a_draw_of_points_plays_on_the_new_runtime() {
     assert_eq!(report.first_skip, None);
 }
 
+/// A colour attachment's `depthPlane` plays as the runtime's: of an `RGBA8Unorm` 3D texture
+/// (#3, 4 x 4 x 4, Private), a pass with no plane set clears plane 0 green and one at
+/// `depthPlane` 2 clears plane 2 red; of a 2D texture (#4), a pass at `depthPlane` 2 clears it red,
+/// the plane ignored as Metal ignores it of a texture that is not 3D. Blits copy planes 0 and 2
+/// and the 2D texture into buffers, which the stream checks green, red and red; nothing is
+/// skipped.
+#[test]
+fn a_colour_attachment_s_depth_plane_plays_on_the_new_runtime() {
+    let dir = ScratchDir::new("rt-replay-depth-plane").unwrap();
+    let green: Vec<u8> = [0u8, 255, 0, 255].repeat(16);
+    let red: Vec<u8> = [255u8, 0, 0, 255].repeat(16);
+    let path = written(&dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        // RGBA8Unorm, shader-read and render-target, Private: a 3D texture four planes deep and a
+        // 2D one.
+        for (id, kind, depth) in [(3, 7, 4), (4, 2, 1)] {
+            let texture = uints(&[
+                ("textureType", kind),
+                ("pixelFormat", 70),
+                ("width", 4),
+                ("height", 4),
+                ("depth", depth),
+                ("usage", 5),
+                ("storageMode", 2),
+            ]);
+            w.call("newTextureWithDescriptor:", 1, id, &[texture], &[])?;
+        }
+        for id in 5..=7 {
+            let shared = [Value::Uint(64), Value::Uint(0)];
+            w.call("newBufferWithLength:options:", 1, id, &shared, &[])?;
+        }
+        // Pass #10: #3 with no plane set, cleared green; #11: #3 at plane 2, cleared red; #12: #4
+        // at plane 2, cleared red.
+        let passes = [
+            (10, 3, None, [0.0, 1.0]),
+            (11, 3, Some(2), [1.0, 0.0]),
+            (12, 4, Some(2), [1.0, 0.0]),
+        ];
+        for (pass, texture, plane, [r, g]) in passes {
+            w.call("MTLRenderPassDescriptor.new", 0, pass, &[], &[])?;
+            let size = uints(&[("renderTargetWidth", 4), ("renderTargetHeight", 4)]);
+            w.call("m2v.setPass", pass, 0, &[size], &[])?;
+            let Value::Map(mut color) = uints(&[("loadAction", 2), ("storeAction", 1)]) else {
+                unreachable!("a map");
+            };
+            color.push(("texture".into(), Value::Object(texture)));
+            if let Some(plane) = plane {
+                color.push(("depthPlane".into(), Value::Uint(plane)));
+            }
+            let clear = [("red", r), ("green", g), ("blue", 0.0), ("alpha", 1.0)]
+                .map(|(key, value)| (key.into(), Value::F64(value)));
+            color.push(("clearColor".into(), Value::Map(clear.to_vec())));
+            let args = [Value::Uint(0), Value::Map(color)];
+            w.call("m2v.setColorAttachment", pass, 0, &args, &[])?;
+        }
+        w.call("commandBuffer", 2, 20, &[], &[])?;
+        for (encoder, pass) in [(21, 10), (22, 11), (23, 12)] {
+            let pass = [Value::Object(pass)];
+            w.call(
+                "renderCommandEncoderWithDescriptor:",
+                20,
+                encoder,
+                &pass,
+                &[],
+            )?;
+            w.call("endEncoding", encoder, 0, &[], &[])?;
+        }
+        w.call("blitCommandEncoder", 20, 24, &[], &[])?;
+        let selector = "copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:\
+                        destinationOffset:destinationBytesPerRow:destinationBytesPerImage:";
+        for (texture, z, buffer) in [(3, 0, 5), (3, 2, 6), (4, 0, 7)] {
+            let copy = [
+                Value::Object(texture),
+                Value::Uint(0),
+                Value::Uint(0),
+                uints(&[("x", 0), ("y", 0), ("z", z)]),
+                uints(&[("width", 4), ("height", 4), ("depth", 1)]),
+                Value::Object(buffer),
+                Value::Uint(0),
+                Value::Uint(16),
+                Value::Uint(64),
+            ];
+            w.call(selector, 24, 0, &copy, &[])?;
+        }
+        w.call("endEncoding", 24, 0, &[], &[])?;
+        w.call("commit", 20, 0, &[], &[])?;
+        w.call(WAIT_COMPLETED, 20, 0, &[], &[])?;
+        for (buffer, texels) in [(5, &green), (6, &red), (7, &red)] {
+            let sum = Value::List(vec![Value::Bytes(Sha256::digest(texels).to_vec())]);
+            w.call(
+                "m2v.check",
+                0,
+                0,
+                &[Value::Object(buffer)],
+                &[("sha256", sum)],
+            )?;
+        }
+        Ok(())
+    });
+    let (report, _) = play("depth-plane", &path);
+    assert_eq!(report.checks.len(), 3);
+    for (at, check) in report.checks.iter().enumerate() {
+        assert_eq!(Some(check.sha256), check.recorded, "check {at}");
+    }
+    let executed = &report.total.executed;
+    for skipped in ["skipped_encoders", "skipped_calls", "skipped_objects"] {
+        assert_eq!(executed[skipped], 0, "{skipped}: {executed:?}");
+    }
+    assert!(executed["passes"] >= 3, "{executed:?}");
+    assert_eq!(report.first_skip, None);
+}
+
 /// A render encoder's eight residency declarations (calls 21 to 28) play through the runtime, as
 /// the stream records them (each C array and its count one list, the usage after it, the stages
 /// last): `useResource:usage:` and `useResources:count:usage:`, with stages and without, each
