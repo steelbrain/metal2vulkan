@@ -49,13 +49,13 @@ fn a_simdgroup_barrier_s_variant_is_guaranteed_only_under_maximal_reconvergence(
             )
         };
         let guaranteed = (Reconvergence::Guaranteed, false);
-        assert_eq!(state(&*plain), guaranteed, "{stem}: the plain module");
+        assert_eq!(state(&plain), guaranteed, "{stem}: the plain module");
         if p.fields().subgroup.maximal_reconvergence {
-            assert_eq!(state(&*variant), guaranteed, "{stem}: the variant");
+            assert_eq!(state(&variant), guaranteed, "{stem}: the variant");
             with += 1;
         } else {
             assert_eq!(
-                state(&*variant),
+                state(&variant),
                 (Reconvergence::ImplementationDefined, true),
                 "{stem}: the variant"
             );
