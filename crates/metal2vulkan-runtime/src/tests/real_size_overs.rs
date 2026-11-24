@@ -1169,18 +1169,17 @@ declare <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float>)
             let on = (&device, &queue);
             let download_into = under(name, &device, Memory::Host, DOWNLOAD);
             let mut cells = Cells::new(name);
-            let writers: [(&str, &dyn Fn() -> Result<(), String>); 2] = [
-                ("drawn by a render pass", &|| {
-                    render(name, &queue, &drawn, &texture)
-                }),
-                ("written by a kernel", &|| {
-                    write(name, &queue, &written, &texture)
-                }),
-            ];
-            for (how, writer) in writers {
+            for by_pass in [true, false] {
+                let how = match by_pass {
+                    true => "drawn by a render pass",
+                    false => "written by a kernel",
+                };
                 let what = format!("{} {how}", shape.what);
                 let at = (&texture, PICTURE);
-                let wrote = copy_in(name, on, at, 8, &stale).and_then(|()| writer());
+                let wrote = copy_in(name, on, at, 8, &stale).and_then(|()| match by_pass {
+                    true => render(name, &queue, &drawn, &texture),
+                    false => write(name, &queue, &written, &texture),
+                });
                 if let Err(why) = wrote {
                     cells.check(&what, Err(why), &[], (1, 1));
                     continue;
