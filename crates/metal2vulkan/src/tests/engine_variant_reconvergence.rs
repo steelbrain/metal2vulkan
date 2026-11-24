@@ -34,18 +34,20 @@ use crate::pipeline::testing::{
 };
 use crate::spirv::testing::{committed_descriptions, committed_profiles, spirv_dis};
 
-/// `k(b0, p, l)`: each thread stores 1 or 2 at `b0[p + 4096]` by its parity, then, past the merge
-/// of that selection, the shuffle of the stored value from lane 0 plus its lane `l` at `b0[p]`;
-/// `p` is its position in the grid, `l` its index in its simdgroup. The shuffle stands in a block
-/// every thread runs together.
-const AFTER_MERGE: &str = r#"define void @k(ptr addrspace(1) noundef "air-buffer-no-alias" %b0, i32 noundef %p, i32 noundef %l) {
+/// `k(b0, b1, p, l)`: each thread stores 1 or 2 at `b1[p]` by its parity, then, past the merge of
+/// that selection, the shuffle of the stored value from lane 0 plus its lane `l` at `b0[p]`; `p`
+/// is its position in the grid, `l` its index in its simdgroup. The shuffle stands in a block
+/// every thread runs together. The arms store to a buffer of their own, an object apart from `b0`
+/// for the lockstep analysis (`lower::simd::lockstep`): with their store at `b0[p + 4096]` the
+/// kernel observes its threadgroup partition, and its flat variant is
+/// `Unsupported{GpuEncodedIndirectCommands, NotRepresentable}` on every committed profile.
+const AFTER_MERGE: &str = r#"define void @k(ptr addrspace(1) noundef "air-buffer-no-alias" %b0, ptr addrspace(1) noundef "air-buffer-no-alias" %b1, i32 noundef %p, i32 noundef %l) {
 entry:
   %odd = and i32 %p, 1
   %d = icmp eq i32 %odd, 0
   %i = zext i32 %p to i64
   %o = getelementptr inbounds i32, ptr addrspace(1) %b0, i64 %i
-  %j = add i64 %i, 4096
-  %q = getelementptr inbounds i32, ptr addrspace(1) %b0, i64 %j
+  %q = getelementptr inbounds i32, ptr addrspace(1) %b1, i64 %i
   br i1 %d, label %a, label %b
 
 a:
@@ -71,10 +73,11 @@ declare i32 @air.simd_shuffle.u.i32(i32, i16)
 !air.language_version = !{!21}
 !0 = !{ptr @k, !1, !2}
 !1 = !{}
-!2 = !{!3, !4, !5}
+!2 = !{!3, !6, !4, !5}
 !3 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b0"}
-!4 = !{i32 1, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"p"}
-!5 = !{i32 2, !"air.thread_index_in_simdgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"l"}
+!6 = !{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b1"}
+!4 = !{i32 2, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"p"}
+!5 = !{i32 3, !"air.thread_index_in_simdgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"l"}
 !20 = !{i32 2, i32 8, i32 0}
 !21 = !{!"Metal", i32 4, i32 0, i32 0}
 "#;
