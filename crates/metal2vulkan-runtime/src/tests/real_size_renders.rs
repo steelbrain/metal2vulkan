@@ -1,6 +1,7 @@
 //! Render targets at an icon's real size, every texel compared: textures over buffers in one
-//! Shared block of rt's own that a pass clears and draws into part of, and passes of two targets
-//! whose draws sample each target while it is the pass's attachment.
+//! Shared block of rt's own that a pass clears and draws into part of; passes of two targets whose
+//! draws sample each target while it is the pass's attachment; and the layers and screens of
+//! rt's own an icon is drawn through, cleared or loaded and drawn into in part.
 //!
 //! Under a device cfg, on every device of the cfg's kind (`on_device`), with the readers and the
 //! cells of `real_size.rs`:
@@ -41,6 +42,18 @@
 //!   attachment 1 shows in attachment 0. Each line says how the device reads its attachments,
 //!   through the feedback loop or through copies into a shadow, with the pass's
 //!   `Metrics::attachment_loop_reads` and `Metrics::attachment_read_copies`.
+//! - `every_device_draws_icon_layers_in_part_after_a_clear_every_texel`: Private targets of rt's
+//!   own that icons are drawn through, `BGRA8Unorm` at 256x128 and at 256x192 of three levels and
+//!   `RGBA16Unorm` at 256x128 (the 8-bit pattern's channels times 257), each holding the
+//!   pattern's complement by a blit, then cleared by a pass of one attachment that draws the
+//!   pattern into the same rectangle: copied out and sampled, every texel compared.
+//! - `every_device_samples_a_screen_through_its_view_in_its_own_pass_every_texel`: Private
+//!   targets of rt's own at a screen's 2560x1600, `BGRA8Unorm` and `BGR10A2Unorm`, each holding
+//!   the pattern's complement by a blit, then drawn through its own-format view (identity
+//!   swizzle) by a pass that loads it, draws the pattern into the rectangle and, after a memory
+//!   barrier, samples the view, its own attachment, at each pixel's centre and writes the
+//!   complement of what it read: copied out and sampled through the view, every texel compared,
+//!   with the device's form and the pass's attachment counters.
 //!
 //! `llvm-as` assembles the shaders; without it the tests skip visibly.
 
@@ -76,8 +89,11 @@ mod on_device {
     /// texture 0 through sampler 0 at the pixel's centre (its position scaled by buffer 0's second
     /// `float4`) and write to both buffer 0's first `float4` less what they read: `loop_front` the
     /// read's four channels, `loop_back` its red and green twice (red, green, red, green), as a
-    /// two-channel target reads. `UNORM8`, `UNORM10` and `FLOAT` stand for the lines that make
-    /// `%v`, the pattern at `(%x, %y)`.
+    /// two-channel target reads. `unorm8_one`, `unorm16_one` and `unorm10_one` write render target
+    /// 0 alone: the 8-bit pattern, its channels times 257 as `(257 k + 0.25) / 65535`, and the
+    /// 10-bit pattern; `loop_one` writes render target 0 alone as `loop_front` does.
+    /// `UNORM8`, `UNORM16`, `UNORM10` and `FLOAT` stand for the lines that make `%v`, the pattern
+    /// at `(%x, %y)`.
     const SHADERS: &str = r#"; Owned synthetic shaders.
 source_filename = "real_size_renders.metal"
 target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
@@ -178,11 +194,55 @@ entry:
   ret <{ <4 x float>, <4 x float> }> %o
 }
 
+define <4 x float> @unorm8_one(<4 x float> %pos) {
+entry:
+  %xy = shufflevector <4 x float> %pos, <4 x float> poison, <2 x i32> <i32 0, i32 1>
+  %pi = tail call <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float> %xy)
+  %x = extractelement <2 x i32> %pi, i64 0
+  %y = extractelement <2 x i32> %pi, i64 1
+UNORM8
+  ret <4 x float> %v
+}
+
+define <4 x float> @unorm16_one(<4 x float> %pos) {
+entry:
+  %xy = shufflevector <4 x float> %pos, <4 x float> poison, <2 x i32> <i32 0, i32 1>
+  %pi = tail call <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float> %xy)
+  %x = extractelement <2 x i32> %pi, i64 0
+  %y = extractelement <2 x i32> %pi, i64 1
+UNORM16
+  ret <4 x float> %v
+}
+
+define <4 x float> @unorm10_one(<4 x float> %pos) {
+entry:
+  %xy = shufflevector <4 x float> %pos, <4 x float> poison, <2 x i32> <i32 0, i32 1>
+  %pi = tail call <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float> %xy)
+  %x = extractelement <2 x i32> %pi, i64 0
+  %y = extractelement <2 x i32> %pi, i64 1
+UNORM10
+  ret <4 x float> %v
+}
+
+define <4 x float> @loop_one(<4 x float> %pos, ptr addrspace(1) %t, ptr addrspace(2) %smp, ptr addrspace(2) noundef "air-buffer-no-alias" %p) {
+entry:
+  %xy = shufflevector <4 x float> %pos, <4 x float> poison, <2 x i32> <i32 0, i32 1>
+  %pinv = getelementptr inbounds <4 x float>, ptr addrspace(2) %p, i64 1
+  %inv4 = load <4 x float>, ptr addrspace(2) %pinv, align 16
+  %inv = shufflevector <4 x float> %inv4, <4 x float> poison, <2 x i32> <i32 0, i32 1>
+  %uv = fmul <2 x float> %xy, %inv
+  %r = tail call { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1) %t, ptr addrspace(2) %smp, <2 x float> %uv, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.000000e+00, float 0.000000e+00, i32 0)
+  %v = extractvalue { <4 x float>, i8 } %r, 0
+  %s = load <4 x float>, ptr addrspace(2) %p, align 16
+  %c = fsub <4 x float> %s, %v
+  ret <4 x float> %c
+}
+
 declare <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float>)
 declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr addrspace(2), <2 x float>, i1, <2 x i32>, i1, float, float, i32)
 
 !air.vertex = !{!0}
-!air.fragment = !{!6, !12, !13, !16, !17, !22}
+!air.fragment = !{!6, !12, !13, !16, !17, !22, !24, !25, !26, !27}
 !air.version = !{!14}
 !air.language_version = !{!15}
 !0 = !{ptr @cover, !1, !4}
@@ -208,6 +268,11 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr a
 !20 = !{i32 2, !"air.sampler", !"air.location_index", i32 0, i32 1, !"air.arg_type_name", !"sampler", !"air.arg_name", !"smp"}
 !21 = !{i32 3, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 2, !"air.arg_type_size", i32 16, !"air.arg_type_align_size", i32 16, !"air.arg_type_name", !"float4", !"air.arg_name", !"p"}
 !22 = !{ptr @loop_back, !7, !18}
+!23 = !{!8}
+!24 = !{ptr @unorm8_one, !23, !10}
+!25 = !{ptr @unorm16_one, !23, !10}
+!26 = !{ptr @unorm10_one, !23, !10}
+!27 = !{ptr @loop_one, !23, !18}
 "#;
 
     /// The lines that make `%v`, the 8-bit pattern at `(%x, %y)`, each channel's `k` as
@@ -230,6 +295,29 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr a
   %kv = insertelement <4 x float> %kv2, float %f3, i64 3
   %kq = fadd <4 x float> %kv, <float 2.500000e-01, float 2.500000e-01, float 2.500000e-01, float 2.500000e-01>
   %v = fdiv <4 x float> %kq, <float 2.550000e+02, float 2.550000e+02, float 2.550000e+02, float 2.550000e+02>
+"#;
+
+    /// The lines that make `%v`, the 8-bit pattern at `(%x, %y)` in 16 bits, each channel's `k`
+    /// times 257 as `(257 k + 0.25) / 65535`.
+    const UNORM16: &str = r#"  %k0 = and i32 %x, 255
+  %k1 = and i32 %y, 255
+  %xh = lshr i32 %x, 8
+  %yh = lshr i32 %y, 8
+  %yh4 = shl i32 %yh, 4
+  %k2 = or i32 %xh, %yh4
+  %xy.x = xor i32 %x, %y
+  %k3 = and i32 %xy.x, 255
+  %f0 = uitofp i32 %k0 to float
+  %f1 = uitofp i32 %k1 to float
+  %f2 = uitofp i32 %k2 to float
+  %f3 = uitofp i32 %k3 to float
+  %kv0 = insertelement <4 x float> poison, float %f0, i64 0
+  %kv1 = insertelement <4 x float> %kv0, float %f1, i64 1
+  %kv2 = insertelement <4 x float> %kv1, float %f2, i64 2
+  %kv = insertelement <4 x float> %kv2, float %f3, i64 3
+  %k16 = fmul <4 x float> %kv, <float 2.570000e+02, float 2.570000e+02, float 2.570000e+02, float 2.570000e+02>
+  %kq = fadd <4 x float> %k16, <float 2.500000e-01, float 2.500000e-01, float 2.500000e-01, float 2.500000e-01>
+  %v = fdiv <4 x float> %kq, <float 6.553500e+04, float 6.553500e+04, float 6.553500e+04, float 6.553500e+04>
 "#;
 
     /// The lines that make `%v`, the 10-bit pattern at `(%x, %y)`, each colour channel's `k` as
@@ -261,6 +349,7 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr a
         let floats = crate::tests::real_size_overs::on_device::library()?;
         let text = (SHADERS.replace("UNORM8\n", UNORM8))
             .replace("UNORM10\n", UNORM10)
+            .replace("UNORM16\n", UNORM16)
             .replace("FLOAT\n", FLOAT);
         match llvm_assemble_text(&text) {
             Ok(bitcode) => {
@@ -1254,6 +1343,416 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr a
                         cells.check(&cell(how), got, &image, (8, width));
                     }
                 }
+            }
+            cells.all_exact();
+        });
+    }
+
+    /// How a layer's or a screen's texels are held, drawn and read: `BGRA8Unorm` and
+    /// `RGBA16Unorm` of the 8-bit pattern (each channel's `k` times 257 in 16 bits), and
+    /// `BGR10A2Unorm` of the 10-bit one.
+    #[derive(Clone, Copy)]
+    enum Layer {
+        Bgra8,
+        Rgba16,
+        Bgr10a2,
+    }
+
+    impl Layer {
+        fn format(self) -> PixelFormat {
+            match self {
+                Layer::Bgra8 => PixelFormat::BGRA8Unorm,
+                Layer::Rgba16 => PixelFormat::RGBA16Unorm,
+                Layer::Bgr10a2 => PixelFormat::BGR10A2Unorm,
+            }
+        }
+
+        /// A texel's bytes.
+        fn texel(self) -> u32 {
+            match self {
+                Layer::Rgba16 => 8,
+                Layer::Bgra8 | Layer::Bgr10a2 => 4,
+            }
+        }
+
+        /// The fragment that draws the pattern into one target.
+        fn fragment(self) -> &'static str {
+            match self {
+                Layer::Bgra8 => "unorm8_one",
+                Layer::Rgba16 => "unorm16_one",
+                Layer::Bgr10a2 => "unorm10_one",
+            }
+        }
+
+        /// Each channel's largest value, in shader order.
+        fn largest(self) -> [u32; 4] {
+            match self {
+                Layer::Bgra8 => [255; 4],
+                Layer::Rgba16 => [65535; 4],
+                Layer::Bgr10a2 => [1023, 1023, 1023, 3],
+            }
+        }
+
+        /// The pattern's channels at `(x, y)`, or their complement, in shader order.
+        fn channels(self, x: u32, y: u32, complemented: bool) -> [u32; 4] {
+            let k = match self {
+                Layer::Bgra8 => unorm_pattern(8, 8, x, y),
+                Layer::Rgba16 => unorm_pattern(8, 8, x, y).map(|k| k * 257),
+                Layer::Bgr10a2 => unorm_pattern(10, 2, x, y),
+            };
+            let largest = self.largest();
+            std::array::from_fn(|c| match complemented {
+                true => largest[c] - k[c],
+                false => k[c],
+            })
+        }
+
+        /// The channels a pass clears it to, which neither the pattern nor its complement holds
+        /// at any texel of these sizes.
+        fn clear(self) -> [u32; 4] {
+            match self {
+                Layer::Bgra8 => [32, 96, 160, 224],
+                Layer::Rgba16 => [32, 96, 160, 224].map(|k| k * 257),
+                Layer::Bgr10a2 => [32, 96, 160, 2],
+            }
+        }
+
+        /// The clear colour of [`clear`](Self::clear): `(k + 0.25)` over each channel's largest.
+        fn clear_color(self) -> ClearColor {
+            let (clear, largest) = (self.clear(), self.largest());
+            let [r, g, b, a] =
+                std::array::from_fn(|c| (f64::from(clear[c]) + 0.25) / f64::from(largest[c]));
+            ClearColor::new(r, g, b, a)
+        }
+
+        /// The bytes in memory of a texel of channels `k`: `BGRA8Unorm` blue, green, red, alpha;
+        /// `RGBA16Unorm` each channel little-endian; `BGR10A2Unorm` one little-endian word, blue
+        /// lowest.
+        fn bytes(self, [r, g, b, a]: [u32; 4]) -> Vec<u8> {
+            match self {
+                Layer::Bgra8 => [b, g, r, a].map(|c| c as u8).to_vec(),
+                Layer::Rgba16 => [r, g, b, a]
+                    .into_iter()
+                    .flat_map(|c| (c as u16).to_le_bytes())
+                    .collect(),
+                Layer::Bgr10a2 => (b | (g << 10) | (r << 20) | (a << 30))
+                    .to_le_bytes()
+                    .to_vec(),
+            }
+        }
+
+        /// How each sampled read of a texel packs it: one read, or for `RGBA16Unorm` two, its
+        /// red and green, then its blue and alpha.
+        fn packs(self) -> Vec<Pack> {
+            match self {
+                Layer::Bgra8 => vec![Pack::unorm(8, 4)],
+                Layer::Rgba16 => vec![
+                    Pack {
+                        scale: [65535.0, 65535.0, 0.0, 0.0],
+                        shift: [0, 16, 0, 0],
+                        mask: [0xffff, 0xffff << 16, 0, 0],
+                    },
+                    Pack {
+                        scale: [0.0, 0.0, 65535.0, 65535.0],
+                        shift: [0, 0, 0, 16],
+                        mask: [0, 0, 0xffff, 0xffff << 16],
+                    },
+                ],
+                Layer::Bgr10a2 => vec![Kind::Rgb10a2.pack()],
+            }
+        }
+
+        /// The word read `read` of [`packs`](Self::packs) makes of channels `k`.
+        fn word(self, read: usize, [r, g, b, a]: [u32; 4]) -> u32 {
+            match (self, read) {
+                (Layer::Bgra8, _) => r | (g << 8) | (b << 16) | (a << 24),
+                (Layer::Rgba16, 0) => r | (g << 16),
+                (Layer::Rgba16, _) => b | (a << 16),
+                (Layer::Bgr10a2, _) => r | (g << 10) | (b << 20) | (a << 30),
+            }
+        }
+    }
+
+    /// The render state of `cover` and `fragment` into one colour target of `format`.
+    fn one_state(
+        name: &str,
+        device: &Device,
+        library: &Library,
+        (fragment, format): (&str, PixelFormat),
+    ) -> RenderPipelineState {
+        let function = |f: &str| {
+            StageSource::Function(FunctionDescriptor::new(
+                library.function(f).expect("the function"),
+            ))
+        };
+        let mut d = RenderPipelineDescriptor::new(function("cover"));
+        d.fragment = Some(function(fragment));
+        d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(format));
+        let state = (device.new_render_pipeline_state(&d, crate::tests::no_constexpr_samplers))
+            .unwrap_or_else(|error| panic!("{name}: {fragment}: {error}"));
+        (state.finish_pipeline()).unwrap_or_else(|error| panic!("{name}: {fragment}: {error}"));
+        state
+    }
+
+    /// A Private render target of rt's own, read by shaders, of `layer` at `size` with `levels`
+    /// levels, at `index`.
+    fn own_target(
+        name: &str,
+        device: &Device,
+        (layer, size, levels): (Layer, [u32; 2], u32),
+        index: Option<u32>,
+    ) -> Texture {
+        let [width, height] = size;
+        let format = layer.format();
+        let mut d = TextureDescriptor::new(TextureType::Type2D, format, width, height);
+        d.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+        d.storage_mode = StorageMode::Private;
+        d.mipmap_level_count = levels;
+        (device.new_texture(&d, index))
+            .unwrap_or_else(|error| panic!("{name}: {format:?} {width}x{height}: {error}"))
+    }
+
+    /// Every texel of `texture`, of `layer` at `size` and holding `of(x, y)`, sampled by each of
+    /// the layer's reads, each a cell named by `what` and `how`.
+    fn sample_all(
+        (name, on, readers): (&str, (&Device, &CommandQueue), &Readers),
+        cells: &mut Cells,
+        (texture, layer, size): (&Texture, Layer, [u32; 2]),
+        of: &dyn Fn(u32, u32) -> [u32; 4],
+        (what, how): (&str, &str),
+    ) {
+        for (read, pack) in layer.packs().iter().enumerate() {
+            let want = each(size, |x, y| {
+                layer.word(read, of(x, y)).to_le_bytes().to_vec()
+            });
+            let got = sampled(name, on, readers, (texture, size), pack, &want);
+            let part = match layer {
+                Layer::Rgba16 => [" (red and green)", " (blue and alpha)"][read],
+                Layer::Bgra8 | Layer::Bgr10a2 => "",
+            };
+            cells.check(&format!("{what}: {how}{part}"), got, &want, (4, size[0]));
+        }
+    }
+
+    /// Draws `pattern` into `pass`'s one target, cut to [`drawn`] of `size`; then, where `looped`
+    /// names one, after a memory barrier its loop over the whole target, sampling the texture it
+    /// names through sampler `sampler` with the loop's constants, as its attachment.
+    fn draw_one(
+        name: &str,
+        queue: &CommandQueue,
+        (pass, pattern, size): (&RenderPassDescriptor, &RenderPipelineState, [u32; 2]),
+        looped: Option<(&RenderPipelineState, &Texture, &SamplerState)>,
+    ) -> Result<(), String> {
+        let [x, y, width, height] = drawn(size).map(u64::from);
+        let command_buffer = queue.command_buffer().map_err(said)?;
+        let mut encoder = (command_buffer.render_command_encoder(pass)).map_err(said)?;
+        encoder.set_render_pipeline_state(pattern).map_err(said)?;
+        encoder.set_scissor_rect(ScissorRect {
+            x,
+            y,
+            width,
+            height,
+        });
+        (encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)).map_err(said)?;
+        if let Some((state, texture, sampler)) = looped {
+            let constants: Vec<u8> = [1.0; 4]
+                .into_iter()
+                .chain([1.0 / size[0] as f32, 1.0 / size[1] as f32, 0.0, 0.0])
+                .flat_map(f32::to_le_bytes)
+                .collect();
+            encoder.memory_barrier().map_err(said)?;
+            encoder.set_scissor_rect(ScissorRect {
+                x: 0,
+                y: 0,
+                width: u64::from(size[0]),
+                height: u64::from(size[1]),
+            });
+            encoder.set_render_pipeline_state(state).map_err(said)?;
+            (encoder.set_fragment_texture(Some(texture), 0)).map_err(said)?;
+            (encoder.set_fragment_sampler_state(Some(sampler), 0)).map_err(said)?;
+            (encoder.set_fragment_bytes(&constants, 0)).map_err(said)?;
+            (encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)).map_err(said)?;
+        }
+        encoder.end_encoding();
+        completed(name, &command_buffer)
+    }
+
+    /// The layers icons are drawn through, Private targets of rt's own: `BGRA8Unorm` at 256x128
+    /// and at 256x192 of three levels, and `RGBA16Unorm` at 256x128.
+    const LAYERS: [(Layer, [u32; 2], u32); 3] = [
+        (Layer::Bgra8, [256, 128], 1),
+        (Layer::Bgra8, [256, 192], 3),
+        (Layer::Rgba16, [256, 128], 1),
+    ];
+
+    /// Layers ([`LAYERS`]) each holding the pattern's complement by a blit, then drawn by a pass
+    /// that clears level 0 and draws the pattern into part of it, cut to [`drawn`]: copied out by
+    /// a blit and sampled, every texel the pattern inside the rectangle and the clear outside.
+    #[test]
+    fn every_device_draws_icon_layers_in_part_after_a_clear_every_texel() {
+        let Some((packed, _, own)) = libraries() else {
+            return;
+        };
+        each_device("real_size_layers", |name, _, device| {
+            let readers = Readers::new(name, &device, &packed);
+            let first = IndexClass::Texture.range().start;
+            (device.grant_indices(IndexClass::Texture, first, LAYERS.len() as u32))
+                .unwrap_or_else(|error| panic!("{name}: a texture grant: {error}"));
+            let queue = device.new_command_queue(4).expect("a queue");
+            let on = (&device, &queue);
+            let mut cells = Cells::new(name);
+            for (index, &(layer, size, levels)) in (first..).zip(LAYERS.iter()) {
+                let [width, height] = size;
+                let what = format!("{:?} {width}x{height} of {levels} levels", layer.format());
+                let texture = own_target(name, &device, (layer, size, levels), Some(index));
+                let texel = layer.texel();
+                let stale = each(size, |x, y| layer.bytes(layer.channels(x, y, true)));
+                if let Err(why) = copy_in(name, on, (&texture, size), texel, &stale) {
+                    cells.check(&format!("{what}: the blit in"), Err(why), &[], (1, 1));
+                    continue;
+                }
+                let state = one_state(name, &device, &own, (layer.fragment(), layer.format()));
+                let mut pass = RenderPassDescriptor::default();
+                let target = &mut pass.color_attachments[0];
+                target.texture = Some(texture.clone());
+                target.load_action = LoadAction::Clear;
+                target.store_action = StoreAction::Store;
+                target.clear_color = layer.clear_color();
+                println!("real-size: {name}: {what}: {}", laid(&device, &pass));
+                if let Err(why) = draw_one(name, &queue, (&pass, &state, size), None) {
+                    cells.check(&format!("{what}: the pass"), Err(why), &[], (1, 1));
+                    continue;
+                }
+                let [left, top, w, h] = drawn(size);
+                let after = |x: u32, y: u32| {
+                    let inside = (left..left + w).contains(&x) && (top..top + h).contains(&y);
+                    match inside {
+                        true => layer.channels(x, y, false),
+                        false => layer.clear(),
+                    }
+                };
+                let image = each(size, |x, y| layer.bytes(after(x, y)));
+                let got = copy_out(name, on, (&texture, size), texel, &image);
+                let how = "level 0 copied out after a clear and a draw of part of it";
+                cells.check(
+                    &format!("{what}: {how}"),
+                    got,
+                    &image,
+                    (texel as usize, width),
+                );
+                let at = (&texture, layer, size);
+                sample_all(
+                    (name, on, &readers),
+                    &mut cells,
+                    at,
+                    &after,
+                    (&what, "sampled"),
+                );
+            }
+            cells.all_exact();
+        });
+    }
+
+    /// The screens icons are drawn into, Private targets of rt's own at 2560x1600, each rendered
+    /// through its own-format view (identity swizzle): `BGRA8Unorm` and `BGR10A2Unorm`.
+    const SCREENS: [Layer; 2] = [Layer::Bgra8, Layer::Bgr10a2];
+
+    /// The screens' size.
+    const SCREEN: [u32; 2] = [2560, 1600];
+
+    /// Screens ([`SCREENS`]) holding the pattern's complement by a blit, each drawn through its
+    /// view by a pass that loads it, draws the pattern into part of it, cut to [`drawn`], and
+    /// after a memory barrier samples the view, its own attachment, at each pixel's centre over
+    /// the whole of it, writing the complement of what it read: every texel then holds the
+    /// pattern's complement inside the rectangle and the pattern outside. Copied out by a blit
+    /// and sampled through the view, every texel compared. A device without attachment reads,
+    /// which refuses such a draw typed, says so and runs none.
+    #[test]
+    fn every_device_samples_a_screen_through_its_view_in_its_own_pass_every_texel() {
+        let Some((packed, _, own)) = libraries() else {
+            return;
+        };
+        each_device("real_size_screens", |name, _, device| {
+            let (reads, looped) = {
+                let core = device.core();
+                (core.attachment_reads, core.feedback_loop)
+            };
+            if !reads {
+                println!("real-size: {name}: no attachment reads; the screen cells not run");
+                return;
+            }
+            let readers = Readers::new(name, &device, &packed);
+            let first = IndexClass::Texture.range().start;
+            let count = 2 * SCREENS.len() as u32;
+            (device.grant_indices(IndexClass::Texture, first, count))
+                .unwrap_or_else(|error| panic!("{name}: a texture grant: {error}"));
+            let mut indices = first..first + count;
+            let queue = device.new_command_queue(4).expect("a queue");
+            let on = (&device, &queue);
+            let form = match looped {
+                true => "through the feedback loop",
+                false => "through copies into a shadow",
+            };
+            let mut cells = Cells::new(name);
+            let size = SCREEN;
+            let [width, height] = size;
+            for &layer in &SCREENS {
+                let format = layer.format();
+                let texture = own_target(name, &device, (layer, size, 1), indices.next());
+                let view = (texture.new_texture_view_with_swizzle(
+                    format,
+                    TextureType::Type2D,
+                    0..1,
+                    0..1,
+                    TextureSwizzleChannels::DEFAULT,
+                    indices.next(),
+                ))
+                .unwrap_or_else(|error| panic!("{name}: {format:?}: the view: {error}"));
+                let texel = layer.texel();
+                let stale = each(size, |x, y| layer.bytes(layer.channels(x, y, true)));
+                let base = format!("{format:?} {width}x{height} through its view");
+                if let Err(why) = copy_in(name, on, (&texture, size), texel, &stale) {
+                    cells.check(&format!("{base}: the blit in"), Err(why), &[], (1, 1));
+                    continue;
+                }
+                let pattern = one_state(name, &device, &own, (layer.fragment(), format));
+                let looping = one_state(name, &device, &own, ("loop_one", format));
+                let mut pass = RenderPassDescriptor::default();
+                let target = &mut pass.color_attachments[0];
+                target.texture = Some(view.clone());
+                target.load_action = LoadAction::Load;
+                target.store_action = StoreAction::Store;
+                let counters = device.counters();
+                let before = counters.metrics();
+                let loops = Some((&looping, &view, &readers.sampler));
+                let drew = draw_one(name, &queue, (&pass, &pattern, size), loops);
+                let moved = counters.metrics();
+                let what = format!(
+                    "{base}, sampled in its own pass ({form}, attachment_loop_reads {}, \
+                     attachment_read_copies {})",
+                    moved.attachment_loop_reads - before.attachment_loop_reads,
+                    moved.attachment_read_copies - before.attachment_read_copies
+                );
+                if let Err(why) = drew {
+                    cells.check(&format!("{what}: the pass"), Err(why), &[], (1, 1));
+                    continue;
+                }
+                let [left, top, w, h] = drawn(size);
+                let after = |x: u32, y: u32| {
+                    let inside = (left..left + w).contains(&x) && (top..top + h).contains(&y);
+                    layer.channels(x, y, inside)
+                };
+                let image = each(size, |x, y| layer.bytes(after(x, y)));
+                let got = copy_out(name, on, (&texture, size), texel, &image);
+                cells.check(
+                    &format!("{what}: copied out"),
+                    got,
+                    &image,
+                    (texel as usize, width),
+                );
+                let at = (&view, layer, size);
+                let how = (what.as_str(), "sampled through its view");
+                sample_all((name, on, &readers), &mut cells, at, &after, how);
             }
             cells.all_exact();
         });
