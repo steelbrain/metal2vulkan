@@ -1186,9 +1186,9 @@ mod on_device {
                 let on = (&device, &queue);
                 let mut cells = Cells::new(name);
                 for planes in &PICTURES {
-                    let textures = planes
-                        .each_ref()
-                        .map(|plane| d3d.shared_texture(plane.size[0], plane.size[1], dxgi(plane)));
+                    let textures = planes.each_ref().map(|plane| {
+                        d3d.shared_texture(plane.size[0], plane.size[1], dxgi(plane), BIND)
+                    });
                     let surface = (device
                         .import_d3d11_surface(&imported(&textures, planes, first)))
                     .unwrap_or_else(|error| panic!("{name}: the import: {error}"));
