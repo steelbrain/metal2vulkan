@@ -1324,6 +1324,10 @@ pub enum Gap {
     /// device's linear image does not hold that usage, as the image format query of the tiling
     /// does not offer it or the tiling's format features lack what the optimal image has for it.
     /// A plane whose tiling lacks sampling, rendering or either copy takes the copy form instead.
+    /// A plane of a Direct3D 11 texture's import (`Device::import_d3d11_surface`, on Windows)
+    /// whose texture's uses ask an image usage the texture's bind flags do not give, or that the
+    /// import does not offer: storage, for one, of a texture made without
+    /// `D3D11_BIND_UNORDERED_ACCESS`.
     ///
     /// Basis: device (the image format query and the format features of the plane's tiling).
     SurfaceUsage {
@@ -1940,8 +1944,8 @@ pub enum TextureViewKind {
     /// Another pixel format Metal takes that a surface plane's image does not list: in place
     /// ([`Device::new_exported_surface`](crate::Device::new_exported_surface)), the device's
     /// linear image does not sample that format or its export does not take the list; over a
-    /// Direct3D 11 texture (`Device::import_d3d11_surface`, on Windows), the import does not take
-    /// the list of every format the plane's texture views as.
+    /// Direct3D 11 texture (`Device::import_d3d11_surface`, on Windows), the image lists only its
+    /// own format and the plane's texture's, as Direct3D 11 made the texture in one format.
     SurfacePixelFormat,
     /// Another texture type than the casts built
     /// ([`Texture::new_texture_view`](crate::Texture::new_texture_view)).

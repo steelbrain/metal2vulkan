@@ -35,6 +35,9 @@ pub struct D3d11Plane<'a> {
     /// `R16Uint` or `R32Uint` for a chroma plane, which the texture views as two channels. Its
     /// texel has the bytes of the descriptor's, in Metal's same view class.
     pub image_format: PixelFormat,
+    /// The Direct3D 11 texture's `BindFlags` (`D3D11_TEXTURE2D_DESC`), as it was made: the image
+    /// takes the usage they give and no other ([`Device::import_d3d11_surface`]).
+    pub bind_flags: u32,
     /// The texture rt makes over the plane, as [`PlaneSpec::descriptor`](crate::PlaneSpec):
     /// 2D, of one level, sample and slice, its width and height the Direct3D 11 texture's, its
     /// pixel format the view's (`R8Unorm`, `RG8Unorm`, `R16Unorm`, `RG16Unorm`).
@@ -44,15 +47,26 @@ pub struct D3d11Plane<'a> {
     pub index: Option<u32>,
 }
 
-/// The usage a plane's image takes where the import offers it and the view's format holds it:
-/// sampled, rendered, copied from and into, and storage.
-const WANTED: vk::ImageUsageFlags = vk::ImageUsageFlags::from_raw(
-    vk::ImageUsageFlags::SAMPLED.as_raw()
-        | vk::ImageUsageFlags::COLOR_ATTACHMENT.as_raw()
-        | vk::ImageUsageFlags::TRANSFER_SRC.as_raw()
-        | vk::ImageUsageFlags::TRANSFER_DST.as_raw()
-        | vk::ImageUsageFlags::STORAGE.as_raw(),
-);
+/// The image usage a Direct3D 11 texture made with `bind_flags` gives: copied from and into, as
+/// Direct3D 11 copies a texture of default usage with no bind flag (`CopyResource`); sampled for
+/// `D3D11_BIND_SHADER_RESOURCE`, rendered for `D3D11_BIND_RENDER_TARGET` and storage for
+/// `D3D11_BIND_UNORDERED_ACCESS`. Vulkan states no rule for an image over memory Direct3D made
+/// with other parameters: its rules for an import tie the image to the exporter's
+/// (`VUID-VkMemoryDedicatedAllocateInfo-image-01876` for a Vulkan export), and its memory
+/// aliasing promises a consistent reading to images of the same creation parameters.
+pub(crate) fn bound_usage(bind_flags: u32) -> vk::ImageUsageFlags {
+    const BOUND: [(u32, vk::ImageUsageFlags); 3] = [
+        (0x8, vk::ImageUsageFlags::SAMPLED),
+        (0x20, vk::ImageUsageFlags::COLOR_ATTACHMENT),
+        (0x80, vk::ImageUsageFlags::STORAGE),
+    ];
+    (BOUND.iter())
+        .filter(|&&(bind, _)| bind_flags & bind != 0)
+        .fold(
+            vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST,
+            |usage, &(_, bit)| usage | bit,
+        )
+}
 
 /// The handle type every plane imports as.
 const HANDLE: vk::ExternalMemoryHandleTypeFlags = vk::ExternalMemoryHandleTypeFlags::D3D11_TEXTURE;
@@ -70,15 +84,23 @@ impl Device {
     /// image's. Each import counts in [`Gauges::surface_imports`](crate::Gauges::surface_imports)
     /// while its texture lives.
     ///
-    /// **Views of another format.** The image is mutable where it lists more than its own
-    /// format. It lists its own format, the descriptor's and those the descriptor's texture
-    /// lists for views of another format
-    /// ([`Texture::new_texture_view`](crate::Texture::new_texture_view): its sRGB sibling, and
-    /// with `PixelFormatView` usage the formats Metal views it as) where the import query
-    /// (`vkGetPhysicalDeviceImageFormatProperties2`) takes that list with the image's usage.
-    /// Where it does not, the image lists its own format and the descriptor's where they differ,
-    /// and a view of a format it does not list is [`Gap::TextureView`] of
-    /// [`TextureViewKind::SurfacePixelFormat`](crate::TextureViewKind::SurfacePixelFormat).
+    /// **The image is the texture Direct3D 11 made.** Its usage is what the texture's
+    /// [`bind_flags`](D3d11Plane::bind_flags) give, and nothing more: copied from and into, as
+    /// Direct3D 11 copies any texture of default usage; sampled for `D3D11_BIND_SHADER_RESOURCE`,
+    /// rendered for `D3D11_BIND_RENDER_TARGET` and storage for `D3D11_BIND_UNORDERED_ACCESS`; each
+    /// where the descriptor's format holds it and the import query
+    /// (`vkGetPhysicalDeviceImageFormatProperties2`) offers it. The one usage beside them, which
+    /// the description has no counterpart for, is the attachment feedback loop's, taken where the
+    /// descriptor's texture is a render target a draw may read in its own pass and the import
+    /// offers it with the rest. Vulkan's import of memory another API made states no rule for an image of other usage or
+    /// flags than the texture's; its rules for an import of Vulkan's own export ask the same
+    /// image (`VUID-VkMemoryDedicatedAllocateInfo-image-01876`).
+    ///
+    /// **Views of another format.** The image lists no format but its own and the descriptor's.
+    /// Where the two differ (a chroma plane of `R16Uint` under an `RG8Unorm` texture), it is
+    /// mutable and lists both; else it is not mutable. A view of any other format
+    /// ([`Texture::new_texture_view`](crate::Texture::new_texture_view)) is [`Gap::TextureView`]
+    /// of [`TextureViewKind::SurfacePixelFormat`](crate::TextureViewKind::SurfacePixelFormat).
     ///
     /// **Layout.** The call makes no submission and waits for nothing: no move out of the
     /// undefined layout comes before a plane's first use. Vulkan 1.4, section 12.5.2 (Image
@@ -120,7 +142,9 @@ impl Device {
     /// of [`ImportHandle::D3d11Texture`] where the device does not enable
     /// `VK_KHR_external_memory_win32` or its optimal images of the plane's formats and usage do
     /// not import the handle (`vkGetPhysicalDeviceImageFormatProperties2`); [`Gap::SurfaceUsage`]
-    /// for a usage the descriptor asks that the import does not offer; [`Limit::ImportType`]
+    /// for a usage the descriptor asks that the texture's bind flags do not give or the import
+    /// does not offer (`ShaderWrite` on a texture made without `D3D11_BIND_UNORDERED_ACCESS`);
+    /// [`Limit::ImportType`]
     /// where the handle's properties and the image's requirements share no memory type;
     /// [`Limit::MemoryAllocations`]; [`Error::Vulkan`] where the handle's properties, the image,
     /// its import or its binding fail; what the texture's index takes; [`Error::Quiesced`].
@@ -193,13 +217,12 @@ impl Device {
             }));
         }
         let (format, view) = (image_plan.format, plan.format);
-        // The image's own format and the descriptor's, where they differ: the list the usage is
-        // decided with.
-        let pair: Vec<vk::Format> = match format == view {
+        // The image's own format and the descriptor's, where they differ: the formats it lists,
+        // mutable; none, and not mutable, where they are one.
+        let list: Vec<vk::Format> = match format == view {
             true => Vec::new(),
             false => vec![format, view],
         };
-        let full = plane_list(format, view, &plan.view_formats);
         let (instance, physical) = (core.instance.vk(), core.physical);
         let mut view_features = vk::FormatProperties2::default();
         // SAFETY: `physical` is `instance`'s.
@@ -218,23 +241,25 @@ impl Device {
             };
             held.contains(feature)
         };
-        let imports = |usage: vk::ImageUsageFlags, list: &[vk::Format]| {
-            (import_query(core, format, usage, list))
+        let imports = |usage: vk::ImageUsageFlags| {
+            (import_query(core, format, usage, &list))
                 .is_ok_and(|features| features.contains(vk::ExternalMemoryFeatureFlags::IMPORTABLE))
         };
-        let wanted = WANTED | plan.usage;
+        // The usage the texture's bind flags give, no other.
+        let wanted = bound_usage(plane.bind_flags);
         let usage = (0..32)
             .map(|bit| vk::ImageUsageFlags::from_raw(1u32 << bit))
-            .filter(|&bit| wanted.contains(bit) && holds(bit) && imports(bit, &pair))
+            .filter(|&bit| wanted.contains(bit) && holds(bit) && imports(bit))
             .fold(vk::ImageUsageFlags::empty(), |all, bit| all | bit);
-        if usage.is_empty() || !imports(usage, &pair) {
+        if usage.is_empty() || !imports(usage) {
             return Err(Error::Limit(Limit::NoImport { handle }));
         }
         // With the feedback usage where the plane asks it and the import offers it with the
         // rest, so a draw reads it as an attachment of its own pass through the loop; else
-        // through its shadow.
+        // through its shadow. The one usage Direct3D 11's description has no counterpart for,
+        // taken only where the plane's descriptor asks it.
         let looped = usage | vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT;
-        let usage = match plan.looped && imports(looped, &pair) {
+        let usage = match plan.looped && imports(looped) {
             true => looped,
             false => usage,
         };
@@ -245,13 +270,6 @@ impl Device {
                 missing: missing.as_raw(),
             }));
         }
-        // Every format the plane's texture views as, where the import takes that list with the
-        // usage; else the pair, and a view of a format the pair does not list is refused at
-        // the view (`TextureViewKind::SurfacePixelFormat`).
-        let list = match full.len() > pair.len() && imports(usage, &full) {
-            true => full,
-            false => pair,
-        };
         let device = &core.device;
         let mut external = vk::ExternalMemoryImageCreateInfo::default().handle_types(HANDLE);
         let mut listed = vk::ImageFormatListCreateInfo::default().view_formats(&list);
@@ -359,27 +377,6 @@ impl Device {
             linear_attachment: false,
         })
     }
-}
-
-/// The formats a plane's image lists where the import takes them: its own `format`, the
-/// descriptor's `view`, and `view_formats`, which the descriptor's texture lists for views of
-/// another format (its own first), each once. Empty where that is the image's own format alone:
-/// the image is then not mutable.
-pub(crate) fn plane_list(
-    format: vk::Format,
-    view: vk::Format,
-    view_formats: &[vk::Format],
-) -> Vec<vk::Format> {
-    let mut list = vec![format];
-    for &listed in [view].iter().chain(view_formats) {
-        if !list.contains(&listed) {
-            list.push(listed);
-        }
-    }
-    if list.len() == 1 {
-        list.clear();
-    }
-    list
 }
 
 /// What `vkGetPhysicalDeviceImageFormatProperties2` answers of an optimal 2D image of `format`

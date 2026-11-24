@@ -4010,6 +4010,13 @@ impl TextureInner {
         self.imaged().usage
     }
 
+    /// For the device tests: the formats its image lists for views of another format, empty where
+    /// it is not mutable.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn image_view_formats(&self) -> &[vk::Format] {
+        &self.imaged().view_formats
+    }
+
     /// Where the texture starts in its image: a view's first level and array layer, else the
     /// image's first.
     fn base(&self) -> [u32; 2] {

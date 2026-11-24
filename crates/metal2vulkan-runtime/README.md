@@ -932,16 +932,23 @@ made as Direct3D 11 textures, each by its NT handle (`IDXGIResource1::CreateShar
 own format and the texture rt makes over it, and returns a `Surface` whose planes rt's shaders
 read and write in place. Each plane is an optimal image of the Direct3D 11 texture's format, of
 the descriptor's width and height, on a dedicated import of its handle, counted in
-`Gauges::surface_imports`. Its usage is each of sampled, rendered, copied and storage that the
-import offers and the descriptor's format holds. The image is mutable where it lists more than
-its own format. It lists its own format, the descriptor's (a chroma plane of `R16Uint` under an
-`RG8Unorm` texture, the same bytes per texel in Metal's same view class) and the formats the
-texture lists for views of another format (with `PixelFormatView` usage, those Metal views it as,
-such as an `R8Uint` view of an `R8Unorm` plane), where the import query
-(`vkGetPhysicalDeviceImageFormatProperties2`) takes that list with the image's usage. Where it
-does not, the image lists its own format and the descriptor's where they differ, and a view of a
-format it does not list is `Gap::TextureView` of `TextureViewKind::SurfacePixelFormat`. The
-consumer keeps and closes the handles.
+`Gauges::surface_imports`. The plane's VkImage takes the usage the texture's BindFlags give
+(`D3d11Plane::bind_flags`, as the consumer made the texture), and no other: copied from and into,
+as Direct3D 11 copies any texture of default usage; sampled for `D3D11_BIND_SHADER_RESOURCE`,
+rendered for `D3D11_BIND_RENDER_TARGET`, storage for `D3D11_BIND_UNORDERED_ACCESS`; each where
+the descriptor's format holds it and the import query
+(`vkGetPhysicalDeviceImageFormatProperties2`) offers it. Vulkan states no rule for an image over
+memory another API made with other parameters: its rule for an import of Vulkan's own export is
+the same image (`VUID-VkMemoryDedicatedAllocateInfo-image-01876`), and its memory aliasing
+promises a consistent reading to images of the same creation parameters. A texture whose uses
+ask more (`ShaderWrite` on a texture made without `D3D11_BIND_UNORDERED_ACCESS`) is
+`Gap::SurfaceUsage`. The one usage beside them is the attachment feedback loop's, which Direct3D
+11's description has no counterpart for: taken where the descriptor's texture is a render target
+a draw may read in its own pass. The image lists its own format and the descriptor's alone: where
+they differ (a chroma plane of `R16Uint` under an `RG8Unorm` texture, the same bytes per texel in
+Metal's same view class) it is mutable and lists both, else it is not mutable, and a view of any
+other format is `Gap::TextureView` of `TextureViewKind::SurfacePixelFormat`. The consumer keeps
+and closes the handles.
 
 The import submits nothing and waits for nothing. Vulkan 1.4's section 12.5.2 says "When images
 created with external memory handle types listed in the external image implied layouts table are

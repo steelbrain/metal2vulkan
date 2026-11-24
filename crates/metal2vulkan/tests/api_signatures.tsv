@@ -1263,6 +1263,7 @@ field	metal2vulkan-runtime::ComputePipelineDescriptor.stage_input	pub stage_inpu
 field	metal2vulkan-runtime::ComputePipelineDescriptor.support_adding_binary_functions	pub support_adding_binary_functions: bool
 field	metal2vulkan-runtime::ComputePipelineDescriptor.support_indirect_command_buffers	pub support_indirect_command_buffers: bool
 field	metal2vulkan-runtime::ComputePipelineDescriptor.threadgroup_size_is_multiple_of_execution_width	pub threadgroup_size_is_multiple_of_execution_width: bool
+field	metal2vulkan-runtime::D3d11Plane.bind_flags	pub bind_flags: u32
 field	metal2vulkan-runtime::D3d11Plane.descriptor	pub descriptor: TextureDescriptor
 field	metal2vulkan-runtime::D3d11Plane.handle	pub handle: BorrowedHandle<'a>
 field	metal2vulkan-runtime::D3d11Plane.image_format	pub image_format: PixelFormat
