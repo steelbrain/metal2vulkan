@@ -17,15 +17,27 @@
 //!
 //! Three simdgroup functions follow, each drawn in four passes of one triangle over three pixels
 //! of the quad at (2, 2), the helper at quad lane 0 to 3 (`qh_one`): those three pixels and the
-//! helper are the draw's only fragments, so the simdgroup that shades them holds that quad alone.
-//! Which pixels share a fragment simdgroup, and its lane order, are the device's (the runtime's
-//! `fragment-simdgroup-grouping`; MSL states neither), so only answers that name no lane are
-//! here: `qs_arith` (`simd_sum`, `simd_min`, `simd_max` of a byte of the pixel's hash), `qs_bits`
+//! helper are the draw's only fragments, so the M3 Max's simdgroup that shades them holds that
+//! quad alone, as the Radeon 780M's subgroup does under RADV and AMDVLK. Which pixels share a
+//! fragment simdgroup, and its lane order, are the device's (the runtime's
+//! `fragment-simdgroup-grouping`; MSL states neither), so only answers that name no lane are here:
+//! `qs_arith` (`simd_sum`, `simd_min`, `simd_max` of a byte of the pixel's hash), `qs_bits`
 //! (`simd_and`, `simd_or`, `simd_xor` of 11 bits of it) and `qs_votes` (`simd_any` of the helper
 //! query and `simd_all` of its negation, and how many bits the low 32 of `simd_ballot` of the
 //! query and of `simd_active_threads_mask` set). `simd_is_first`, `simd_broadcast_first` and the
 //! prefix sums and products name a lane and are not here. Each pixel writes the three answers and
 //! `dfdx` of v plus their sum. A pass reads back the 8 by 8 corner of the target the quad lies in.
+//!
+//! **A wider subgroup.** A device whose fragment subgroup is wider than the drawn quad plus its
+//! helpers may fill the rest with lanes of its own. Measured on x86-64 lavapipe at its default
+//! 256-bit vectors: the 8-lane subgroup that shades the quad also holds the four helper lanes of a
+//! quad the draw covers no pixel of, so its ballot of the helper query counts 5 lanes where Metal's
+//! counts 1, its active mask 8 where Metal's counts 4, and its reductions take in those lanes'
+//! words. The case declares that difference under `fragment-simdgroup-grouping` at the elements
+//! such lanes can move and nowhere else (`grouping_elements`): each covered pixel's three
+//! reductions in `qs_arith` and `qs_bits`, and its two counts in `qs_votes`. The vote, the `dfdx`
+//! channel and every texel the draw leaves at the clear value compare exactly on every device, so a
+//! device whose simdgroup leaves the helper out still differs: its vote reads 2.
 //!
 //! **What Metal defines.** An active thread is a thread that is executing, the simdgroup and quad
 //! functions act on the active threads, and a helper thread is active until it has computed its
@@ -42,7 +54,7 @@
 //! Nothing here can fault a GPU: one draw of at most 64 small triangles a pass, one 64 by 64
 //! target, and no loop in the fixture.
 
-use crate::allowance::Allowance;
+use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{call, drawn_or_refused, made, Abort, Case, Failure, Input, MetalSource, Side};
 use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
@@ -193,6 +205,39 @@ fn layout(side: u32) -> ByteLayout {
     }
 }
 
+/// The covered pixels of a one-quad pass: the quad at (2, 2) but its helper, quad lane
+/// `first / 3`.
+fn covered(pass: &Pass) -> Vec<(u32, u32)> {
+    let helper = pass.first / 3;
+    (0..4u32)
+        .filter(|&lane| lane != helper)
+        .map(|lane| (2 + (lane & 1), 2 + (lane >> 1)))
+        .collect()
+}
+
+/// The byte offsets in a pass's texels of the elements a fragment subgroup wider than the drawn
+/// quad plus its helpers can move, where its other lanes are lanes of its own, helpers of a quad
+/// the draw covers no pixel of: at each covered pixel of a simdgroup pass, the three reductions
+/// of `qs_arith` and `qs_bits`, which take in those lanes' words, and the two counts of
+/// `qs_votes`, which count them. The vote does not move (another helper leaves "any lane a helper"
+/// true and "no lane one" false), nor `dfdx` (the answers are one value over the quad), nor a
+/// texel the draw leaves at the clear value. None for a quad pass.
+fn grouping_elements(pass: &Pass) -> Vec<usize> {
+    let channels: &[u32] = match pass.fragment {
+        "qs_arith" | "qs_bits" => &[0, 1, 2],
+        "qs_votes" => &[1, 2],
+        _ => &[],
+    };
+    let layout = layout(pass.side);
+    let mut elements = Vec::new();
+    for (x, y) in covered(pass) {
+        for &channel in channels {
+            elements.push(layout.at(0, y, 4 * x + channel));
+        }
+    }
+    elements
+}
+
 /// The case.
 pub struct QuadHelpers;
 
@@ -224,17 +269,28 @@ impl Case for QuadHelpers {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // Declarations only, so the notices site stays readable; neither loosens a value. Our side
-        // records `quads-split-by-clipping` for every fragment function with a quad or simdgroup
-        // operation, and `fragment-simdgroup-grouping` for every one with a simdgroup operation,
-        // on every device. A value either moves stays divergent, a ledger row.
-        [
+        // Our side records `quads-split-by-clipping` for every fragment function with a quad or
+        // simdgroup operation, and `fragment-simdgroup-grouping` for every one with a simdgroup
+        // operation, on every device: declared, so the notices site stays readable. The first
+        // loosens no value, so a quad answer a seam moves stays divergent. The second also
+        // loosens the elements a subgroup wider than the drawn quad plus its helpers can move
+        // (the module doc), and those alone.
+        let declarations = [
             Degradation::QuadsSplitByClipping,
             Degradation::FragmentSimdgroupGrouping,
         ]
         .into_iter()
-        .map(|kind| crate::replay::notice_allowance(kind.code()))
-        .collect()
+        .map(|kind| crate::replay::notice_allowance(kind.code()));
+        let grouping = passes().into_iter().flat_map(|pass| {
+            grouping_elements(&pass).into_iter().map(move |at| {
+                Allowance::new(
+                    format!("case/{}/texels/{at}", pass.site),
+                    Loosening::Unchecked,
+                    Justification::notice(Degradation::FragmentSimdgroupGrouping),
+                )
+            })
+        });
+        declarations.chain(grouping).collect()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -476,11 +532,27 @@ mod tests {
         out
     }
 
-    /// What simdgroup function `fragment` writes at covered pixel `(x, y)` of the quad at (2, 2),
-    /// where the helper takes part: the same wherever the helper lies.
-    fn simd_model(fragment: &str, words: &[u32], x: u32, y: u32) -> [f32; 4] {
+    /// The quad at (2, 2) as a simdgroup's lanes, each a pixel and whether it is a helper, the
+    /// helper at quad lane `helper`.
+    fn one_quad(helper: u32) -> Vec<(u32, u32, bool)> {
+        (0..4u32)
+            .map(|l| (2 + (l & 1), 2 + (l >> 1), l == helper))
+            .collect()
+    }
+
+    /// What simdgroup function `fragment` writes at covered pixel `(x, y)` of a simdgroup whose
+    /// active lanes are `lanes`, every one taking part: for the quad at (2, 2) alone
+    /// (`one_quad`), the same wherever its helper lies.
+    fn simd_model(
+        fragment: &str,
+        words: &[u32],
+        lanes: &[(u32, u32, bool)],
+        x: u32,
+        y: u32,
+    ) -> [f32; 4] {
         let w = |x: u32, y: u32| words[(hash(x, y) & 255) as usize];
-        let quad: Vec<u32> = (0..4).map(|l| w(2 + (l & 1), 2 + (l >> 1))).collect();
+        let quad: Vec<u32> = lanes.iter().map(|&(x, y, _)| w(x, y)).collect();
+        let helpers = lanes.iter().filter(|&&(_, _, helper)| helper).count() as u32;
         let r = match fragment {
             "qs_arith" => {
                 let bytes: Vec<u32> = quad.iter().map(|w| w & 255).collect();
@@ -498,8 +570,12 @@ mod tests {
                     bits.iter().fold(0, |a, b| a ^ b),
                 ]
             }
-            // Any lane a helper, not every lane not one; one bit of the ballot; four lanes active.
-            "qs_votes" => [1, 1, 4],
+            // Any lane a helper (1), every lane not one (2); the ballot's lanes; the active lanes.
+            "qs_votes" => [
+                u32::from(helpers > 0) | u32::from(helpers == 0) << 1,
+                helpers,
+                lanes.len() as u32,
+            ],
             other => unreachable!("no simdgroup function {other}"),
         };
         let sum = (r[0] + r[1] + r[2]) as f32;
@@ -533,12 +609,14 @@ mod tests {
             );
         }
         let words = words();
-        for fragment in SIMD {
-            for (x, y) in [(2, 2), (3, 3)] {
-                for value in simd_model(fragment, &words, x, y) {
+        for pass in passes.iter().filter(|pass| pass.side == CORNER) {
+            let lanes = one_quad(pass.first / 3);
+            for (x, y) in covered(pass) {
+                for value in simd_model(pass.fragment, &words, &lanes, x, y) {
                     assert!(
                         value.fract() == 0.0 && value.abs() < 2048.0,
-                        "{fragment}: {value}"
+                        "{}: {value}",
+                        pass.site
                     );
                 }
             }
@@ -598,11 +676,10 @@ mod tests {
                             }
                         }
                     } else {
-                        let helper = pass.first / 3;
-                        for l in (0..4u32).filter(|&l| l != helper) {
-                            let (x, y) = (2 + (l & 1), 2 + (l >> 1));
+                        let lanes = one_quad(pass.first / 3);
+                        for (x, y) in covered(&pass) {
                             expected[(y * CORNER + x) as usize] =
-                                simd_model(pass.fragment, &words, x, y);
+                                simd_model(pass.fragment, &words, &lanes, x, y);
                         }
                     }
                     for (i, (g, e)) in got.iter().zip(&expected).enumerate() {
@@ -626,5 +703,53 @@ mod tests {
             differ.len()
         );
         println!("{checked} recorded passes read as the model says");
+    }
+
+    /// The grouping's declared difference reaches as far as its cause and no further: over the
+    /// drawn quad and the four helper lanes of any other quad of the target in one simdgroup, the
+    /// elements whose answer moves from the quad's alone are exactly the ones the case loosens,
+    /// each unchecked under `fragment-simdgroup-grouping`, and no quad pass loosens any.
+    #[test]
+    fn the_grouping_loosens_what_a_wider_subgroup_moves_and_nothing_else() {
+        let words = words();
+        let allowances = QuadHelpers.allowances();
+        let grouping = Justification::notice(Degradation::FragmentSimdgroupGrouping);
+        for pass in passes() {
+            let prefix = format!("case/{}/", pass.site);
+            let mut loosened = BTreeSet::new();
+            for allowance in allowances.iter().filter(|a| a.path.starts_with(&prefix)) {
+                let at = allowance
+                    .path
+                    .strip_prefix(&format!("{prefix}texels/"))
+                    .and_then(|at| at.parse::<usize>().ok());
+                assert!(
+                    at.is_some()
+                        && allowance.loosening == Loosening::Unchecked
+                        && allowance.justified_by == grouping,
+                    "{allowance:?}"
+                );
+                loosened.extend(at);
+            }
+            let mut moved = BTreeSet::new();
+            if pass.side == CORNER {
+                let layout = layout(pass.side);
+                let alone = one_quad(pass.first / 3);
+                for (qx, qy) in (0..SIDE / 2).flat_map(|qy| (0..SIDE / 2).map(move |qx| (qx, qy))) {
+                    if (qx, qy) == (1, 1) {
+                        continue;
+                    }
+                    let mut wider = alone.clone();
+                    wider.extend((0..4u32).map(|l| (2 * qx + (l & 1), 2 * qy + (l >> 1), true)));
+                    for (x, y) in covered(&pass) {
+                        let was = simd_model(pass.fragment, &words, &alone, x, y);
+                        let now = simd_model(pass.fragment, &words, &wider, x, y);
+                        for channel in (0..4u32).filter(|&c| was[c as usize] != now[c as usize]) {
+                            moved.insert(layout.at(0, y, 4 * x + channel));
+                        }
+                    }
+                }
+            }
+            assert_eq!(moved, loosened, "{}", pass.site);
+        }
     }
 }
