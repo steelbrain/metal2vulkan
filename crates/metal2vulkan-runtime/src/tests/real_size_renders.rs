@@ -91,7 +91,10 @@ mod on_device {
     /// read's four channels, `loop_back` its red and green twice (red, green, red, green), as a
     /// two-channel target reads. `unorm8_one`, `unorm16_one` and `unorm10_one` write render target
     /// 0 alone: the 8-bit pattern, its channels times 257 as `(257 k + 0.25) / 65535`, and the
-    /// 10-bit pattern; `loop_one` writes render target 0 alone as `loop_front` does.
+    /// 10-bit pattern. `loop_one` samples texture 0 as the loops do and writes render target 0
+    /// alone: with each channel's largest value `L` in buffer 0's first `float4`, the read `v`
+    /// rounded to its step, `k = uint(v L + 0.5)`, and its complement written a quarter step up,
+    /// `(L - k + 0.25) / L`, so neither the read's precision nor the write's rounding moves it.
     /// `UNORM8`, `UNORM16`, `UNORM10` and `FLOAT` stand for the lines that make `%v`, the pattern
     /// at `(%x, %y)`.
     const SHADERS: &str = r#"; Owned synthetic shaders.
@@ -233,12 +236,19 @@ entry:
   %uv = fmul <2 x float> %xy, %inv
   %r = tail call { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1) %t, ptr addrspace(2) %smp, <2 x float> %uv, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.000000e+00, float 0.000000e+00, i32 0)
   %v = extractvalue { <4 x float>, i8 } %r, 0
-  %s = load <4 x float>, ptr addrspace(2) %p, align 16
-  %c = fsub <4 x float> %s, %v
-  ret <4 x float> %c
+  %m = load <4 x float>, ptr addrspace(2) %p, align 16
+  %vm = fmul <4 x float> %v, %m
+  %vh = fadd <4 x float> %vm, <float 5.000000e-01, float 5.000000e-01, float 5.000000e-01, float 5.000000e-01>
+  %k = fptoui <4 x float> %vh to <4 x i32>
+  %kf = tail call <4 x float> @air.convert.f.v4f32.u.v4i32(<4 x i32> %k)
+  %c = fsub <4 x float> %m, %kf
+  %cq = fadd <4 x float> %c, <float 2.500000e-01, float 2.500000e-01, float 2.500000e-01, float 2.500000e-01>
+  %o = fdiv <4 x float> %cq, %m
+  ret <4 x float> %o
 }
 
 declare <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float>)
+declare <4 x float> @air.convert.f.v4f32.u.v4i32(<4 x i32>)
 declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr addrspace(2), <2 x float>, i1, <2 x i32>, i1, float, float, i32)
 
 !air.vertex = !{!0}
@@ -1393,11 +1403,9 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr a
             }
         }
 
-        /// What `loop_one` takes less what it reads: 1, and a quarter of a channel's step, so that
-        /// the complement it writes lands on its value whether the device rounds a write to the
-        /// nearest step or down.
-        fn minuend(self) -> [f32; 4] {
-            self.largest().map(|largest| 1.0 + 0.25 / largest as f32)
+        /// Each channel's largest value as `loop_one` takes it.
+        fn steps(self) -> [f32; 4] {
+            self.largest().map(|largest| largest as f32)
         }
 
         /// The pattern's channels at `(x, y)`, or their complement, in shader order.
@@ -1543,7 +1551,8 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr a
 
     /// Draws `pattern` into `pass`'s one target, cut to [`drawn`] of `size`; then, where `looped`
     /// names one, after a memory barrier its loop over the whole target, sampling the texture it
-    /// names through sampler `sampler` as its attachment, less the minuend it names.
+    /// names through sampler `sampler` as its attachment, with each channel's largest value it
+    /// names.
     fn draw_one(
         name: &str,
         queue: &CommandQueue,
@@ -1561,8 +1570,8 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr a
             height,
         });
         (encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)).map_err(said)?;
-        if let Some((state, texture, sampler, minuend)) = looped {
-            let constants: Vec<u8> = minuend
+        if let Some((state, texture, sampler, steps)) = looped {
+            let constants: Vec<u8> = steps
                 .into_iter()
                 .chain([1.0 / size[0] as f32, 1.0 / size[1] as f32, 0.0, 0.0])
                 .flat_map(f32::to_le_bytes)
@@ -1731,7 +1740,7 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr a
                 target.store_action = StoreAction::Store;
                 let counters = device.counters();
                 let before = counters.metrics();
-                let loops = Some((&looping, &view, &readers.sampler, layer.minuend()));
+                let loops = Some((&looping, &view, &readers.sampler, layer.steps()));
                 let drew = draw_one(name, &queue, (&pass, &pattern, size), loops);
                 let moved = counters.metrics();
                 let what = format!(
