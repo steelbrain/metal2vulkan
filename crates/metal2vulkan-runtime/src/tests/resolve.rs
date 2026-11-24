@@ -38,6 +38,10 @@
 //!   reads, shader writes and rendering, as Metal makes one, has no storage usage in its image and
 //!   no storage view (Metal's shaders only read a multisampled texture), lacks no storage element,
 //!   and draws and resolves as the target above.
+//! - Under a device cfg, on every device of the cfg's kind, as Metal with its validation layer off
+//!   resolves (probe `resolve_depth_planes.m`): a 4-sample colour, depth and stencil each resolve
+//!   into a one-sample 2D texture at `resolveDepthPlane` 3 as at 0, the same resolves and texels;
+//!   a 3D resolve texture is `TextureType` at either plane.
 
 use crate::error::{Error, Refusal};
 use crate::pass::resolving;
@@ -1092,6 +1096,122 @@ mod on_device {
                 }
             }
             drop((color, depth, seen));
+        });
+    }
+
+    /// The module's resolve depth plane, read of a 3D resolve texture alone, as Metal with its
+    /// validation layer off reads it (probe `resolve_depth_planes.m` in the conformance crate):
+    /// a 4-sample `RGBA8Unorm` colour cleared to [`CLEAR`] beside a 4-sample `Depth32Float` depth
+    /// cleared to 0.25, and in a pass of its own beside the colour a 4-sample `Stencil8` stencil
+    /// cleared to `0x5a` where the device makes one, each resolved into a one-sample 2D texture,
+    /// the depth and the stencil by `Sample0`: at `resolve_depth_plane` 3, each pass is made, makes
+    /// as many resolves and reads the same texels as at 0, the clear (the colour within one code).
+    /// A 3D resolve texture is `TextureType` at plane 0 and at 3.
+    #[test]
+    fn every_device_resolves_into_a_2d_texture_at_a_depth_plane_as_at_plane_0() {
+        each_device("resolve_plane", |name, _, device| {
+            let color = four(name, &device, PixelFormat::RGBA8Unorm)
+                .unwrap_or_else(|error| panic!("{name}: Vulkan requires 4 samples: {error}"));
+            let depth = four(name, &device, PixelFormat::Depth32Float)
+                .unwrap_or_else(|error| panic!("{name}: Vulkan requires 4 samples: {error}"));
+            let stencil = four(name, &device, PixelFormat::Stencil8).ok();
+            let usage = TextureUsage::RENDER_TARGET;
+            // The resolves at `plane`: how many the passes made, and each resolve texture's
+            // texels, where the device copies them out.
+            let at = |plane: u32| {
+                let into_color = target(&device, PixelFormat::RGBA8Unorm, usage);
+                let into_depth = target(&device, PixelFormat::Depth32Float, usage);
+                let mut p = pass(&color, None);
+                let c = &mut p.color_attachments[0];
+                c.clear_color = CLEAR;
+                c.store_action = StoreAction::MultisampleResolve;
+                c.resolve_texture = Some(into_color.clone());
+                c.resolve_depth_plane = plane;
+                let z = &mut p.depth_attachment;
+                z.texture = Some(depth.clone());
+                z.clear_depth = 0.25;
+                z.store_action = StoreAction::MultisampleResolve;
+                z.resolve_texture = Some(into_depth.clone());
+                z.resolve_depth_plane = plane;
+                let mut made = vec![p];
+                let mut into = vec![("colour", into_color, 4), ("depth", into_depth, 4)];
+                if let Some(stencil) = &stencil {
+                    let into_stencil = target(&device, PixelFormat::Stencil8, usage);
+                    let mut p = pass(&color, Some(stencil));
+                    let s = &mut p.stencil_attachment;
+                    s.clear_stencil = 0x5a;
+                    s.store_action = StoreAction::MultisampleResolve;
+                    s.resolve_texture = Some(into_stencil.clone());
+                    s.resolve_depth_plane = plane;
+                    made.push(p);
+                    into.push(("stencil", into_stencil, 1));
+                }
+                let before = device.counters().metrics().resolves;
+                passes(name, &device, &made.iter().collect::<Vec<_>>());
+                let resolves = device.counters().metrics().resolves - before;
+                let texels: Vec<(&str, Option<Vec<u8>>)> = (into.iter())
+                    .map(|(what, texture, unit)| {
+                        let read = texture.unit().map(|_| read_at(texture, SIDE, *unit, 0, 0));
+                        (*what, read)
+                    })
+                    .collect();
+                (resolves, texels)
+            };
+            let (resolves_0, texels_0) = at(0);
+            let (resolves_3, texels_3) = at(3);
+            assert_eq!(resolves_3, resolves_0, "{name}: the resolves at plane 3");
+            for ((what, got), (_, want)) in texels_3.iter().zip(&texels_0) {
+                assert_eq!(got, want, "{name}: the {what} resolve at plane 3 and at 0");
+                let Some(got) = got else {
+                    println!("{name}: the {what} resolve's bytes are not copied on this device");
+                    continue;
+                };
+                match *what {
+                    "colour" => {
+                        let clear = [64u8, 128, 191, 255];
+                        for (at, texel) in got.chunks(4).enumerate() {
+                            assert!(
+                                texel.iter().zip(clear).all(|(&g, w)| g.abs_diff(w) <= 1),
+                                "{name}: colour texel {at}: {texel:?}, not within a code of \
+                                 {clear:?}"
+                            );
+                        }
+                    }
+                    "depth" => {
+                        for (at, texel) in got.chunks(4).enumerate() {
+                            let depth = f32::from_le_bytes(texel.try_into().unwrap());
+                            assert_eq!(depth, 0.25, "{name}: depth texel {at}");
+                        }
+                    }
+                    _ => assert!(
+                        got.iter().all(|&s| s == 0x5a),
+                        "{name}: the stencil resolve: {got:?}"
+                    ),
+                }
+                println!("{name}: the {what} resolve at plane 3 reads as at 0, the clear");
+            }
+
+            // A 3D resolve texture, at any plane.
+            let mut td =
+                TextureDescriptor::new(TextureType::Type3D, PixelFormat::RGBA8Unorm, SIDE, SIDE);
+            td.depth = 4;
+            td.usage = usage;
+            td.storage_mode = StorageMode::Private;
+            let volume = (device.new_texture_for_views(&td))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            for plane in [0, 3] {
+                let mut p = pass(&color, None);
+                let c = &mut p.color_attachments[0];
+                c.store_action = StoreAction::MultisampleResolve;
+                c.resolve_texture = Some(volume.clone());
+                c.resolve_depth_plane = plane;
+                assert_eq!(
+                    refused(&device, &p).map(|e| e.to_string()),
+                    Some(gap(RenderPassKind::TextureType).to_string()),
+                    "{name}: a 3D resolve texture at plane {plane}"
+                );
+            }
+            drop((color, depth, stencil, volume));
         });
     }
 }

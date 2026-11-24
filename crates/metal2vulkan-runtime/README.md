@@ -4632,8 +4632,9 @@ cache is answered compile-required on both.
   `independentResolveNone` does not allow it), a store action an encoder sets that does not
   resolve an attachment whose pass left it `Unknown` with a resolve texture (`LateStore`: the
   rendering began resolving, as Vulkan fixes the resolve as it begins), a 1D texture's
-  attachment, a 3D texture's depth or stencil attachment, a 3D resolve texture, a resolve's depth
-  plane but 0 (`TextureType`), the
+  attachment, a 3D texture's depth or stencil attachment, a 3D resolve texture whatever its
+  `resolveDepthPlane` (`TextureType`; a resolve texture of another type is resolved into as at
+  plane 0, as Metal with its validation layer off does, probe `resolve_depth_planes.m`), the
   `CustomSampleDepthStore` store action, a clear of a format only a shader clears (extended
   range, bfloat, YCbCr), a `renderTargetArrayLength` past the device's `maxFramebufferLayers`
   (`ArrayLength`: Vulkan renders at most that many layers,

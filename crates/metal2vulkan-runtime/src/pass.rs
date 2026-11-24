@@ -217,9 +217,10 @@ pub struct RenderPassColorAttachmentDescriptor {
     /// `depthPlane`: a 3D texture's depth plane rendered into, inside the level's depth
     /// ([`Refusal::AttachmentPlace`] past it), through a 2D view of that plane of its image, which
     /// a 3D texture of `RenderTarget` usage is made to take; the level's other planes keep their
-    /// texels. Read of no other type, as Metal ignores it. A 3D texture in a layered pass
-    /// ([`RenderPassDescriptor::render_target_array_length`] 2 or more) is [`Gap::RenderPass`] of
-    /// [`RenderPassKind::TextureType`].
+    /// texels. Read of no other type, as Metal with its validation layer off ignores it (its layer
+    /// stops a plane but 0 of a texture one plane deep; probe `resolve_depth_planes.m`). A 3D
+    /// texture in a layered pass ([`RenderPassDescriptor::render_target_array_length`] 2 or more)
+    /// is [`Gap::RenderPass`] of [`RenderPassKind::TextureType`].
     pub depth_plane: u32,
     /// `loadAction`: `DontCare` by default.
     pub load_action: LoadAction,
@@ -247,8 +248,11 @@ pub struct RenderPassColorAttachmentDescriptor {
     /// `resolveSlice`: the resolve texture's array slice or cube face resolved into, the first of a
     /// layered pass's.
     pub resolve_slice: u32,
-    /// `resolveDepthPlane`: a 3D resolve texture's depth plane. A 3D resolve texture, and a plane
-    /// but 0, are [`Gap::RenderPass`] of [`RenderPassKind::TextureType`].
+    /// `resolveDepthPlane`: a 3D resolve texture's depth plane. Read of no other type: Metal with
+    /// its validation layer off resolves into a resolve texture of another type at a plane but 0
+    /// as at 0 (its layer stops the pass: "depth plane is 3, but the texture has a depth of 1 at
+    /// mip level 0"; probe `resolve_depth_planes.m`), and so does the runtime. A 3D resolve
+    /// texture, whatever its plane, is [`Gap::RenderPass`] of [`RenderPassKind::TextureType`].
     pub resolve_depth_plane: u32,
 }
 
@@ -786,7 +790,6 @@ impl Pass {
                         texture: into,
                         level: c.resolve_level,
                         slice: c.resolve_slice,
-                        depth_plane: c.resolve_depth_plane,
                     };
                     Some(Box::new(resolve(
                         core,
@@ -847,7 +850,6 @@ impl Pass {
                             texture: into,
                             level: z.resolve_level,
                             slice: z.resolve_slice,
-                            depth_plane: z.resolve_depth_plane,
                         };
                         Some(Box::new(resolve(core, texture, &attachment, into, mode)?))
                     }
@@ -910,7 +912,6 @@ impl Pass {
                             texture: into,
                             level: s.resolve_level,
                             slice: s.resolve_slice,
-                            depth_plane: s.resolve_depth_plane,
                         };
                         Some(Box::new(resolve(core, texture, &attachment, into, mode)?))
                     }
@@ -1099,12 +1100,13 @@ pub(crate) fn resolving(store: StoreAction, named: bool) -> Result<bool, Error> 
     }
 }
 
-/// Where an attachment resolves: the resolve texture and its level, slice and depth plane.
+/// Where an attachment resolves: the resolve texture and its level and slice. Its depth plane
+/// (`resolveDepthPlane`) is not among them: Metal reads it of a 3D resolve texture alone, which
+/// the resolve attachment refuses whatever its plane.
 struct ResolveInto<'a> {
     texture: &'a Texture,
     level: u32,
     slice: u32,
-    depth_plane: u32,
 }
 
 /// The resolve of `texture`'s attachment `attachment` into `into` by `mode`: a view of the
@@ -1113,10 +1115,10 @@ struct ResolveInto<'a> {
 /// Err: [`Refusal::OtherDevice`] for another device's resolve texture; [`Gap::RenderPass`] of
 /// [`RenderPassKind::Resolve`] for an attachment of one sample, and for a resolve texture of
 /// another pixel format, of more than one sample, or whose level is not the attachment level's
-/// width and height; [`Gap::RenderPass`] of [`RenderPassKind::TextureType`] for a depth plane
-/// but 0; what the resolve texture's resolve attachment returns, [`Gap::RenderPass`] of
-/// [`RenderPassKind::ResolveUsage`] for a resolve texture whose image has no attachment usage
-/// and that has no resolve image among it.
+/// width and height; what the resolve texture's resolve attachment returns, [`Gap::RenderPass`]
+/// of [`RenderPassKind::ResolveUsage`] for a resolve texture whose image has no attachment usage
+/// and that has no resolve image among it, and of [`RenderPassKind::TextureType`] for a 3D one
+/// whose image has it.
 fn resolve(
     core: &Arc<Core>,
     texture: &Texture,
@@ -1137,9 +1139,6 @@ fn resolve(
     }
     let (view, copy) =
         (into.texture).resolve_attachment(into.level, into.slice, attachment.layers)?;
-    if into.depth_plane != 0 {
-        return gap(RenderPassKind::TextureType);
-    }
     if view.extent != attachment.extent || view.format != attachment.format {
         return gap(RenderPassKind::Resolve);
     }

@@ -1919,7 +1919,8 @@ pub enum RenderPassKind {
     /// 2D multisample texture or array, nor a depth plane of a 3D texture's level that a color
     /// attachment renders in a pass of one layer: a 1D texture's; a 3D texture's in a layered pass
     /// (`renderTargetArrayLength` 2 or more), as a depth or stencil attachment, or as a resolve
-    /// texture; and a resolve's depth plane but 0.
+    /// texture, whatever its `resolveDepthPlane`, which Metal with its validation layer off reads
+    /// of a 3D resolve texture alone.
     TextureType,
     /// `MTLStoreActionCustomSampleDepthStore`, set on the pass or by the encoder's
     /// `setColorStoreAction:atIndex:` family.
