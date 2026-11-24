@@ -3743,6 +3743,18 @@ cache is answered compile-required on both.
   five took 4.40 s timed per dispatch with the same five modules (m3-max-72362), compute was 11.67 s
   against 9.03 s without the mode. Test: the translator's
   `tests::engine_reconvergence_together::a_shuffle_outside_uniform_control_flow_keeps_the_mode`.
+- AMD's open Linux driver (AMDVLK 2025.Q2.1, LLPC) on a Radeon 780M may compile a kernel whose
+  thread-local array of 256 or 512 bytes is indexed at run time with that array in scratch memory,
+  where Mesa's RADV (26.2.6) on the same chip keeps it in registers. In one recorded session on
+  that card, one kernel's module came to 148 VGPRs, 528 bytes of scratch and 512 scratch
+  instructions under AMDVLK, against 224 VGPRs and no scratch under RADV (m3-max-72775). Per
+  dispatch, the kernel's states that AMDVLK compiled with scratch ran 2 to 9 times as long as
+  under RADV, and those it compiled without scratch ran at 0.86 to 0.93 times. The array's
+  storage class does not change it: the same modules with every such array a `Function` variable
+  instead of a `Private` one compiled to the same registers and scratch (m3-max-72798). Neither
+  the array's size nor the module's register count separates the modules AMDVLK spills from
+  those it does not: a module holding the same 512-byte array, all eight of its access chains
+  indexed at run time, compiled to 174 VGPRs and no scratch.
 
 ## Render pipeline states
 
