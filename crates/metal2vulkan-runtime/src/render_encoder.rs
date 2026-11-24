@@ -2529,6 +2529,7 @@ impl RenderCommandEncoder {
             || arguments.is_some_and(|buffer| buffer.managed_overs().is_some())
             || factors.is_some_and(|(buffer, _)| buffer.managed_overs().is_some())
             || overs;
+        let unbound = draws.reads_unbound || commands;
         self.draw_aliases()?;
         match each {
             true => self.draw_reaches(reads, [index_buffer, arguments], overs, commands)?,
@@ -2540,8 +2541,25 @@ impl RenderCommandEncoder {
                 self.overs_after(commands);
             }
         }
+        // A draw that may read beyond its slots, while a declared read covers an attachment the
+        // pass holds out of its home layout once the draw's own moves are recorded: such a read
+        // names the texture's own element, whose layout is the home one
+        // (`Metrics::unslotted_attachment_reads`).
+        let unslotted = unbound && {
+            let pass = &self.pass;
+            let resolves = (pass.resolving.then(|| pass.resolves()))
+                .into_iter()
+                .flatten();
+            (pass.targets())
+                .map(|t| (&t.texture, t.moves()))
+                .chain(resolves.map(|r| (&r.texture, r.moves())))
+                .any(|(texture, moved)| moved && self.declared.reads(texture))
+        };
         let building = (self.building.as_mut())
             .expect("an encoder holds its command buffer's recording until it ends");
+        if unslotted {
+            building.count(Metric::UnslottedAttachmentReads);
+        }
         if self.facts.host {
             building.wrote_host();
         }
@@ -3138,28 +3156,12 @@ impl RenderCommandEncoder {
             return Err(Error::Refused(Refusal::NoPipeline));
         };
         let draws = &state.inner.compiled.draws;
-        // A draw that may read beyond its slots, while a declared read covers an attachment the
-        // pass holds out of its home layout: such a read names the texture's own element, whose
-        // layout is the home one (`Metrics::unslotted_attachment_reads`).
-        let unslotted = (draws.reads_unbound || commands) && {
-            let pass = &self.pass;
-            let resolves = (pass.resolving.then(|| pass.resolves()))
-                .into_iter()
-                .flatten();
-            (pass.targets())
-                .map(|t| (&t.texture, t.moves()))
-                .chain(resolves.map(|r| (&r.texture, r.moves())))
-                .any(|(texture, moved)| moved && self.declared.reads(texture))
-        };
         let tables = &self.tables;
         let factors = (self.factors.as_ref())
             .filter(|_| draws.patches)
             .map(|(buffer, _)| &**buffer);
         let building = (self.building.as_mut())
             .expect("an encoder holds its command buffer's recording until it ends");
-        if unslotted {
-            building.count(Metric::UnslottedAttachmentReads);
-        }
         let vertex_reads = (draws.bindings.iter())
             .filter_map(|&(_, index)| tables[VERTEX].buffer(index))
             .chain(index.into_iter().flatten().map(BufferObject::object))
