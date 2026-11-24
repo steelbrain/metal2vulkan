@@ -3721,6 +3721,20 @@ cache is answered compile-required on both.
   (`Error::Translation`): the only use of the member the translator admits is an indirect
   command's pipeline setter, which is `Unsupported{GpuEncodedIndirectCommands, NotImplemented}`
   (`tests::engine_indirect_commands`).
+- A kernel keeps the reconvergence mode (`MaximallyReconvergesKHR`, where the device lists
+  `shaderMaximalReconvergence`) when one of its SIMD-group operations stands in a block the
+  translator does not prove uniform for the threadgroup, as in a loop whose trip count is a count
+  read from a buffer at run time less a per-thread offset. AMD's open Linux driver (AMDVLK
+  2025.Q2.1, LLPC) on a Radeon 780M runs such kernels slower with the mode than the same modules
+  without it. Mesa's RADV (26.2.6) on the same chip runs the session below in the same compute time
+  with the mode on such kernels alone as with it on every kernel (21.05 s against 21.03 s and
+  21.06 s to frame 349, m3-max-72436). In one recorded session on that card, five kernels of that
+  shape keep the mode. Under AMDVLK the play's compute GPU time to frame 349 was 59.22 s
+  (m3-max-72427), 5.8% above the 55.98 s of the same play with the mode removed from every kernel, a
+  measurement and not a form the runtime has (m3-max-72248). In one span of that play, where the
+  five took 4.40 s timed per dispatch with the same five modules (m3-max-72362), compute was 11.67 s
+  against 9.03 s without the mode. Test: the translator's
+  `tests::engine_reconvergence_together::a_shuffle_outside_uniform_control_flow_keeps_the_mode`.
 
 ## Render pipeline states
 
