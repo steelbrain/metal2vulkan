@@ -3,7 +3,8 @@
 //! module's own for each core command rt records that names an image layout (its barriers, its
 //! copies between images and buffers, its blits, its colour clears, dynamic rendering's
 //! attachments and its descriptor writes), each noting the layouts it names, then calling the
-//! driver's. Its copies between images keep each region's aspects too ([`image_copies`]). Its barrier commands are counted too. The core commands that name a layout and that rt does not record get no entry, so
+//! driver's. Its copies between images keep each region's aspects too ([`image_copies`]), and its
+//! renderings each colour attachment's view and image as made ([`rendered`]). Its barrier commands are counted too. The core commands that name a layout and that rt does not record get no entry, so
 //! that a call of one panics (ash's stub for a command it did not load) and the test learns of it.
 //!
 //! Each command buffer's barriers, copies to a buffer and timestamp writes are kept in the order
@@ -134,8 +135,13 @@ struct Record {
     drivers: HashMap<vk::Device, Driver>,
     /// Each command buffer's device.
     devices: HashMap<vk::CommandBuffer, vk::Device>,
-    /// Each image view's image.
-    views: HashMap<(vk::Device, vk::ImageView), vk::Image>,
+    /// Each image view's image, type and range.
+    views: HashMap<
+        (vk::Device, vk::ImageView),
+        (vk::Image, vk::ImageViewType, vk::ImageSubresourceRange),
+    >,
+    /// Each image's type and create flags, as made while recording.
+    made: HashMap<(vk::Device, vk::Image), (vk::ImageType, vk::ImageCreateFlags)>,
     /// Each queue's device.
     queues: HashMap<vk::Queue, vk::Device>,
     /// Each command buffer's steps since its begin, in the order recorded.
@@ -151,6 +157,21 @@ struct Record {
     submitted: HashMap<vk::Device, Vec<Vec<Ordered>>>,
     /// Every copy between images recorded, in the order recorded.
     copies: Vec<ImageCopied>,
+    /// Every colour attachment of a rendering recorded whose view and image were made while
+    /// recording, in the order recorded.
+    rendered: Vec<Rendered>,
+}
+
+/// A colour attachment a `vkCmdBeginRendering` of `device` named: its view's type and range, and
+/// its image's type and create flags.
+#[derive(Clone, Copy)]
+pub(crate) struct Rendered {
+    pub(crate) device: vk::Device,
+    pub(crate) image: vk::Image,
+    pub(crate) image_type: vk::ImageType,
+    pub(crate) flags: vk::ImageCreateFlags,
+    pub(crate) view_type: vk::ImageViewType,
+    pub(crate) range: vk::ImageSubresourceRange,
 }
 
 /// A `vkCmdCopyImage` of `device`: its images, the layouts it names them in and each region's
@@ -193,6 +214,14 @@ pub(crate) fn image_copies(device: vk::Device) -> Vec<ImageCopied> {
     (record().copies.iter())
         .filter(|copy| copy.device == device)
         .cloned()
+        .collect()
+}
+
+/// Every colour attachment `device`'s renderings named so far, in the order recorded.
+pub(crate) fn rendered(device: vk::Device) -> Vec<Rendered> {
+    (record().rendered.iter())
+        .filter(|rendered| rendered.device == device)
+        .copied()
         .collect()
 }
 
@@ -403,7 +432,10 @@ fn note(
 
 /// The image of `view` of `device`, where the record knows it.
 fn image_of(device: vk::Device, view: vk::ImageView) -> Option<vk::Image> {
-    record().views.get(&(device, view)).copied()
+    record()
+        .views
+        .get(&(device, view))
+        .map(|&(image, _, _)| image)
 }
 
 /// A slice of `count` elements at `pointer`, empty where it is null.
@@ -462,9 +494,11 @@ unsafe extern "system" fn create_image(
     // SAFETY: the caller's arguments, passed on.
     let result = unsafe { (driver.create_image)(device, info, allocator, image) };
     if result == vk::Result::SUCCESS {
-        // SAFETY: the call wrote the image.
-        let image = unsafe { *image };
-        record().homed.insert((device, image), false);
+        // SAFETY: the call wrote the image, of the caller's info.
+        let (image, info) = unsafe { (*image, &*info) };
+        let mut record = record();
+        record.homed.insert((device, image), false);
+        (record.made).insert((device, image), (info.image_type, info.flags));
     }
     result
 }
@@ -523,9 +557,10 @@ unsafe extern "system" fn create_image_view(
     // SAFETY: the caller's arguments, passed on.
     let result = unsafe { (driver.create_image_view)(device, info, allocator, view) };
     if result == vk::Result::SUCCESS {
-        // SAFETY: the call wrote the view, of the info's image.
-        let (view, image) = unsafe { (*view, (*info).image) };
-        record().views.insert((device, view), image);
+        // SAFETY: the call wrote the view, of the caller's info.
+        let (view, info) = unsafe { (*view, &*info) };
+        let viewed = (info.image, info.view_type, info.subresource_range);
+        record().views.insert((device, view), viewed);
     }
     result
 }
@@ -813,6 +848,26 @@ unsafe extern "system" fn cmd_begin_rendering(
         .map(|&(what, image, _)| (image, Step::Use(what)));
     step(command_buffer, used.collect::<Vec<_>>());
     note(device, named);
+    {
+        let mut record = record();
+        for attachment in colors {
+            let Some(&(image, view_type, range)) =
+                record.views.get(&(device, attachment.image_view))
+            else {
+                continue;
+            };
+            if let Some(&(image_type, flags)) = record.made.get(&(device, image)) {
+                record.rendered.push(Rendered {
+                    device,
+                    image,
+                    image_type,
+                    flags,
+                    view_type,
+                    range,
+                });
+            }
+        }
+    }
     // SAFETY: the caller's arguments, passed on.
     unsafe { (driver.cmd_begin_rendering)(command_buffer, info) }
 }

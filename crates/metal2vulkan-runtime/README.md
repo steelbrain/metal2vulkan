@@ -1497,7 +1497,10 @@ made, with no lock, and never rewritten for layouts.
   `Refusal::TextureBufferNotOverBuffer` at every make but `Buffer::new_texture`, which makes texture
   buffers (below). A cube array texture's image
   is cube-compatible with six layers a cube, and its view is a cube array view (`imageCubeArray`,
-  in the floor).
+  in the floor). A 3D texture of `RenderTarget` usage and a colour format is made
+  2D-array-compatible (`VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT`, in its image format query too),
+  so that a pass renders into one depth plane of a level through a 2D view of it (Render
+  encoders).
 - `Texture::gpu_resource_id` is its index (0 without one) and the translator's `TextureWord` of
   its format and swizzle (`docs/RESOURCE-ID.md`), so the guest computes the ID itself. An ID of
   index 0 that a shader reads from bytes (an argument buffer's texture) reads the null descriptor,
@@ -4099,6 +4102,11 @@ cache is answered compile-required on both.
   `renderTargetHeight`, `defaultRasterSampleCount` and `renderTargetArrayLength`. Each attachment is one level of its texture
   and, from its `slice`, the pass's layers (below): a 2D texture, a 2D
   array, a cube or a cube array, or a 2D multisample texture or array, of `RenderTarget` usage;
+  or a colour attachment's `depthPlane` of a level of a 3D texture of that usage, in a pass of one
+  layer, through a 2D view of that plane of its image (Vulkan's
+  `VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT`, whose barriers name the image's layers as
+  `VK_REMAINING_ARRAY_LAYERS` from 0 and move every plane of the level, and whose load, store and
+  clear act on the plane alone: the level's other planes keep their texels);
   every attachment of a pass has one sample count, and a draw's pipeline state that count as its
   `rasterSampleCount` (`DrawKind::AttachmentFormats` otherwise). The device's counts are
   `Device::supports_texture_sample_count`'s. A multisample attachment is stored as its samples:
@@ -4623,8 +4631,9 @@ cache is answered compile-required on both.
   which no Vulkan resolve mode is, and two aspects paired where `independentResolve` or
   `independentResolveNone` does not allow it), a store action an encoder sets that does not
   resolve an attachment whose pass left it `Unknown` with a resolve texture (`LateStore`: the
-  rendering began resolving, as Vulkan fixes the resolve as it begins), a 1D or 3D texture's
-  attachment, a 3D resolve texture's plane (`TextureType`), the
+  rendering began resolving, as Vulkan fixes the resolve as it begins), a 1D texture's
+  attachment, a 3D texture's depth or stencil attachment, a 3D resolve texture, a resolve's depth
+  plane but 0 (`TextureType`), the
   `CustomSampleDepthStore` store action, a clear of a format only a shader clears (extended
   range, bfloat, YCbCr), a `renderTargetArrayLength` past the device's `maxFramebufferLayers`
   (`ArrayLength`: Vulkan renders at most that many layers,
@@ -4647,10 +4656,10 @@ cache is answered compile-required on both.
 - Layered rendering refuses: in a pass of `renderTargetArrayLength` 2 or more, an attachment or a
   resolve texture with fewer slices from its own `slice` than the pass's length
   (`Refusal::AttachmentPlace`, naming the last slice the pass would render), a 3D texture's
-  depth planes, which are no attachment's layers (`Gap::RenderPass`, `TextureType`, as for any 3D
-  attachment), and a draw that reads one of its pass's attachments through a texture on a device
-  without the attachment feedback loop (`Gap::Draw`, `AttachmentRead`: an attachment's shadow
-  holds one layer). A vertex function's `[[render_target_array_index]]` and
+  depth planes, which are no attachment's layers (`Gap::RenderPass`, `TextureType`), and a draw
+  that reads one of its pass's attachments through a texture on a device without the attachment
+  feedback loop (`Gap::Draw`, `AttachmentRead`: an attachment's shadow holds one layer, and no 3D
+  texture's depth plane, which a pass of one layer refuses the same way). A vertex function's `[[render_target_array_index]]` and
   `[[viewport_array_index]]` are stored as the function writes them. Metal requires the same value
   at every vertex of a primitive; where a program breaks that, the layer or viewport is the
   device's choice. An index the function declares and never writes, which Metal gives no value,
@@ -5207,6 +5216,7 @@ extension offers each of them by Vulkan's definition and is not asked.
 | `imageViewFormatSwizzle` | `VkPhysicalDevicePortabilitySubsetFeaturesKHR` | a texture view's component mapping: its format's and Metal's swizzle |
 | `mutableComparisonSamplers` | `VkPhysicalDevicePortabilitySubsetFeaturesKHR` | the comparison sampler array, which takes each sampler state's sampler as it is made |
 | `multisampleArrayImage` | `VkPhysicalDevicePortabilitySubsetFeaturesKHR` | `MTLTextureType2DMultisampleArray` |
+| `imageView2DOn3DImage` | `VkPhysicalDevicePortabilitySubsetFeaturesKHR` | a 3D texture's depth plane as a colour attachment: a 2D view of a 2D-array-compatible 3D image |
 
 ### Step rates
 

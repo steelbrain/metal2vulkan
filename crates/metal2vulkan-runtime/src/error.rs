@@ -951,13 +951,14 @@ pub enum Refusal {
     },
     /// A render pass attachment or resolve texture of a level or slice past its texture's: its own
     /// slice, or the last of the slices a layered pass renders from it
-    /// (`renderTargetArrayLength`).
+    /// (`renderTargetArrayLength`); or a 3D texture's depth plane past its level's depth.
     ///
     /// Basis: ours (no texel of the texture is there to render into).
     AttachmentPlace {
         /// The level asked for.
         level: u32,
-        /// The slice asked for: the attachment's own, or the last its pass renders.
+        /// The slice asked for: the attachment's own, or the last its pass renders; a 3D texture's
+        /// depth plane.
         slice: u32,
     },
     /// A render pass color attachment of a depth or stencil pixel format, a depth attachment of a
@@ -1788,7 +1789,8 @@ pub enum DrawKind {
     /// attachment reads (`floor::Capabilities::attachment_reads`), from the vertex function at the
     /// rendered level and layer, written, of a depth or stencil attachment, of an image over a
     /// buffer in place or whose format the device takes neither the feedback usage nor a shadow
-    /// for, or of an image two attachments of the pass render.
+    /// for, or of an image two attachments of the pass render; and through a shadow, which holds
+    /// one layer, an attachment of a layered pass or a 3D texture's depth plane.
     /// Metal reads a render target through a texture.
     AttachmentRead,
     /// A draw through a pipeline state whose fragment function reads a colour attachment
@@ -1913,8 +1915,11 @@ pub enum RenderPassKind {
     /// `Unknown` with a resolve texture: the rendering began resolving into the texture, as Vulkan
     /// fixes the resolve as the rendering begins.
     LateStore,
-    /// An attachment of a texture type but a 2D texture, a 2D array, a cube or a cube array: a 1D
-    /// texture's, or a 3D texture's depth plane.
+    /// An attachment that is neither a level of a 2D texture, a 2D array, a cube, a cube array or a
+    /// 2D multisample texture or array, nor a depth plane of a 3D texture's level that a color
+    /// attachment renders in a pass of one layer: a 1D texture's; a 3D texture's in a layered pass
+    /// (`renderTargetArrayLength` 2 or more), as a depth or stencil attachment, or as a resolve
+    /// texture; and a resolve's depth plane but 0.
     TextureType,
     /// `MTLStoreActionCustomSampleDepthStore`, set on the pass or by the encoder's
     /// `setColorStoreAction:atIndex:` family.

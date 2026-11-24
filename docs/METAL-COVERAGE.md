@@ -10,12 +10,12 @@ Every public item of the macOS 27.2 SDK (Xcode 27.2, 27B52)'s Metal headers, by 
 
 | Status | Items | Of which deprecated |
 |---|---|---|
-| implemented | 638 | 29 |
-| missing | 1073 | 34 |
+| implemented | 639 | 29 |
+| missing | 1072 | 34 |
 | out of scope | 424 | 5 |
 | all | 2135 | 68 |
 
-Implemented by the runtime: 281; by the translator's values: 357. Missing by size: S 181, M 203, L 313, XL 376.
+Implemented by the runtime: 282; by the translator's values: 357. Missing by size: S 181, M 202, L 313, XL 376.
 
 ## Missing, in build order
 
@@ -32,7 +32,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | plain-value constructors (`MTLOriginMake` and the rest) | S | 7 | `MTLOriginMake`, `MTLSizeMake`, `MTLRegionMake1D`, ... |
 | a buffer made with bytes | S | 1 | `MTLDevice.newBufferWithBytes:length:options:` |
 | pipeline creation forms (from a function, with a completion handler) | S | 6 | `MTLDevice.newRenderPipelineStateWithDescriptor:options:completionHandler:`, `MTLDevice.newComputePipelineStateWithFunction:error:`, `MTLDevice.newComputePipelineStateWithFunction:options:reflection:error:`, ... |
-| render pass descriptor fields | S/M/L | 8 | `MTLRenderPassAttachmentDescriptor.depthPlane`, `MTLRenderPassAttachmentDescriptor.storeActionOptions`, `MTLRenderPassDescriptor.imageblockSampleLength`, ... |
+| render pass descriptor fields | S/M/L | 7 | `MTLRenderPassAttachmentDescriptor.storeActionOptions`, `MTLRenderPassDescriptor.imageblockSampleLength`, `MTLRenderPassDescriptor.threadgroupMemoryLength`, ... |
 | encoder calls (stride setters, indirect draws, store action options, a render encoder's heap uses) | S/M/L | 23 | `MTLBlitCommandEncoder.synchronizeTexture:slice:level:`, `MTLBlitCommandEncoder.copyFromTexture:sourceSlice:sourceLevel:toTexture:destinationSlice:destinationLevel:sliceCount:levelCount:`, `MTLBlitCommandEncoder.copyFromTexture:toTexture:`, ... |
 | `textureBarrier` and queue-stage barriers | S/M | 2 | `MTLCommandEncoder.barrierAfterQueueStages:beforeStages:`, `MTLRenderCommandEncoder.textureBarrier` |
 | a pipeline state's reflection after creation | S | 2 | `MTLComputePipelineState.reflection`, `MTLRenderPipelineState.reflection` |
@@ -2145,7 +2145,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLRenderPassAttachmentDescriptor.texture` | property | implemented | `RenderPassColorAttachmentDescriptor.texture` (runtime) |
 | `MTLRenderPassAttachmentDescriptor.level` | property | implemented | `RenderPassColorAttachmentDescriptor.level` (runtime) |
 | `MTLRenderPassAttachmentDescriptor.slice` | property | implemented | `RenderPassColorAttachmentDescriptor.slice` (runtime) |
-| `MTLRenderPassAttachmentDescriptor.depthPlane` | property | missing | M: a 3D texture's depth plane as an attachment; such an attachment is refused (`RenderPassKind::TextureType`) |
+| `MTLRenderPassAttachmentDescriptor.depthPlane` | property | implemented | `RenderPassColorAttachmentDescriptor.depth_plane` (runtime) |
 | `MTLRenderPassAttachmentDescriptor.resolveTexture` | property | implemented | `RenderPassColorAttachmentDescriptor.resolve_texture` (runtime) |
 | `MTLRenderPassAttachmentDescriptor.resolveLevel` | property | implemented | `RenderPassColorAttachmentDescriptor.resolve_level` (runtime) |
 | `MTLRenderPassAttachmentDescriptor.resolveSlice` | property | implemented | `RenderPassColorAttachmentDescriptor.resolve_slice` (runtime) |

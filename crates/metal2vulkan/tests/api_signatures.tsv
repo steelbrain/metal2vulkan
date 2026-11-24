@@ -1628,6 +1628,7 @@ field	metal2vulkan-runtime::RawDevice.queue_family_index	pub queue_family_index:
 field	metal2vulkan-runtime::Region.origin	pub origin: [u32; 3]
 field	metal2vulkan-runtime::Region.size	pub size: [u32; 3]
 field	metal2vulkan-runtime::RenderPassColorAttachmentDescriptor.clear_color	pub clear_color: ClearColor
+field	metal2vulkan-runtime::RenderPassColorAttachmentDescriptor.depth_plane	pub depth_plane: u32
 field	metal2vulkan-runtime::RenderPassColorAttachmentDescriptor.level	pub level: u32
 field	metal2vulkan-runtime::RenderPassColorAttachmentDescriptor.load_action	pub load_action: LoadAction
 field	metal2vulkan-runtime::RenderPassColorAttachmentDescriptor.resolve_depth_plane	pub resolve_depth_plane: u32

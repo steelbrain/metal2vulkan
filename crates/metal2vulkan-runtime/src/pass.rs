@@ -48,7 +48,7 @@
 use crate::buffer::{Buffer, BufferObject};
 use crate::device::Core;
 use crate::error::{Error, Gap, LinearPlanePassKind, Refusal, RenderPassKind};
-use crate::texture::{Attachment, ResolveCopy, Texture, TextureObject};
+use crate::texture::{barrier_layers, Attachment, ResolveCopy, Texture, TextureObject};
 use ash::vk;
 use metal2vulkan::metal::format::{self as formats, FormatEmulation};
 use metal2vulkan::metal::PixelFormat;
@@ -199,22 +199,28 @@ impl ClearColor {
 /// resolve of an extended-range, bfloat or YCbCr format, which Vulkan's average would take in the
 /// image's own encoding. An integer format has no resolve, [`Refusal::ResolveFormat`].
 ///
-/// Not built: a 3D texture's `depthPlane` (refused by the texture's type) and
-/// `storeActionOptions`, whose one option needs more than one sample.
+/// Not built: `storeActionOptions`, whose one option needs more than one sample.
 ///
 /// Its default is Metal's: no texture or resolve texture, levels, slices and planes 0, `DontCare`
 /// load, `Store` store, opaque black clear.
 #[derive(Clone, Default)]
 pub struct RenderPassColorAttachmentDescriptor {
     /// `texture`: the texture rendered into; `None` for no attachment at this index. It needs
-    /// `RenderTarget` usage and a color format; a 2D texture, a 2D array, a cube, a cube array, or
-    /// a 2D multisample texture or array.
+    /// `RenderTarget` usage and a color format; a 2D texture, a 2D array, a cube, a cube array, a
+    /// 2D multisample texture or array, or a 3D texture in a pass of one layer (`depth_plane`).
     pub texture: Option<Texture>,
     /// `level`: the mipmap level rendered into.
     pub level: u32,
     /// `slice`: the array slice or cube face rendered into, the first of a layered pass's
     /// ([`RenderPassDescriptor::render_target_array_length`]).
     pub slice: u32,
+    /// `depthPlane`: a 3D texture's depth plane rendered into, inside the level's depth
+    /// ([`Refusal::AttachmentPlace`] past it), through a 2D view of that plane of its image, which
+    /// a 3D texture of `RenderTarget` usage is made to take; the level's other planes keep their
+    /// texels. Read of no other type, as Metal ignores it. A 3D texture in a layered pass
+    /// ([`RenderPassDescriptor::render_target_array_length`] 2 or more) is [`Gap::RenderPass`] of
+    /// [`RenderPassKind::TextureType`].
+    pub depth_plane: u32,
     /// `loadAction`: `DontCare` by default.
     pub load_action: LoadAction,
     /// `storeAction`: `Store` by default.
@@ -241,8 +247,8 @@ pub struct RenderPassColorAttachmentDescriptor {
     /// `resolveSlice`: the resolve texture's array slice or cube face resolved into, the first of a
     /// layered pass's.
     pub resolve_slice: u32,
-    /// `resolveDepthPlane`: a 3D resolve texture's depth plane. A plane but 0 is
-    /// [`Gap::RenderPass`] of [`RenderPassKind::TextureType`], as a 3D attachment is.
+    /// `resolveDepthPlane`: a 3D resolve texture's depth plane. A 3D resolve texture, and a plane
+    /// but 0, are [`Gap::RenderPass`] of [`RenderPassKind::TextureType`].
     pub resolve_depth_plane: u32,
 }
 
@@ -259,7 +265,8 @@ pub struct RenderPassColorAttachmentDescriptor {
 /// A store action that resolves resolves into `resolve_texture` by `depth_resolve_filter`, as a
 /// color attachment's resolves (the module's documentation).
 ///
-/// Not built: a 3D texture's `depthPlane`, as a color attachment's.
+/// Not built: a 3D texture's `depthPlane`; a depth attachment of a 3D texture is
+/// [`Gap::RenderPass`] of [`RenderPassKind::TextureType`].
 #[derive(Clone)]
 pub struct RenderPassDepthAttachmentDescriptor {
     /// `texture`: the texture whose depth is rendered into; `None` for no depth attachment. It
@@ -315,7 +322,7 @@ impl Default for RenderPassDepthAttachmentDescriptor {
 /// resolves too, both resolve into one view (`VUID-VkRenderingInfo-pDepthAttachment-06086`), else
 /// [`Gap::RenderPass`] of [`RenderPassKind::Resolve`].
 ///
-/// Not built: a 3D texture's `depthPlane`, as a color attachment's.
+/// Not built: a 3D texture's `depthPlane`, as a depth attachment's.
 #[derive(Clone)]
 pub struct RenderPassStencilAttachmentDescriptor {
     /// `texture`: the texture whose stencil is rendered into; `None` for no stencil attachment. It
@@ -492,14 +499,16 @@ impl Resolve {
     }
 }
 
-/// The level and layers of `a`, every aspect.
+/// The level and layers of `a`, every aspect, as a barrier names them (a 3D image's as
+/// [`barrier_layers`] does).
 fn range(a: &Attachment) -> vk::ImageSubresourceRange {
+    let [base_array_layer, layer_count] = barrier_layers(a.volume, a.layer, a.layers);
     vk::ImageSubresourceRange {
         aspect_mask: a.aspects,
         base_mip_level: a.level,
         level_count: 1,
-        base_array_layer: a.layer,
-        layer_count: a.layers,
+        base_array_layer,
+        layer_count,
     }
 }
 
@@ -754,7 +763,7 @@ impl Pass {
                     pixel_format: pf,
                 }));
             }
-            let attachment = texture.attachment(c.level, c.slice, layers)?;
+            let attachment = texture.attachment(c.level, c.slice, Some(c.depth_plane), layers)?;
             let resolve = match (
                 resolving(c.store_action, c.resolve_texture.is_some())?,
                 &c.resolve_texture,
@@ -818,7 +827,7 @@ impl Pass {
                         pixel_format: pf,
                     }));
                 }
-                let attachment = texture.attachment(z.level, z.slice, layers)?;
+                let attachment = texture.attachment(z.level, z.slice, None, layers)?;
                 let resolve = match (
                     resolving(z.store_action, z.resolve_texture.is_some())?,
                     &z.resolve_texture,
@@ -880,7 +889,7 @@ impl Pass {
                         pixel_format: pf,
                     }));
                 }
-                let attachment = texture.attachment(s.level, s.slice, layers)?;
+                let attachment = texture.attachment(s.level, s.slice, None, layers)?;
                 let resolve = match (
                     resolving(s.store_action, s.resolve_texture.is_some())?,
                     &s.resolve_texture,

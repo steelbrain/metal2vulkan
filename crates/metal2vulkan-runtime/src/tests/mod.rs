@@ -23,6 +23,8 @@ mod cube_views;
 mod d3d11;
 mod deep_threadgroups;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod depth_planes;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod depth_stencil_copy;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod depth_stencil_route;

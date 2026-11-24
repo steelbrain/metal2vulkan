@@ -322,6 +322,7 @@ impl ShadowView {
 /// An image view of one level and layer of a texture's image, for render passes.
 struct AttachmentView {
     level: u32,
+    /// Its first layer: a slice, or a 3D image's depth plane.
     layer: u32,
     layers: u32,
     view: vk::ImageView,
@@ -351,6 +352,8 @@ pub(crate) struct Attachment {
     /// The image renders as a linear colour attachment alone (`Image::linear_attachment`), so a
     /// pass renders it only beside other such images ([`Gap::LinearPlanePass`]).
     pub(crate) linear: bool,
+    /// The image is 3D: a barrier names its one layer ([`barrier_layers`]).
+    pub(crate) volume: bool,
 }
 
 /// A texture's bytes in a buffer, which [`Texture::replace_region`] and [`Texture::get_bytes`]
@@ -2044,7 +2047,10 @@ impl Plan {
     }
 
     /// The image's create flags over `shape`'s: mutable where it lists formats for its views,
-    /// cube-compatible where the plan makes it so, and of extended usage where it is extended.
+    /// cube-compatible where the plan makes it so, of extended usage where it is extended, and
+    /// 2D-array-compatible where it is a 3D image of the colour attachment usage, so that a pass
+    /// renders into one depth plane of a level through a 2D view of it
+    /// ([`TextureObject::attachment`]): `VUID-VkImageViewCreateInfo-image-06728`.
     fn flags(&self, shape: &Shape) -> vk::ImageCreateFlags {
         let mut flags = shape.flags;
         if !self.view_formats.is_empty() {
@@ -2056,6 +2062,11 @@ impl Plan {
         if self.extended {
             flags |= vk::ImageCreateFlags::EXTENDED_USAGE;
         }
+        if shape.image_type == vk::ImageType::TYPE_3D
+            && self.usage.contains(vk::ImageUsageFlags::COLOR_ATTACHMENT)
+        {
+            flags |= vk::ImageCreateFlags::TYPE_2D_ARRAY_COMPATIBLE;
+        }
         flags
     }
 
@@ -2063,6 +2074,20 @@ impl Plan {
     /// mutable.
     fn format_list(&self) -> vk::ImageFormatListCreateInfo<'_> {
         vk::ImageFormatListCreateInfo::default().view_formats(&self.view_formats)
+    }
+}
+
+/// The first layer and the layer count a barrier names on a texture's image from `layer`, `count`
+/// of them, where `volume` says the image is 3D: a 3D image's one layer as 0 and
+/// `VK_REMAINING_ARRAY_LAYERS`. A 3D render target's image is 2D-array-compatible ([`Plan`]'s
+/// flags), and a barrier's layers on such an image name every depth slice of its levels while the
+/// maintenance9 feature is off, as the runtime leaves it, but one slice each once it is on
+/// (`VUID-VkImageMemoryBarrier2-subresourceRange-01488`, `-maintenance9-10798`); the remaining
+/// count names the whole level either way.
+pub(crate) fn barrier_layers(volume: bool, layer: u32, count: u32) -> [u32; 2] {
+    match volume {
+        true => [0, vk::REMAINING_ARRAY_LAYERS],
+        false => [layer, count],
     }
 }
 
@@ -3779,6 +3804,8 @@ impl TextureInner {
         new: vk::ImageLayout,
     ) -> vk::ImageMemoryBarrier2<'static> {
         let image = self.imaged();
+        let volume = self.descriptor.texture_type == TextureType::Type3D;
+        let [base_array_layer, layer_count] = barrier_layers(volume, placed.layer, 1);
         vk::ImageMemoryBarrier2::default()
             .old_layout(old)
             .new_layout(new)
@@ -3789,8 +3816,8 @@ impl TextureInner {
                 aspect_mask: image.aspects,
                 base_mip_level: placed.level,
                 level_count: 1,
-                base_array_layer: placed.layer,
-                layer_count: 1,
+                base_array_layer,
+                layer_count,
             })
     }
 
@@ -4050,6 +4077,9 @@ impl TextureInner {
         let [level, layer] = self.base();
         let image = self.imaged();
         let home = image.home;
+        let d = &self.descriptor;
+        let [base_array_layer, layer_count] =
+            barrier_layers(d.texture_type == TextureType::Type3D, layer, slices(d));
         vk::ImageMemoryBarrier2::default()
             .old_layout(old.unwrap_or(home))
             .new_layout(new.unwrap_or(home))
@@ -4060,8 +4090,8 @@ impl TextureInner {
                 aspect_mask: image.aspects,
                 base_mip_level: level + levels.start,
                 level_count: levels.end - levels.start,
-                base_array_layer: layer,
-                layer_count: slices(&self.descriptor),
+                base_array_layer,
+                layer_count,
             })
     }
 }
@@ -4947,12 +4977,14 @@ pub(crate) trait TextureObject {
             Some(view) => &view.parent.descriptor,
             None => &self.object().descriptor,
         };
+        let volume = root.texture_type == TextureType::Type3D;
+        let [base_array_layer, layer_count] = barrier_layers(volume, 0, slices(root));
         vk::ImageSubresourceRange {
             aspect_mask: self.object().imaged().aspects,
             base_mip_level: 0,
             level_count: root.mipmap_level_count,
-            base_array_layer: 0,
-            layer_count: slices(root),
+            base_array_layer,
+            layer_count,
         }
     }
 
@@ -4987,21 +5019,33 @@ pub(crate) trait TextureObject {
     /// `level` and the `layers` slices from `slice` of the texture as a render pass attachment:
     /// the image view of that one level and those layers of its image (a 2D view of one layer, a
     /// 2D array view of more), every aspect, with the identity swizzle, made at the first pass
-    /// that renders into it and kept with the texture.
+    /// that renders into it and kept with the texture. A 3D texture's attachment, where the
+    /// attachment takes a depth plane (`plane`, a color attachment's `depthPlane`) and the pass
+    /// renders one layer, is that plane of the level: a 2D view of the plane, which its image's
+    /// 2D-array compatibility gives (`Plan::flags`); `plane` is read of no other type, as Metal
+    /// ignores it.
     ///
     /// Err: [`Refusal::AttachmentUsage`] for a texture made without `RenderTarget` usage;
     /// [`Gap::RenderPass`] of [`RenderPassKind::TextureType`] for one but a 2D texture, a 2D
-    /// array, a cube, a cube array or a 2D multisample texture or array;
+    /// array, a cube, a cube array, a 2D multisample texture or array, or a 3D texture where the
+    /// attachment takes a depth plane and the pass renders one layer;
     /// [`Refusal::AttachmentPlace`] for a level or slice past the texture's, the last of the
-    /// `layers` slices included; [`Error::Vulkan`] where the view cannot be made.
-    fn attachment(&self, level: u32, slice: u32, layers: u32) -> Result<Attachment, Error> {
+    /// `layers` slices included, or a depth plane past its level's depth; [`Error::Vulkan`] where
+    /// the view cannot be made.
+    fn attachment(
+        &self,
+        level: u32,
+        slice: u32,
+        plane: Option<u32>,
+        layers: u32,
+    ) -> Result<Attachment, Error> {
         let d = &self.object().descriptor;
         if !d.usage.is_empty() && !d.usage.contains(TextureUsage::RENDER_TARGET) {
             return Err(Error::Refused(Refusal::AttachmentUsage {
                 pixel_format: d.pixel_format,
             }));
         }
-        self.attachment_view(level, slice, layers)
+        self.attachment_view(level, slice, plane, layers)
     }
 
     /// `level` and the `layers` slices from `slice` of the texture as a pass's resolve
@@ -5022,7 +5066,9 @@ pub(crate) trait TextureObject {
     /// the device's optimal image does not render, a texture in place over a dma-buf's import, and
     /// a view of another format of a texture in place whose linear image takes none;
     /// [`Refusal::AttachmentPlace`] past a texture over a buffer's one level and slice;
-    /// [`Error::Vulkan`] where its resolve image cannot be made; as [`attachment`] for the rest.
+    /// [`Error::Vulkan`] where its resolve image cannot be made; as [`attachment`] of no depth
+    /// plane for the rest, so a 3D texture is [`Gap::RenderPass`] of
+    /// [`RenderPassKind::TextureType`].
     ///
     /// [`attachment`]: TextureObject::attachment
     fn resolve_attachment(
@@ -5036,7 +5082,7 @@ pub(crate) trait TextureObject {
         let object = self.object();
         let image = object.image_of();
         if image.is_some_and(|image| image.usage.intersects(renders)) {
-            return Ok((self.attachment_view(level, slice, layers)?, None));
+            return Ok((self.attachment_view(level, slice, None, layers)?, None));
         }
         let gap = || {
             Error::Unsupported(Gap::RenderPass {
@@ -5106,6 +5152,7 @@ pub(crate) trait TextureObject {
             level: 0,
             layer: 0,
             layers: 1,
+            volume: false,
             aspects: vk::ImageAspectFlags::COLOR,
             // Where each pass leaves it, for its copy (`pass::Resolve::from`).
             home: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
@@ -5123,25 +5170,35 @@ pub(crate) trait TextureObject {
         Ok((attachment, Some(copy)))
     }
 
-    /// `level` and the `layers` slices from `slice` of the texture as a render pass attachment,
-    /// as [`attachment`] views them, whatever its usage: the caller checked that its image has
-    /// the attachment usage.
+    /// `level` and the `layers` slices from `slice` of the texture, or a 3D texture's depth plane
+    /// `plane`, as a render pass attachment, as [`attachment`] views them, whatever its usage: the
+    /// caller checked that its image has the attachment usage.
     ///
     /// Err: as [`attachment`] but [`Refusal::AttachmentUsage`].
     ///
     /// [`attachment`]: TextureObject::attachment
-    fn attachment_view(&self, level: u32, slice: u32, layers: u32) -> Result<Attachment, Error> {
+    fn attachment_view(
+        &self,
+        level: u32,
+        slice: u32,
+        plane: Option<u32>,
+        layers: u32,
+    ) -> Result<Attachment, Error> {
         let d = &self.object().descriptor;
         let gap = |kind| Err(Error::Unsupported(Gap::RenderPass { kind }));
-        match d.texture_type {
-            TextureType::Type2D
-            | TextureType::Type2DArray
-            | TextureType::Cube
-            | TextureType::CubeArray
-            | TextureType::Type2DMultisample
-            | TextureType::Type2DMultisampleArray => {}
+        let plane = match (d.texture_type, plane) {
+            (
+                TextureType::Type2D
+                | TextureType::Type2DArray
+                | TextureType::Cube
+                | TextureType::CubeArray
+                | TextureType::Type2DMultisample
+                | TextureType::Type2DMultisampleArray,
+                _,
+            ) => None,
+            (TextureType::Type3D, Some(plane)) if layers == 1 => Some(plane),
             _ => return gap(RenderPassKind::TextureType),
-        }
+        };
         if level >= d.mipmap_level_count || slice >= slices(d) {
             return Err(Error::Refused(Refusal::AttachmentPlace { level, slice }));
         }
@@ -5151,8 +5208,20 @@ pub(crate) trait TextureObject {
                 slice: slice + layers - 1,
             }));
         }
+        // A 3D texture's depth plane lies in its level's depth (Vulkan's image mip level sizing:
+        // `VUID-VkImageViewCreateInfo-image-02724`).
+        if let Some(plane) = plane.filter(|&plane| plane >= (d.depth >> level).max(1)) {
+            return Err(Error::Refused(Refusal::AttachmentPlace {
+                level,
+                slice: plane,
+            }));
+        }
         let [first_level, first_layer] = TextureInner::base(self.object());
         let (level_in_image, layer) = (first_level + level, first_layer + slice);
+        // The view's first layer: the slice's, or a 3D image's depth plane. The attachment's
+        // layer stays the slice's, the image's one layer of a 3D level, and its barriers name
+        // that layer as `barrier_layers` does: each moves every plane of the level.
+        let first = plane.unwrap_or(layer);
         // The type's check above refused a texture buffer.
         let image = self.object().imaged();
         // A view of another format than the image's renders where the format's features hold an
@@ -5171,7 +5240,7 @@ pub(crate) trait TextureObject {
         };
         let mut views = lock(&self.object().attachments);
         let kept = (views.iter())
-            .find(|a| a.level == level_in_image && a.layer == layer && a.layers == layers)
+            .find(|a| a.level == level_in_image && a.layer == first && a.layers == layers)
             .map(|a| a.view);
         let view = match kept {
             Some(view) => view,
@@ -5181,7 +5250,7 @@ pub(crate) trait TextureObject {
                     aspect_mask: image.aspects,
                     base_mip_level: level_in_image,
                     level_count: 1,
-                    base_array_layer: layer,
+                    base_array_layer: first,
                     layer_count: layers,
                 };
                 let kind = match layers {
@@ -5189,8 +5258,10 @@ pub(crate) trait TextureObject {
                     _ => vk::ImageViewType::TYPE_2D_ARRAY,
                 };
                 // SAFETY: the image is bound, of the texture's format, holds the level and layers
-                // (the texture's own, which lie in its image), and has the attachment usage its
-                // render target usage or its resolves gave it (the caller's check).
+                // (the texture's own, which lie in its image), or the level's depth plane, of a 3D
+                // image of the attachment usage, which its plan made 2D-array-compatible
+                // (`Plan::flags`), and has the attachment usage its render target usage or its
+                // resolves gave it (the caller's check).
                 let view = unsafe {
                     image_view(
                         core,
@@ -5205,7 +5276,7 @@ pub(crate) trait TextureObject {
                 core.counters.rise(Gauge::AttachmentViews);
                 views.push(AttachmentView {
                     level: level_in_image,
-                    layer,
+                    layer: first,
                     layers,
                     view,
                 });
@@ -5218,6 +5289,7 @@ pub(crate) trait TextureObject {
             level: level_in_image,
             layer,
             layers,
+            volume: plane.is_some(),
             aspects: image.aspects,
             home: image.home,
             extent: [(d.width >> level).max(1), (d.height >> level).max(1)],

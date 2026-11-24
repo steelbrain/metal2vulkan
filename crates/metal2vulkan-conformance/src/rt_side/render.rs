@@ -47,16 +47,22 @@ fn store(action: StoreAction) -> Answer<rt::StoreAction> {
     })
 }
 
-/// An attachment's place, refused where it names what the runtime's attachment has no field
-/// for: a depth plane or store action options.
-fn plain(place: &AttachmentPlace, options: StoreActionOptions) -> Answer<()> {
-    if place.depth_plane != 0 {
-        return Err(Failure::unavailable("depthPlane"));
-    }
+/// An attachment's store action options, refused where set: the runtime's attachments have no
+/// field for them.
+fn optionless(options: StoreActionOptions) -> Answer<()> {
     if options != StoreActionOptions::default() {
         return Err(Failure::unavailable("storeActionOptions"));
     }
     Ok(())
+}
+
+/// A depth or stencil attachment's place, refused where it names a depth plane, which the
+/// runtime's depth and stencil attachments have no field for, and its options as [`optionless`].
+fn plain(place: &AttachmentPlace, options: StoreActionOptions) -> Answer<()> {
+    if place.depth_plane != 0 {
+        return Err(Failure::unavailable("depthPlane"));
+    }
+    optionless(options)
 }
 
 /// The runtime's depth resolve filter for a case's.
@@ -391,12 +397,13 @@ impl RtSide<'_> {
         descriptor.render_target_array_length = pass.array_length;
         for (at, color) in pass.colors.iter().enumerate() {
             let Some(held) = color.texture else { continue };
-            plain(&color.place, color.options)?;
+            optionless(color.options)?;
             let attachment = (descriptor.color_attachments.get_mut(at))
                 .ok_or_else(|| Failure::named("NoSuchAttachment", format!("color {at}")))?;
             attachment.texture = Some(self.held_texture(held)?.clone());
             attachment.level = color.place.level;
             attachment.slice = color.place.slice;
+            attachment.depth_plane = color.place.depth_plane;
             attachment.resolve_texture = (color.resolve)
                 .map(|resolve| self.held_texture(resolve).cloned())
                 .transpose()?;

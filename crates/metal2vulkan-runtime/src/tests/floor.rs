@@ -1185,6 +1185,7 @@ fn a_device_that_lists_the_portability_subset_is_asked_for_its_features() {
             feature(PORTABILITY_FEATURES, "imageViewFormatSwizzle"),
             feature(PORTABILITY_FEATURES, "mutableComparisonSamplers"),
             feature(PORTABILITY_FEATURES, "multisampleArrayImage"),
+            feature(PORTABILITY_FEATURES, "imageView2DOn3DImage"),
         ]
     );
 
@@ -1197,6 +1198,7 @@ fn a_device_that_lists_the_portability_subset_is_asked_for_its_features() {
     reported.image_view_format_swizzle = vk::TRUE;
     reported.mutable_comparison_samplers = vk::TRUE;
     reported.multisample_array_image = vk::TRUE;
+    reported.image_view2_d_on3_d_image = vk::TRUE;
     let capabilities = decide(&device).unwrap_or_else(|below| panic!("{below}"));
     assert!(capabilities.extensions.contains(&subset));
     let enabled = capabilities.features.portability;
@@ -1205,10 +1207,11 @@ fn a_device_that_lists_the_portability_subset_is_asked_for_its_features() {
             enabled.image_view_format_swizzle,
             enabled.mutable_comparison_samplers,
             enabled.multisample_array_image,
+            enabled.image_view2_d_on3_d_image,
             enabled.constant_alpha_color_blend_factors,
             enabled.events,
         ),
-        (vk::TRUE, vk::TRUE, vk::TRUE, vk::FALSE, vk::FALSE)
+        (vk::TRUE, vk::TRUE, vk::TRUE, vk::TRUE, vk::FALSE, vk::FALSE)
     );
 }
 
@@ -1238,6 +1241,7 @@ fn the_translator_sees_the_portability_subset_device_creation_enables() {
         VkFeature::ImageViewFormatSwizzle,
         VkFeature::MutableComparisonSamplers,
         VkFeature::MultisampleArrayImage,
+        VkFeature::ImageView2DOn3DImage,
     ] {
         assert!(enables.features.contains(&feature), "{feature:?}");
     }
@@ -2246,7 +2250,7 @@ fn every_device_the_loader_lists_is_above_the_floor() {
              {}; queue family {}; Private memory type {} (flags {:#x}), Shared memory type {} \
              (flags {:#x}), ring memory type {} (flags {:#x}); extensions enabled {:?}; \
              portability features enabled: imageViewFormatSwizzle {}, \
-             mutableComparisonSamplers {}, multisampleArrayImage {}",
+             mutableComparisonSamplers {}, multisampleArrayImage {}, imageView2DOn3DImage {}",
             capabilities.float16,
             capabilities.storage_read_without_format,
             capabilities.buffer_int64_atomics,
@@ -2265,7 +2269,8 @@ fn every_device_the_loader_lists_is_above_the_floor() {
                 .features
                 .portability
                 .mutable_comparison_samplers,
-            capabilities.features.portability.multisample_array_image
+            capabilities.features.portability.multisample_array_image,
+            capabilities.features.portability.image_view2_d_on3_d_image
         );
         println!(
             "floor: {name}: attachment reads {}, through the feedback loop {}",

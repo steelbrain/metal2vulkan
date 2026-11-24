@@ -659,6 +659,9 @@ pub(crate) const PORTABILITY: &[Feature] = &[
     feature!(portability.mutable_comparison_samplers => MutableComparisonSamplers),
     // `MTLTextureType2DMultisampleArray`.
     feature!(portability.multisample_array_image => MultisampleArrayImage),
+    // A 3D texture's depth plane as a render pass attachment: a 2D view of a 3D image, made
+    // 2D-array-compatible (`VUID-VkImageCreateInfo-imageView2DOn3DImage-04459`).
+    feature!(portability.image_view2_d_on3_d_image => ImageView2DOn3DImage),
 ];
 
 /// The features the runtime uses only where the device reports them. Each answer chooses one of

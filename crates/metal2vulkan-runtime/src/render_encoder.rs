@@ -55,7 +55,9 @@
 //! level and layer the pass cleared, inside Metal's render area, is a clear of the shadow's to the
 //! pass's clear colour instead, between the same barriers. A memory barrier after draws leaves
 //! every shadow holding nothing, so the next draw that reads an attachment copies what it reads
-//! again, after what the earlier draws rendered; it records nothing itself.
+//! again, after what the earlier draws rendered; it records nothing itself. A shadow's copies are
+//! of layers, so a draw that reads this way a 3D texture whose depth plane its pass renders is
+//! refused ([`DrawKind::AttachmentRead`]).
 //!
 //! A `Boolean` or `Counting` visibility result mode counts the draws after it in one precise
 //! occlusion query, begun before its first draw and ended in the rendering as the next mode set
@@ -3027,8 +3029,11 @@ impl RenderCommandEncoder {
                 }));
             }
             if !texture.looped() {
-                // A shadow holds what one layer of its attachment rendered.
-                if a.layers > 1 {
+                // A shadow holds what one layer of its attachment rendered, and no depth plane of
+                // a 3D texture's: its copies are of layers at the plane 0 (`region`).
+                if a.layers > 1
+                    || target.texture.descriptor().texture_type == crate::TextureType::Type3D
+                {
                     return Err(Error::Unsupported(Gap::Draw {
                         kind: DrawKind::AttachmentRead,
                     }));

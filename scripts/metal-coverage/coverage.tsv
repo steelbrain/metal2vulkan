@@ -1684,7 +1684,7 @@ MTLRenderPass.h	MTLRenderPassAttachmentDescriptor	class	MTLRenderPassAttachmentD
 MTLRenderPass.h	MTLRenderPassAttachmentDescriptor	property	texture		I	runtime	RenderPassColorAttachmentDescriptor.texture			
 MTLRenderPass.h	MTLRenderPassAttachmentDescriptor	property	level		I	runtime	RenderPassColorAttachmentDescriptor.level			
 MTLRenderPass.h	MTLRenderPassAttachmentDescriptor	property	slice		I	runtime	RenderPassColorAttachmentDescriptor.slice			
-MTLRenderPass.h	MTLRenderPassAttachmentDescriptor	property	depthPlane		M			a 3D texture's depth plane as an attachment; such an attachment is refused (`RenderPassKind::TextureType`)	M	render-pass
+MTLRenderPass.h	MTLRenderPassAttachmentDescriptor	property	depthPlane		I	runtime	RenderPassColorAttachmentDescriptor.depth_plane			
 MTLRenderPass.h	MTLRenderPassAttachmentDescriptor	property	resolveTexture		I	runtime	RenderPassColorAttachmentDescriptor.resolve_texture			
 MTLRenderPass.h	MTLRenderPassAttachmentDescriptor	property	resolveLevel		I	runtime	RenderPassColorAttachmentDescriptor.resolve_level			
 MTLRenderPass.h	MTLRenderPassAttachmentDescriptor	property	resolveSlice		I	runtime	RenderPassColorAttachmentDescriptor.resolve_slice			
