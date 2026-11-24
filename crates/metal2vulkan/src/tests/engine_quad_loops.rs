@@ -3,7 +3,7 @@
 //! records `Guaranteed` with no `DeviceReconvergence` on every committed profile, but where one of
 //! them lies in a loop a back edge re-enters from inside a selection, where it takes the mode the
 //! profile gives a tangled entry and, without maximal reconvergence, the note. A fragment
-//! function with a quad operation keeps its mode.
+//! function with a quad or simdgroup operation keeps its mode.
 //!
 //! `llvm-as` assembles the fixtures; without it the tests skip visibly.
 
@@ -253,4 +253,43 @@ fn a_fragment_quad_operation_keeps_the_mode() {
         }
     }
     assert!(compiled > 0, "no profile compiled a quad operation");
+}
+
+/// A fragment function with a simdgroup operation keeps the mode wherever it compiles, a
+/// derivative beside it or not: without `MaximallyReconvergesKHR` Vulkan may leave a helper out
+/// of every group operation but a derivative or a quad one (section 9.31, "Helper Invocations"),
+/// where Metal counts a helper that still has a gradient to compute as an active thread.
+#[test]
+fn a_fragment_simdgroup_operation_keeps_the_mode() {
+    let cases: [(&str, &[&str]); 4] = [
+        ("quad_helpers", &["qs_arith", "qs_bits", "qs_votes"]),
+        ("fragment_rog", &["discard_then_simd"]),
+        ("gsm2_fragment_lanes", &["fragment_lane_shuffles"]),
+        (
+            "gsm2_helper_threads",
+            &["fragment_helper_threads_beside_a_simdgroup_vote"],
+        ),
+    ];
+    let profiles = committed_profiles().expect("profiles");
+    for (fixture_stem, entries) in cases {
+        let Some(bc) = fixture(fixture_stem) else {
+            return;
+        };
+        for &entry in entries {
+            let mut compiled = 0;
+            for (stem, p) in &profiles {
+                if !p.fields().subgroup.maximal_reconvergence || compile(&bc, entry, p).is_err() {
+                    continue;
+                }
+                compiled += 1;
+                let (mode, reconvergence, noted, _) = reading(&bc, entry, stem, p);
+                assert_eq!(
+                    (mode, reconvergence, noted),
+                    ("maximal", Reconvergence::Guaranteed, false),
+                    "{stem} {fixture_stem} {entry}"
+                );
+            }
+            assert!(compiled > 0, "no profile compiled {fixture_stem} {entry}");
+        }
+    }
 }

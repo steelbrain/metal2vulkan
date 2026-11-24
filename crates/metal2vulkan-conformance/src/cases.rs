@@ -145,6 +145,7 @@ pub mod pixel_samplers;
 pub mod primitive_type_crossings;
 pub mod pvrtc_cpu_order;
 pub mod pvrtc_rows;
+pub mod quad_helpers;
 pub mod rate_map_degenerate_forms;
 pub mod rate_map_sweeps;
 pub mod rate_maps;
@@ -345,6 +346,9 @@ pub fn all() -> Vec<Box<dyn Case>> {
         cases.push(Box::new(case));
     }
     for case in reconvergence::all() {
+        cases.push(Box::new(case));
+    }
+    for case in quad_helpers::all() {
         cases.push(Box::new(case));
     }
     for case in int_attributes::all() {
