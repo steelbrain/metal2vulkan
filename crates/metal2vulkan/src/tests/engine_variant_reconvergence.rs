@@ -154,8 +154,9 @@ fn a_simdgroup_barrier_s_variant_is_guaranteed_only_under_maximal_reconvergence(
 }
 
 /// [`AFTER_MERGE`]'s plain module states no mode and records `Guaranteed` with no note on every
-/// committed profile, and on each with `shaderMaximalReconvergence` cleared and with both it and
-/// `shaderSubgroupUniformControlFlow` cleared (no committed profile without maximal
+/// committed profile, and on each with `shaderMaximalReconvergence` (and `shaderQuadControl`,
+/// which requires it) cleared and with `shaderSubgroupUniformControlFlow` cleared too (no
+/// committed profile without maximal
 /// reconvergence takes a flat variant: it needs device addresses and full subgroups). Its flat
 /// variant of the call's threadgroups (`VariantKey::flat_grid`, `VariantKey::call_threadgroups`),
 /// whose invocations past the grid return before the body, takes the profile's mode wherever it
@@ -191,12 +192,21 @@ fn a_flat_grid_s_shuffle_after_a_merge_takes_the_profile_s_mode() {
         ))
     };
     let mut profiles = committed_profiles().expect("profiles");
+    // Quad control goes with maximal reconvergence: VK_KHR_shader_quad_control requires it
+    // (`device::enables::check_invariants`).
     let cleared: [(&str, &[VkFeature]); 2] = [
-        ("no-maximal", &[VkFeature::ShaderMaximalReconvergence]),
+        (
+            "no-maximal",
+            &[
+                VkFeature::ShaderMaximalReconvergence,
+                VkFeature::ShaderQuadControl,
+            ],
+        ),
         (
             "no-maximal-no-ucf",
             &[
                 VkFeature::ShaderMaximalReconvergence,
+                VkFeature::ShaderQuadControl,
                 VkFeature::ShaderSubgroupUniformControlFlow,
             ],
         ),
@@ -207,7 +217,8 @@ fn a_flat_grid_s_shuffle_after_a_merge_takes_the_profile_s_mode() {
             for f in features {
                 desc.features.remove(f);
             }
-            let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
+            let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
+                .unwrap_or_else(|e| panic!("{stem} {what}: {e}"));
             profiles.push((format!("{stem} {what}"), dev.profile().clone()));
         }
     }
