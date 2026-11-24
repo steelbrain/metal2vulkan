@@ -3581,6 +3581,13 @@ impl RenderCommandEncoder {
     pub(crate) fn pushed(&self) -> &[u8] {
         &self.push
     }
+
+    /// The dynamic states set since the encoder's last draw that its next draw records
+    /// (`record_state`'s bits): none where each setter since set the value it replaced, which
+    /// `tests::draw` reads.
+    pub(crate) fn unrecorded(&self) -> u32 {
+        self.dirty
+    }
 }
 
 /// The topology of a draw of `primitive_type`, and whether it restarts strips.

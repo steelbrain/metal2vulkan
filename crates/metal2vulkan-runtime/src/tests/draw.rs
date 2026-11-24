@@ -1612,10 +1612,11 @@ pub(crate) mod on_device {
     /// bias change every draw; and the two changing setters' own, called as often with no draw
     /// between, so that the fourth less the second and the fifth is what a draw records of the
     /// changed state: the depth write and compare of two states alike but for them, and the bias.
-    /// Printed per draw where the kernel offers the counter (Linux). A state and bias set again
-    /// record nothing, so their draw is held within a quarter of the draw under a test set once,
-    /// which the ten commands a recorded state takes would pass on a device whose commands cost
-    /// what lavapipe's do.
+    /// Printed per draw where the kernel offers the counter (Linux), and held to no bound: what a
+    /// draw and a setter cost is the device's and the validation layer's. What holds on every
+    /// device: a state and bias set again unchanged after a draw leave the encoder nothing to
+    /// record at its next draw (no dynamic state marked since the draw), and set changed they
+    /// leave it the states that changed.
     #[test]
     fn every_device_counts_a_depth_tested_draw_s_instructions() {
         use metal2vulkan_devtools::instructions::InstructionCounter;
@@ -1627,10 +1628,6 @@ pub(crate) mod on_device {
         let mut d = plain.clone();
         d.depth_format = Some(PixelFormat::Depth32Float);
         each_device("draw_depth_instructions", |name, _, device| {
-            let Ok(mut counter) = InstructionCounter::new() else {
-                println!("{name}: no instruction counter here");
-                return;
-            };
             let plain_state = state(name, &device, &plain);
             let depth_state = state(name, &device, &d);
             let mut buffers = Buffers::new(&device);
@@ -1657,6 +1654,40 @@ pub(crate) mod on_device {
             ];
             let queue = device.new_command_queue(4).expect("a queue");
             let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            // After a draw, the state and bias set again unchanged leave the next draw nothing to
+            // record; set changed, they leave it what changed.
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut p = pass(&color, None);
+            p.depth_attachment.texture = Some(depth.clone());
+            let mut encoder = (command_buffer.render_command_encoder(&p))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            draw(encoder.set_render_pipeline_state(&depth_state));
+            draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+            draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+            draw(encoder.set_depth_stencil_state(Some(&states[0])));
+            encoder.set_depth_bias(0.0, 0.0, 0.0);
+            draw(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));
+            draw(encoder.set_depth_stencil_state(Some(&states[0])));
+            encoder.set_depth_bias(0.0, 0.0, 0.0);
+            assert_eq!(
+                encoder.unrecorded(),
+                0,
+                "{name}: a state and bias set again unchanged record nothing"
+            );
+            draw(encoder.set_depth_stencil_state(Some(&states[1])));
+            encoder.set_depth_bias(1.0, 0.0, 0.0);
+            assert_ne!(
+                encoder.unrecorded(),
+                0,
+                "{name}: a state and bias set changed are recorded at the next draw"
+            );
+            draw(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            let Ok(mut counter) = InstructionCounter::new() else {
+                println!("{name}: no instruction counter here");
+                return;
+            };
             let mut per_draw = Vec::new();
             // The draw path with no depth attachment, a depth-tested draw whose state is set
             // once, one whose state and bias are set again unchanged every draw, one whose
@@ -1715,12 +1746,6 @@ pub(crate) mod on_device {
                  depth test whose state and bias change every draw, of which the two setters \
                  alone {}",
                 per_draw[0], per_draw[1], per_draw[2], per_draw[3], per_draw[4]
-            );
-            assert!(
-                per_draw[2] * 4 <= per_draw[1] * 5,
-                "{name}: a state and bias set again unchanged record nothing ({} against {})",
-                per_draw[2],
-                per_draw[1]
             );
         });
     }
