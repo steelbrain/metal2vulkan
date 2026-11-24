@@ -51,7 +51,7 @@
 /// order a shader reads them (red, green, blue, alpha): red `x`, green `y`, each cut to 10 bits;
 /// blue the bits of both above 10, then the low 6 bits of `x ^ y`; alpha `x + y`, cut to 10
 /// bits. Red and blue name `x`, green and blue name `y`, below 4,096.
-fn float_pattern(x: u32, y: u32) -> [u32; 4] {
+pub(crate) fn float_pattern(x: u32, y: u32) -> [u32; 4] {
     [
         x & 1023,
         y & 1023,
@@ -61,12 +61,12 @@ fn float_pattern(x: u32, y: u32) -> [u32; 4] {
 }
 
 /// The bits of a half holding `1 + k / 1024`, `k` below 1,024: exponent 0, mantissa `k`.
-fn half(k: u32) -> u16 {
+pub(crate) fn half(k: u32) -> u16 {
     0x3c00 | k as u16
 }
 
 /// The bits of a float holding `1 + k / 1024`, `k` below 1,024.
-fn single(k: u32) -> u32 {
+pub(crate) fn single(k: u32) -> u32 {
     0x3f80_0000 | (k << 13)
 }
 
@@ -104,7 +104,7 @@ fn the_float_pattern_names_its_texel_is_exact_in_a_half_and_its_complement_diffe
 }
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
-mod on_device {
+pub(crate) mod on_device {
     use super::{float_pattern, half, single};
     use crate::tests::command::on_device::{each_device, finished};
     use crate::tests::import::on_device::{free, host_memory, releasing, wait_until};
@@ -323,7 +323,7 @@ declare <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float>)
 
     /// The lines that make `%v`, the float pattern at `(%x, %y)` ([`float_pattern`]): each
     /// channel's `k` converted, times 1/1024 and plus 1, each step exact in a float.
-    const FLOAT: &str = r#"  %k0 = and i32 %x, 1023
+    pub(crate) const FLOAT: &str = r#"  %k0 = and i32 %x, 1023
   %k1 = and i32 %y, 1023
   %xh = lshr i32 %x, 10
   %yh = lshr i32 %y, 10
@@ -370,7 +370,7 @@ declare <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float>)
 "#;
 
     /// The shaders' library, or None where `llvm-as` is missing.
-    fn library() -> Option<Library> {
+    pub(crate) fn library() -> Option<Library> {
         let text = (SHADERS.replace("FLOAT\n", FLOAT)).replace("UNORM\n", UNORM);
         match llvm_assemble_text(&text) {
             Ok(bitcode) => Some(Library::from_air(&bitcode).expect("the library")),
