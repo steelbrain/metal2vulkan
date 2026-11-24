@@ -1393,6 +1393,13 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr a
             }
         }
 
+        /// What `loop_one` takes less what it reads: 1, and a quarter of a channel's step, so that
+        /// the complement it writes lands on its value whether the device rounds a write to the
+        /// nearest step or down.
+        fn minuend(self) -> [f32; 4] {
+            self.largest().map(|largest| 1.0 + 0.25 / largest as f32)
+        }
+
         /// The pattern's channels at `(x, y)`, or their complement, in shader order.
         fn channels(self, x: u32, y: u32, complemented: bool) -> [u32; 4] {
             let k = match self {
@@ -1536,12 +1543,12 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr a
 
     /// Draws `pattern` into `pass`'s one target, cut to [`drawn`] of `size`; then, where `looped`
     /// names one, after a memory barrier its loop over the whole target, sampling the texture it
-    /// names through sampler `sampler` with the loop's constants, as its attachment.
+    /// names through sampler `sampler` as its attachment, less the minuend it names.
     fn draw_one(
         name: &str,
         queue: &CommandQueue,
         (pass, pattern, size): (&RenderPassDescriptor, &RenderPipelineState, [u32; 2]),
-        looped: Option<(&RenderPipelineState, &Texture, &SamplerState)>,
+        looped: Option<(&RenderPipelineState, &Texture, &SamplerState, [f32; 4])>,
     ) -> Result<(), String> {
         let [x, y, width, height] = drawn(size).map(u64::from);
         let command_buffer = queue.command_buffer().map_err(said)?;
@@ -1554,8 +1561,8 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr a
             height,
         });
         (encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)).map_err(said)?;
-        if let Some((state, texture, sampler)) = looped {
-            let constants: Vec<u8> = [1.0; 4]
+        if let Some((state, texture, sampler, minuend)) = looped {
+            let constants: Vec<u8> = minuend
                 .into_iter()
                 .chain([1.0 / size[0] as f32, 1.0 / size[1] as f32, 0.0, 0.0])
                 .flat_map(f32::to_le_bytes)
@@ -1724,7 +1731,7 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr a
                 target.store_action = StoreAction::Store;
                 let counters = device.counters();
                 let before = counters.metrics();
-                let loops = Some((&looping, &view, &readers.sampler));
+                let loops = Some((&looping, &view, &readers.sampler, layer.minuend()));
                 let drew = draw_one(name, &queue, (&pass, &pattern, size), loops);
                 let moved = counters.metrics();
                 let what = format!(
