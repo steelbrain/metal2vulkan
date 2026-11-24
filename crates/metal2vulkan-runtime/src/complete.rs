@@ -73,8 +73,9 @@ enum Waiting {
 
 struct Retiree {
     value: u64,
-    /// Of a held group's submission ([`Sent::held`]).
-    held: bool,
+    /// Of a held group's submission ([`Sent::held`]): its last progress value, which its members
+    /// share where it goes member by member, each with a value of its own.
+    held: Option<u64>,
     /// In flight at a loss ([`Retiree::lost`]): nothing of it is read.
     lost: bool,
     item: Item,
@@ -307,8 +308,9 @@ impl Done {
     }
 
     /// From the submit thread: a submission passed to `vkQueueSubmit2` (`sent`). Its command
-    /// buffers retire in order once it completes, each ended one with its error, and its uploads
-    /// and the copy-ins it took with them.
+    /// buffers retire in order, each once its own progress value is reached (the submission's,
+    /// or where it goes member by member its part's), each ended one with its error; its uploads
+    /// and the copy-ins it took once the submission completes.
     pub(crate) fn submitted(
         &self,
         core: &Core,
@@ -319,6 +321,7 @@ impl Done {
         watch: Vec<Arc<EventInner>>,
     ) {
         let Sent { value, held } = sent;
+        let held = held.then_some(value);
         let mut state = self.lock();
         let flight_only = watch.is_empty();
         for upload in uploads {
@@ -339,19 +342,28 @@ impl Done {
         }
         for (cb, pending, error) in finished {
             let written = pending.stamps_written();
-            let Pending { gpu, handlers, .. } = pending;
-            state.flight.push_back(Retiree {
+            let Pending {
                 value,
-                held,
-                lost: false,
-                item: Item::Command {
-                    cb,
-                    gpu,
-                    handlers,
-                    error,
-                    written,
+                gpu,
+                handlers,
+                ..
+            } = pending;
+            let at = state.flight.partition_point(|other| other.value <= value);
+            state.flight.insert(
+                at,
+                Retiree {
+                    value,
+                    held,
+                    lost: false,
+                    item: Item::Command {
+                        cb,
+                        gpu,
+                        handlers,
+                        error,
+                        written,
+                    },
                 },
-            });
+            );
         }
         state.watched.extend(watch);
         self.wake(&mut state, &core.device, flight_only);
@@ -375,7 +387,7 @@ impl Done {
             } = pending;
             let retiree = Retiree {
                 value,
-                held: false,
+                held: None,
                 lost: false,
                 item: Item::Command {
                     cb,
@@ -727,8 +739,8 @@ pub(crate) fn run(core: Arc<Core>) {
                     // Retirees come in submission order: the first of a held group's command
                     // buffers with both timestamps starts the GPU's time behind it, from the
                     // latest end before it where the start is the later.
-                    if retiree.held && retiree.value != gapped {
-                        gapped = retiree.value;
+                    if let Some(group) = retiree.held.filter(|&group| group != gapped) {
+                        gapped = group;
                         if let Some(last) = last_end {
                             core.counters.held_start_gap(core.ticks.span(last, start));
                         }

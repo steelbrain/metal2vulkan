@@ -5,7 +5,8 @@
 //! command buffer retires; a block whose last handle drops freed once its last command buffer
 //! retires; a block's clones, one dropped giving nothing back, and a handle outliving its
 //! device; the thread gauge holding the device's four threads as it is made; a command buffer
-//! joining a held group only within the group's expected GPU run; and each command buffer
+//! joining a held group only within the group's expected GPU run; each member of a group sent
+//! member by member signalling its own progress value; and each command buffer
 //! counted once in every stage histogram. Without a device: a push whose bytes the command buffer
 //! holds is not recorded again; a queue's expected run rises to a longer run at once and halves
 //! toward a shorter one; the join and send decisions of the group bound; the stage histograms'
@@ -4815,6 +4816,158 @@ pub(crate) mod on_device {
                 in_groups.1
             );
             drop((kept, alone, a, b, arena, event, queue, device));
+        });
+    }
+
+    /// A group that goes member by member signals each member's own progress value: while its long
+    /// last member L runs, the progress semaphore already holds the value of the short member A
+    /// ahead of it, above the busy work's and below the group's last, so A's completion can be
+    /// seen at its own end and not at L's. Each repeat prints when A's handler began against L's
+    /// GPU end. L's copies are sized on the device to about 10 ms, and doubled for another attempt
+    /// where L ends less than 4 ms after A.
+    #[test]
+    fn every_device_signals_each_member_of_a_group_sent_apart() {
+        use std::sync::atomic::{AtomicBool, AtomicU64};
+        const REPEATS: usize = 3;
+        // L's GPU run aimed at: a span in `Metrics::gpu_end_to_handler`'s bucket 13.
+        const TARGET: u64 = 10_000_000;
+        const FLOOR: u64 = TARGET * 2 / 5;
+        const SIZING: u64 = 8;
+        each_device("command_group_apart_signals", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let small = arena.buffer();
+            let big = private(&device);
+            let half = big.length() / 2;
+            let long = |queue: &CommandQueue, copies: u64| {
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let (target, offset) = big.device_range();
+                command_buffer
+                    .record_for_test(&[&big], |device, command| {
+                        let region = [vk::BufferCopy::default()
+                            .src_offset(offset)
+                            .dst_offset(offset + half)
+                            .size(half)];
+                        let barrier = [vk::MemoryBarrier2::default()
+                            .src_stage_mask(vk::PipelineStageFlags2::COPY)
+                            .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                            .dst_stage_mask(vk::PipelineStageFlags2::COPY)
+                            .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)];
+                        let dependency = vk::DependencyInfo::default().memory_barriers(&barrier);
+                        for copy in 0..copies {
+                            if copy > 0 {
+                                // SAFETY: recording, outside any render pass.
+                                unsafe { device.cmd_pipeline_barrier2(command, &dependency) };
+                            }
+                            // SAFETY: recording; the two halves are the buffer's and apart.
+                            unsafe { device.cmd_copy_buffer(command, target, target, &region) };
+                        }
+                    })
+                    .expect("the copies");
+                command_buffer
+            };
+            // L's copies, from eight copies' run on this device, the second of two.
+            let queue = queue(&device);
+            let mut run = 1;
+            for _ in 0..2 {
+                let eight = long(&queue, SIZING);
+                eight.commit().expect("a commit");
+                finished(name, &eight);
+                run = (eight.gpu_end_time() - eight.gpu_start_time()).max(1);
+            }
+            let mut copies = (TARGET * SIZING).div_ceil(run).clamp(1, 4096);
+            println!("{name}: {SIZING} copies of {half} bytes ran {run} ns: L makes {copies}");
+            let core = device.core();
+            // SAFETY: the progress semaphore is the device's timeline semaphore.
+            let counter = || unsafe { core.device.get_semaphore_counter_value(core.done.progress) };
+            for repeat in 0..REPEATS {
+                for attempt in 1.. {
+                    let queue = self::queue(&device);
+                    let a = queue.command_buffer().expect("a command buffer");
+                    fill(&a, &small, 1);
+                    let handled = Arc::new(AtomicU64::new(0));
+                    let stamp = Arc::clone(&handled);
+                    (a.add_completed_handler(move |_| stamp.store(host_time(), Ordering::SeqCst)))
+                        .expect("a handler");
+                    let l = long(&queue, copies);
+                    let (mut held_at, mut sent, mut read) = (0, 0, Vec::new());
+                    behind_busy(name, &device, &queue, |busy, submitted, _| {
+                        for command_buffer in [&a, &l] {
+                            command_buffer.commit().expect("a commit");
+                        }
+                        for command_buffer in [&a, &l] {
+                            within(name, || {
+                                command_buffer.status() != CommandBufferStatus::Committed
+                            });
+                        }
+                        let count = || device.counters().metrics().submissions - submitted;
+                        assert_eq!(count(), AHEAD, "{name}: A and L held in one group");
+                        held_at = core.work.progress();
+                        // A long run seen before the group goes: it goes member by member.
+                        l.queue().ran(1_000_000_000);
+                        let stop = AtomicBool::new(false);
+                        read = thread::scope(|scope| {
+                            // Each value the progress semaphore takes, with the host time first read.
+                            let poller = scope.spawn(|| {
+                                let mut read: Vec<(u64, u64)> = Vec::new();
+                                while !stop.load(Ordering::SeqCst) {
+                                    let value = counter().expect("the counter");
+                                    if read.last().is_none_or(|&(_, last)| last != value) {
+                                        read.push((host_time(), value));
+                                    }
+                                }
+                                read
+                            });
+                            busy.open();
+                            finished(name, &a);
+                            finished(name, &l);
+                            stop.store(true, Ordering::SeqCst);
+                            poller.join().expect("the poller")
+                        });
+                        sent = count() - AHEAD;
+                    });
+                    let last = core.work.progress();
+                    let (a_end, l_end) = (a.gpu_end_time(), l.gpu_end_time());
+                    if l_end.saturating_sub(a_end) < FLOOR && attempt < 4 {
+                        println!(
+                            "{name} {repeat}: L ended {} ns after A, under {FLOOR}: again with {} \
+                             copies",
+                            l_end.saturating_sub(a_end),
+                            copies * 2
+                        );
+                        copies = (copies * 2).min(4096);
+                        drop((a, l, queue));
+                        continue;
+                    }
+                    let early = (read.iter())
+                        .find(|&&(at, value)| held_at < value && value < last && at < l_end);
+                    let handler = handled.load(Ordering::SeqCst);
+                    let after = |at: u64| at as i64 - a_end as i64;
+                    println!(
+                        "{name} {repeat}: from A's GPU end, L's GPU end at {} ns, A's handler at {} \
+                         ns; the busy work's last value {held_at}, the group's {last}; read, ns \
+                         from A's end and value: {:?}",
+                        after(l_end),
+                        after(handler),
+                        read.iter()
+                            .map(|&(at, value)| (after(at), value))
+                            .collect::<Vec<_>>()
+                    );
+                    assert_eq!(sent, 2, "{name}: A and L, a submission each");
+                    assert!(
+                        l_end.saturating_sub(a_end) >= FLOOR,
+                        "{name}: L ended {} ns after A, short of {FLOOR} ns",
+                        l_end.saturating_sub(a_end)
+                    );
+                    assert!(
+                        early.is_some(),
+                        "{name}: no value between the busy work's {held_at} and the group's \
+                         {last} before L's end"
+                    );
+                    drop((a, l, queue));
+                    break;
+                }
+            }
+            drop((small, big, arena, device));
         });
     }
 }

@@ -2171,8 +2171,9 @@ made, with no lock, and never rewritten for layouts.
   it), and a command buffer joins a group only while the group's expected runs, summed, stay within
   16 ms. One whose queue has no run yet, or that would take the sum past the bound, goes alone, the
   group held going first. The bound is tested again as the group goes, with the expected run as it
-  then stands: a group past it goes member by member, one `vkQueueSubmit2` each, only the last
-  signalling. At most four command buffers join a group while none of the queue's retires, since
+  then stands: a group past it goes member by member, one `vkQueueSubmit2` each, each signalling
+  its own progress value, so each completes at its own end, not the last's. At most four command
+  buffers join a group while none of the queue's retires, since
   they join on an expected run no completion has updated: in
   a replay stream on an RTX 3090, the most GPU time over four consecutive command buffers of a queue
   was 385.1 ms, within a quarter of amdgpu's default job timeout of 2,000 ms, and over sixteen
