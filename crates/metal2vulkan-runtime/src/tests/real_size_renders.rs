@@ -696,8 +696,8 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr a
 
     /// A 10-bit texel's channels, red, green, blue and alpha, from bits `at` of its
     /// little-endian word: ten bits each, two for alpha.
-    fn channels10(texel: &[u8], at: [u32; 4]) -> [i64; 4] {
-        let word = u32::from_le_bytes(texel.try_into().expect("a word"));
+    fn channels10(texel: &[u8; 4], at: [u32; 4]) -> [i64; 4] {
+        let word = u32::from_le_bytes(*texel);
         let mask = [1023, 1023, 1023, 3];
         std::array::from_fn(|c| i64::from((word >> at[c]) & mask[c]))
     }
@@ -715,7 +715,8 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr a
             return String::new();
         }
         let (mut wrong, mut near, mut first) = (0u64, 0u64, None);
-        for (i, (g, w)) in (got.chunks_exact(4).zip(want.chunks_exact(4))).enumerate() {
+        let (got, want) = (got.as_chunks::<4>().0, want.as_chunks::<4>().0);
+        for (i, (g, w)) in got.iter().zip(want).enumerate() {
             if g == w {
                 continue;
             }
@@ -732,15 +733,14 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr a
         let Some((i, (g, read), (w, wanted), off)) = first else {
             return String::new();
         };
-        let word = |texel: &[u8]| u32::from_le_bytes(texel.try_into().expect("a word"));
         format!(
             " (the first wrong texel, ({}, {}), reads word {:#010x}, channels {read:?}, not \
              {:#010x}, {wanted:?}: {off:?} steps; {near} of {wrong} wrong texels are one step off \
              at most in every channel)",
             i % width,
             i / width,
-            word(g),
-            word(w)
+            u32::from_le_bytes(*g),
+            u32::from_le_bytes(*w)
         )
     }
 
