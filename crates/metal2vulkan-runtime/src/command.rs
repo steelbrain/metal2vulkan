@@ -1798,12 +1798,14 @@ pub(crate) fn retire(
         gpu_times,
         round,
         spans,
+        expects,
     } = completion;
     // Where its retirement begins, the step before its handlers (`Round::steps`): one clock read.
     let retiring = times::host_time();
     // Its own GPU run, by its timestamps, sets what its queue expects of the next
-    // (`QueueInner::expected_run`, which bounds the groups `submit.rs` joins).
-    if let Some((start, end)) = gpu_times {
+    // (`QueueInner::expected_run`, which bounds the groups `submit.rs` joins), now or as its
+    // submission's last retires (`Completion::expects`).
+    if let (true, Some((start, end))) = (expects, gpu_times) {
         inner.queue.ran(end.saturating_sub(start));
     }
     // The GPU's writes to Shared memory are the host's before anything tells it the command buffer
