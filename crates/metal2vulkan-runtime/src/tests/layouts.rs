@@ -3,7 +3,7 @@
 //! module's own for each core command rt records that names an image layout (its barriers, its
 //! copies between images and buffers, its blits, its colour clears, dynamic rendering's
 //! attachments and its descriptor writes), each noting the layouts it names, then calling the
-//! driver's. Its barrier commands are counted too. The core commands that name a layout and that rt does not record get no entry, so
+//! driver's. Its copies between images keep each region's aspects too ([`image_copies`]). Its barrier commands are counted too. The core commands that name a layout and that rt does not record get no entry, so
 //! that a call of one panics (ash's stub for a command it did not load) and the test learns of it.
 //!
 //! Each command buffer's barriers, copies to a buffer and timestamp writes are kept in the order
@@ -120,6 +120,7 @@ struct Driver {
     cmd_copy_image_to_buffer: vk::PFN_vkCmdCopyImageToBuffer,
     cmd_blit_image: vk::PFN_vkCmdBlitImage,
     cmd_clear_color_image: vk::PFN_vkCmdClearColorImage,
+    cmd_clear_depth_stencil_image: vk::PFN_vkCmdClearDepthStencilImage,
     cmd_begin_rendering: vk::PFN_vkCmdBeginRendering,
     cmd_write_timestamp2: vk::PFN_vkCmdWriteTimestamp2,
 }
@@ -148,6 +149,19 @@ struct Record {
     order: HashMap<vk::CommandBuffer, Vec<Ordered>>,
     /// Each device's submitted command buffers' commands, in the order submitted.
     submitted: HashMap<vk::Device, Vec<Vec<Ordered>>>,
+    /// Every copy between images recorded, in the order recorded.
+    copies: Vec<ImageCopied>,
+}
+
+/// A `vkCmdCopyImage` of `device`: its images, the layouts it names them in and each region's
+/// source and destination aspects.
+#[derive(Clone)]
+pub(crate) struct ImageCopied {
+    pub(crate) device: vk::Device,
+    pub(crate) source: vk::Image,
+    pub(crate) destination: vk::Image,
+    pub(crate) layouts: [vk::ImageLayout; 2],
+    pub(crate) aspects: Vec<[vk::ImageAspectFlags; 2]>,
 }
 
 static RECORD: LazyLock<Mutex<Record>> = LazyLock::new(Mutex::default);
@@ -172,6 +186,14 @@ pub(crate) fn barriers(device: vk::Device) -> u64 {
 
 pub(crate) fn forget() {
     record().named.clear();
+}
+
+/// Every copy between images `device` recorded so far, in the order recorded.
+pub(crate) fn image_copies(device: vk::Device) -> Vec<ImageCopied> {
+    (record().copies.iter())
+        .filter(|copy| copy.device == device)
+        .cloned()
+        .collect()
 }
 
 /// `device`'s images' moves so far, in the order its queue ran its command buffers.
@@ -229,7 +251,7 @@ fn take(record: &mut Record, device: vk::Device, command_buffer: vk::CommandBuff
 }
 
 /// The core commands that name an image layout and that rt does not record: none loaded.
-const UNRECORDED: [&CStr; 12] = [
+const UNRECORDED: [&CStr; 11] = [
     c"vkCmdPipelineBarrier",
     c"vkCmdWaitEvents",
     c"vkCmdWaitEvents2",
@@ -239,7 +261,6 @@ const UNRECORDED: [&CStr; 12] = [
     c"vkCmdBlitImage2",
     c"vkCmdResolveImage",
     c"vkCmdResolveImage2",
-    c"vkCmdClearDepthStencilImage",
     c"vkCmdBeginRenderPass",
     c"vkCmdBeginRenderPass2",
 ];
@@ -308,6 +329,10 @@ pub(crate) unsafe fn recorded(instance: &ash::Instance, device: ash::Device) -> 
             cmd_clear_color_image: std::mem::transmute::<*const c_void, vk::PFN_vkCmdClearColorImage>(
                 load(c"vkCmdClearColorImage"),
             ),
+            cmd_clear_depth_stencil_image: std::mem::transmute::<
+                *const c_void,
+                vk::PFN_vkCmdClearDepthStencilImage,
+            >(load(c"vkCmdClearDepthStencilImage")),
             cmd_begin_rendering: std::mem::transmute::<*const c_void, vk::PFN_vkCmdBeginRendering>(
                 load(c"vkCmdBeginRendering"),
             ),
@@ -332,6 +357,7 @@ pub(crate) unsafe fn recorded(instance: &ash::Instance, device: ash::Device) -> 
             b"vkCmdCopyImageToBuffer" => cmd_copy_image_to_buffer as *const c_void,
             b"vkCmdBlitImage" => cmd_blit_image as *const c_void,
             b"vkCmdClearColorImage" => cmd_clear_color_image as *const c_void,
+            b"vkCmdClearDepthStencilImage" => cmd_clear_depth_stencil_image as *const c_void,
             b"vkCmdBeginRendering" => cmd_begin_rendering as *const c_void,
             b"vkCmdWriteTimestamp2" => cmd_write_timestamp2 as *const c_void,
             _ => return None,
@@ -589,6 +615,18 @@ unsafe extern "system" fn cmd_copy_image(
     regions: *const vk::ImageCopy,
 ) {
     let (device, driver) = driver_of(command_buffer);
+    // SAFETY: the caller's `count` regions.
+    let aspects = unsafe { slice(regions, count) }
+        .iter()
+        .map(|r| [r.src_subresource.aspect_mask, r.dst_subresource.aspect_mask])
+        .collect();
+    record().copies.push(ImageCopied {
+        device,
+        source,
+        destination,
+        layouts: [source_layout, destination_layout],
+        aspects,
+    });
     note(
         device,
         [
@@ -721,6 +759,26 @@ unsafe extern "system" fn cmd_clear_color_image(
     step(command_buffer, [(image, Step::Use("a colour clear"))]);
     // SAFETY: the caller's arguments, passed on.
     unsafe { (driver.cmd_clear_color_image)(command_buffer, image, layout, color, count, ranges) }
+}
+
+unsafe extern "system" fn cmd_clear_depth_stencil_image(
+    command_buffer: vk::CommandBuffer,
+    image: vk::Image,
+    layout: vk::ImageLayout,
+    value: *const vk::ClearDepthStencilValue,
+    count: u32,
+    ranges: *const vk::ImageSubresourceRange,
+) {
+    let (device, driver) = driver_of(command_buffer);
+    note(device, [("a depth-stencil clear", image, layout)]);
+    step(
+        command_buffer,
+        [(image, Step::Use("a depth-stencil clear"))],
+    );
+    // SAFETY: the caller's arguments, passed on.
+    unsafe {
+        (driver.cmd_clear_depth_stencil_image)(command_buffer, image, layout, value, count, ranges)
+    }
 }
 
 unsafe extern "system" fn cmd_begin_rendering(

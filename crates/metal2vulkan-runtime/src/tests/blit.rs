@@ -3,7 +3,8 @@
 //! - The rules: a texture copies into one of its own pixel format and sample count; two formats
 //!   or two sample counts are `Refusal::TextureCopyMismatch`, as Metal's validation refuses them;
 //!   what one copy command in the floor does not make, one pixel format held in two Vulkan formats
-//!   among it, is `Gap::TextureCopy`; within one level and slice of one image (one texture, or a
+//!   and a multisample texture among it, is `Gap::TextureCopy`; a format of depth and stencil
+//!   both copies both aspects in each region, overlapping regions of one texture too; within one level and slice of one image (one texture, or a
 //!   texture and its view), regions apart copy in the general layout, the same region copies
 //!   nothing, and overlapping regions, which Metal leaves undefined, copy in slabs across the
 //!   axis of fewest, each no thicker than the shift there, the far end of the shift first; so do
@@ -669,6 +670,90 @@ fn what_metal_refuses_is_refused_and_what_one_command_does_not_make_is_a_gap() {
         )),
         Refusal::TextureRegion { .. }
     ));
+}
+
+#[test]
+fn a_format_of_depth_and_stencil_both_copies_both_aspects_in_each_region() {
+    use vk::ImageAspectFlags as A;
+    // Each region's source and destination aspects, as numbers.
+    let both = [(A::DEPTH | A::STENCIL).as_raw(); 2];
+    let held = [
+        (
+            PixelFormat::Depth32FloatStencil8,
+            vk::Format::D32_SFLOAT_S8_UINT,
+        ),
+        (
+            PixelFormat::Depth24UnormStencil8,
+            vk::Format::D24_UNORM_S8_UINT,
+        ),
+    ];
+    for (pf, format) in held {
+        let d = descriptor(TextureType::Type2D, pf, [8, 8, 1]);
+        let (a, b) = (side(&d, format, None), side(&d, format, None));
+        let aspects = |copy: &ImageCopy| {
+            (copy.regions())
+                .map(|r| {
+                    let masks = [r.src_subresource.aspect_mask, r.dst_subresource.aspect_mask];
+                    masks.map(A::as_raw)
+                })
+                .collect::<Vec<_>>()
+        };
+        let copy = copied(texture_copy(
+            &a,
+            at(0, 0, [1, 2, 0]),
+            [3, 4, 1],
+            &b,
+            at(0, 0, [4, 0, 0]),
+            false,
+        ));
+        let raw = format.as_raw();
+        assert_eq!(aspects(&copy), [both], "{pf:?} in {raw}");
+        assert_eq!(slab_regions(&copy), [([1, 2], [4, 0], [3, 4])]);
+        // Within one texture: regions apart are one region, overlapping ones slabs that share no
+        // texel, the far end of the shift first, each of both aspects.
+        let within = |from, to| {
+            copied(texture_copy(
+                &a,
+                at(0, 0, from),
+                [4, 2, 1],
+                &a,
+                at(0, 0, to),
+                true,
+            ))
+        };
+        let apart = within([0, 0, 0], [4, 4, 0]);
+        assert!(apart.shared);
+        assert_eq!(slab_regions(&apart), [([0, 0], [4, 4], [4, 2])]);
+        let overlapping = within([0, 0, 0], [0, 1, 0]);
+        assert!(overlapping.shared);
+        assert_eq!(
+            slab_regions(&overlapping),
+            [([0, 1], [0, 2], [4, 1]), ([0, 0], [0, 1], [4, 1])]
+        );
+        assert_eq!(aspects(&overlapping), [both; 2]);
+    }
+    // A multisample texture of both stays unbuilt.
+    let mut msaa = descriptor(
+        TextureType::Type2DMultisample,
+        PixelFormat::Depth32FloatStencil8,
+        [8, 8, 1],
+    );
+    msaa.sample_count = 4;
+    let msaa = side(&msaa, vk::Format::D32_SFLOAT_S8_UINT, None);
+    assert_eq!(
+        gap(texture_copy(
+            &msaa,
+            at(0, 0, [0; 3]),
+            [8, 8, 1],
+            &msaa,
+            at(0, 0, [0; 3]),
+            false
+        )),
+        Gap::TextureCopy {
+            source: PixelFormat::Depth32FloatStencil8,
+            destination: PixelFormat::Depth32FloatStencil8,
+        }
+    );
 }
 
 /// A buffer at `base` in its block, `len` bytes long, and a region in it at `offset`, rows

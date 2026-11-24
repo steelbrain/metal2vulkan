@@ -163,7 +163,9 @@ impl BlitCommandEncoder {
     /// `destinationSlice:destinationLevel:destinationOrigin:`: `size` texels from `from` in
     /// `source` to `to` in `destination`, one `vkCmdCopyImage`. Both textures have one pixel
     /// format and one sample count, as Metal's validation requires; a compressed format's region
-    /// is whole blocks or reaches the level's edge on both sides. A 3D texture's region one image
+    /// is whole blocks or reaches the level's edge on both sides. A format of depth and stencil
+    /// both copies its pixels whole, as Metal's copy takes no plane option: each region of the
+    /// command names both aspects. A 3D texture's region one image
     /// deep copies into or out of
     /// a 2D slice. A size of 0 on an axis one of the textures lacks (depth on any but a 3D
     /// texture, height on a 1D one) copies one texel there, and a size of 0 on another axis copies
@@ -1797,11 +1799,23 @@ pub(crate) fn texture_copy(
     if formats.0 != formats.1 || s.sample_count != d.sample_count {
         return Err(mismatch());
     }
-    // No unit: a multisample texture, or a format of depth and stencil both. One pixel format in
-    // two Vulkan formats (chosen by the textures' usages) holds its texels in two layouts.
-    let Some(unit) = source.unit else {
-        return Err(gap());
+    // What one region copies: the unit's aspect, in its blocks. A format of depth and stencil
+    // both has no unit, no buffer copy taking its two aspects in one region; one sample of it
+    // copies both in one region of texels, as Metal copies its pixels whole
+    // (`VkImageSubresourceLayers::aspectMask` selects "the color, depth and/or stencil aspects to
+    // be copied"). No unit else: a multisample texture.
+    let both = vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL;
+    let (aspect, block) = match source.unit {
+        Some(unit) => (unit.aspect, unit.block),
+        None if s.sample_count == 1
+            && formats::aspects(s.pixel_format).map(vk::ImageAspectFlags::from) == Some(both) =>
+        {
+            (both, [1, 1])
+        }
+        None => return Err(gap()),
     };
+    // One pixel format in two Vulkan formats (chosen by the textures' usages) holds its texels in
+    // two layouts.
     if source.format != destination.format {
         return Err(gap());
     }
@@ -1828,22 +1842,8 @@ pub(crate) fn texture_copy(
         size,
     };
     let placed = (
-        place(
-            s,
-            source.base,
-            unit.block,
-            region(from),
-            from.level,
-            from.slice,
-        )?,
-        place(
-            d,
-            destination.base,
-            unit.block,
-            region(to),
-            to.level,
-            to.slice,
-        )?,
+        place(s, source.base, block, region(from), from.level, from.slice)?,
+        place(d, destination.base, block, region(to), to.level, to.slice)?,
     );
     let (Some(from), Some(to)) = placed else {
         return Ok(None);
@@ -1856,7 +1856,7 @@ pub(crate) fn texture_copy(
     // behavior"); an Apple M3 Max reads the source whole before it writes, which slabs give
     // (`Slabs`).
     let shared = same && from.level == to.level && from.layer == to.layer;
-    let slabs = match (source.rows, destination.rows) {
+    let slabs = match (source.rows, destination.rows, source.unit) {
         _ if shared => {
             let apart = (0..3).any(|axis| {
                 let (a, b, extent) = (from.origin[axis], to.origin[axis], from.size[axis]);
@@ -1867,7 +1867,8 @@ pub(crate) fn texture_copy(
             });
             cut((!apart).then_some(shift), [1; 3], from.size)
         }
-        (Some(a), Some(b)) if a.buffer == b.buffer => {
+        // A texture in place is of one color texel an element (`Buffer::new_texture`), a unit.
+        (Some(a), Some(b), Some(unit)) if a.buffer == b.buffer => {
             let texel = u64::from(unit.bytes);
             let rows = meeting(
                 first(a, &from, texel),
@@ -1891,7 +1892,7 @@ pub(crate) fn texture_copy(
     Ok(Some(ImageCopy {
         from,
         to,
-        aspect: unit.aspect,
+        aspect,
         shared,
         slabs,
     }))
