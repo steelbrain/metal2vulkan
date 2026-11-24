@@ -41,6 +41,7 @@ mod gpu_span;
 mod hazard;
 mod heap;
 mod heap_alias;
+mod held_loop_reads;
 mod image_reads;
 mod imageblock;
 mod import;
