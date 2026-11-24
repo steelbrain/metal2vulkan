@@ -78,6 +78,12 @@ checks that its log holds exactly that message. A test process opens one instanc
 the variables are set before it starts a thread: run the tests one at a time per process (nextest
 does; libtest's runner with `--test-threads=1`).
 
+On a machine that has no layer, `METAL2VULKAN_TEST_UNVALIDATED=1` (off unless the value is `1`)
+runs the device tests without it: the helper enables nothing, every device must then list no
+validation tool, no layer message is checked, the test of the layer's log skips, and each test
+process writes `M2V-UNVALIDATED unvalidated run: ...` once to its standard error, past libtest's
+capture of a passing test's output.
+
 The run points the loader at the layer's directory, never at a system copy:
 
 | OS | Variables |

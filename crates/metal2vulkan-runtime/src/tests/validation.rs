@@ -15,6 +15,12 @@
 //! is one file per process: a test process opens one instance at a time. nextest runs each test
 //! in a process of its own; libtest's runner runs them one at a time with `--test-threads=1`.
 //!
+//! On a machine that has no layer, [`UNVALIDATED`] (`METAL2VULKAN_TEST_UNVALIDATED=1`, off by
+//! default) runs the device tests without it: [`instance`] then enables nothing and checks that
+//! every device lists no validation tool, no layer writes a log for the guard to check, and the
+//! process says once on its standard error that the run is unvalidated. The test of the layer's
+//! log itself skips.
+//!
 //! Where the job names a driver library in `M2V_DIRECT_DRIVER` (the Mesa Mac driver on the M3),
 //! [`instance`] loads it itself and gives it to the loader alone, through
 //! [`Instance::with_drivers`], as a consumer that ships its driver does; elsewhere the loader finds
@@ -51,14 +57,36 @@ pub(crate) fn log_of(pid: u32) -> PathBuf {
     std::env::temp_dir().join(format!("m2v-validation-{pid}.log"))
 }
 
-/// Enables the layer for this process: its variables, set before the process's first Vulkan
-/// call. The loader ignores a layer it cannot find; [`instance`] checks that it found one.
-fn enable() {
-    static ENABLED: Once = Once::new();
-    ENABLED.call_once(|| {
+/// The setting that runs the device tests without the layer, on a machine that has none: on where
+/// its value is `1`, off otherwise.
+pub(crate) const UNVALIDATED: &str = "METAL2VULKAN_TEST_UNVALIDATED";
+
+/// Whether this process runs its device tests without the layer ([`UNVALIDATED`]).
+pub(crate) fn unvalidated() -> bool {
+    std::env::var_os(UNVALIDATED).is_some_and(|value| value == "1")
+}
+
+/// Readies this process's device tests, once, before its first Vulkan call: enables the layer
+/// through its variables, or, where `unvalidated`, says on the process's standard error that the
+/// run is unvalidated. The loader ignores a layer it cannot find; [`instance`] checks that it
+/// found one.
+fn ready(unvalidated: bool) {
+    static READY: Once = Once::new();
+    READY.call_once(|| {
         let log = log_of(std::process::id());
         // A log left by an earlier process of the same id is not this one's.
         let _ = std::fs::remove_file(&log);
+        if unvalidated {
+            // Written to the stream itself, past libtest's capture of a passing test's output, so
+            // the run's output says it whatever passes.
+            use std::io::Write;
+            let _ = writeln!(
+                std::io::stderr(),
+                "M2V-UNVALIDATED unvalidated run: {UNVALIDATED}=1, the device tests run without \
+                 {LAYER} and check no layer message"
+            );
+            return;
+        }
         std::env::set_var("VK_INSTANCE_LAYERS", LAYER);
         std::env::set_var("VK_KHRONOS_VALIDATION_REPORT_FLAGS", "error,warn");
         std::env::set_var(
@@ -70,11 +98,13 @@ fn enable() {
 }
 
 /// An instance under the layer, for a test, with the extensions `Instance::new` takes. Every
-/// device of the cfg's kind it lists names an active validation tool, or the test fails. The
-/// guard's check runs when it drops ([`Watch`]).
+/// device of the cfg's kind it lists names an active validation tool, or the test fails; under
+/// [`UNVALIDATED`], an instance without the layer, whose devices name none. The guard's check runs
+/// when it drops ([`Watch`]).
 pub(crate) fn instance(extensions: &[&CStr]) -> Validated {
     let test = test_name();
-    enable();
+    let unvalidated = unvalidated();
+    ready(unvalidated);
     assert!(
         !OPEN.swap(true, Ordering::AcqRel),
         "{test}: a second instance in the process: its layer's log is one file per process"
@@ -92,11 +122,19 @@ pub(crate) fn instance(extensions: &[&CStr]) -> Validated {
     let devices = devices_of_the_cfgs_kind(&validated);
     assert!(!devices.is_empty(), "{test}: no device of this cfg's kind");
     for (name, physical) in &devices {
-        assert!(
-            validation_tool(&validated, name, physical.raw()).is_some(),
-            "{test}: {name} lists no active validation tool: the loader found no {LAYER} \
-             (VK_LAYER_PATH names the layer's directory)"
-        );
+        let tool = validation_tool(&validated, name, physical.raw());
+        if unvalidated {
+            assert!(
+                tool.is_none(),
+                "{test}: {name} lists {tool:?} active, where {UNVALIDATED}=1 runs without a layer"
+            );
+        } else {
+            assert!(
+                tool.is_some(),
+                "{test}: {name} lists no active validation tool: the loader found no {LAYER} \
+                 (VK_LAYER_PATH names the layer's directory; {UNVALIDATED}=1 runs without it)"
+            );
+        }
     }
     drop(devices);
     validated
@@ -321,7 +359,7 @@ fn a_log_s_messages_are_counted_by_their_first_lines() {
 }
 
 mod on_device {
-    use super::{instance, validation_tool};
+    use super::{instance, unvalidated, validation_tool, UNVALIDATED};
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{Device, DeviceOptions};
     use ash::vk;
@@ -330,9 +368,14 @@ mod on_device {
     /// (`VUID-VkSamplerCreateInfo-maxLod-01973`), and one a driver takes as it takes any clamp:
     /// the layer reports it and passes it down, and the test's log holds exactly that message.
     /// Made once, on the first device of the cfg's kind, through the device's own function table.
-    /// Prints the validation tool each device lists.
+    /// Prints the validation tool each device lists. Skipped under [`UNVALIDATED`]: no layer
+    /// would log the call, and the call is invalid.
     #[test]
     fn every_device_logs_a_deliberately_invalid_call_once() {
+        if unvalidated() {
+            println!("SKIPPED: {UNVALIDATED}=1: no layer logs the invalid call");
+            return;
+        }
         let instance = instance(&[]).expecting(&["VUID-VkSamplerCreateInfo-maxLod-01973"]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
@@ -350,5 +393,52 @@ mod on_device {
             // SAFETY: the sampler is the device's, unused.
             unsafe { device.core().device.destroy_sampler(sampler, None) };
         }
+    }
+
+    /// What makes [`unvalidated_child`] run.
+    const UNVALIDATED_CHILD: &str = "M2V_UNVALIDATED_CHILD";
+
+    /// The child of `the_setting_runs_the_device_tests_without_the_layer_and_says_so`, in a
+    /// process of its own: an instance as a device test opens one, which checks the validation
+    /// tool each device lists. Without its variable, it does nothing.
+    #[test]
+    fn unvalidated_child() {
+        if std::env::var_os(UNVALIDATED_CHILD).is_some() {
+            drop(instance(&[]));
+        }
+    }
+
+    /// Under [`UNVALIDATED`], in a process whose loader is asked for no layer, a device test's
+    /// instance opens, every device lists no validation tool ([`instance`]'s check), and the
+    /// process's output says the run is unvalidated, past libtest's capture of the child's output.
+    #[test]
+    fn the_setting_runs_the_device_tests_without_the_layer_and_says_so() {
+        let executable = std::env::current_exe().expect("the test executable");
+        let output = std::process::Command::new(executable)
+            .args([
+                "--exact",
+                "tests::validation::on_device::unvalidated_child",
+                "--test-threads=1",
+            ])
+            .env(UNVALIDATED_CHILD, "1")
+            .env(UNVALIDATED, "1")
+            .env_remove("VK_INSTANCE_LAYERS")
+            .env_remove("VK_LOADER_LAYERS_ENABLE")
+            .output()
+            .expect("the child's output");
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            output.status.success(),
+            "the child: {:?}\n{text}",
+            output.status
+        );
+        assert!(
+            text.contains("M2V-UNVALIDATED unvalidated run"),
+            "the child's output does not say the run is unvalidated:\n{text}"
+        );
     }
 }

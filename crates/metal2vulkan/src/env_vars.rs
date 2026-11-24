@@ -3,6 +3,12 @@
 //! Every supported variable has a typed accessor and a registry entry used by the `metal2vulkan`
 //! binary's `--help`. Paths retain their raw `OsString`. Accessors read the environment when
 //! called. No variable here changes what the library compiles.
+//!
+//! The test suites read variables of their own, `METAL2VULKAN_TEST_*`, which change nothing the
+//! library or the binary does and are not in [`REGISTRY`]. One sets a mode a reader of a run's
+//! output must see: `METAL2VULKAN_TEST_UNVALIDATED=1` runs `metal2vulkan-runtime`'s device tests
+//! without the Khronos validation layer, on a machine that has none, and each test process says so
+//! on its standard error (docs/VALIDATION.md).
 
 use std::ffi::OsString;
 

@@ -65,7 +65,8 @@ None of these opens a device. Device tests compile only under `--cfg m2v_gpu` or
 limits only with `--cfg m2v_gpu_hazards` too ([docs/VALIDATION.md](docs/VALIDATION.md)).
 `metal2vulkan-runtime`'s device tests run under the Khronos validation layer and fail without it: point
 `VK_LAYER_PATH` at the layer's directory (`scripts/validation-layer`; docs/VALIDATION.md, "The
-validation layer under `metal2vulkan-runtime`'s device tests").
+validation layer under `metal2vulkan-runtime`'s device tests"). On a machine that has no layer,
+`METAL2VULKAN_TEST_UNVALIDATED=1` runs them without it, and the run says so.
 
 To build the command:
 
