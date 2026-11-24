@@ -524,10 +524,10 @@ declare <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float>)
             let kept = kept_features(texture.object().image_usage());
             let d = texture.descriptor();
             return format!(
-                "copied for {:?} (the linear tiling lacks {:?}; a linear image's subresource size \
+                "copied for {:?} (the linear tiling lacks features {:#x}; a linear image's subresource size \
                  {:?}, memory alignment {:?})",
                 copy.kind.cause,
-                optimal & kept & !linear,
+                (optimal & kept & !linear).as_raw(),
                 device.linear_subresource_size(d),
                 device.linear_memory_alignment(d)
             );
@@ -573,12 +573,39 @@ declare <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float>)
             Ok(checked) => {
                 let target = checked.colors[0].as_ref().expect("attachment 0");
                 format!(
-                    "rendered in {:?}, home {:?}, Metal's area {:?}, the load's and store's reach \
+                    "rendered in {}, home {}, Metal's area {:?}, the load's and store's reach \
                      {:?}",
-                    target.layout, target.attachment.home, checked.area, checked.reach
+                    named(target.layout),
+                    named(target.attachment.home),
+                    checked.area,
+                    checked.reach
                 )
             }
             Err(error) => format!("the pass refused: {}", said(error)),
+        }
+    }
+
+    /// The name of an image layout a pass or a home takes, else its number.
+    fn named(layout: vk::ImageLayout) -> String {
+        type L = vk::ImageLayout;
+        let names = [
+            (L::UNDEFINED, "UNDEFINED"),
+            (L::GENERAL, "GENERAL"),
+            (L::COLOR_ATTACHMENT_OPTIMAL, "COLOR_ATTACHMENT_OPTIMAL"),
+            (L::SHADER_READ_ONLY_OPTIMAL, "SHADER_READ_ONLY_OPTIMAL"),
+            (L::TRANSFER_SRC_OPTIMAL, "TRANSFER_SRC_OPTIMAL"),
+            (L::TRANSFER_DST_OPTIMAL, "TRANSFER_DST_OPTIMAL"),
+            (L::PREINITIALIZED, "PREINITIALIZED"),
+            (L::READ_ONLY_OPTIMAL, "READ_ONLY_OPTIMAL"),
+            (L::ATTACHMENT_OPTIMAL, "ATTACHMENT_OPTIMAL"),
+            (
+                L::ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT,
+                "ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT",
+            ),
+        ];
+        match names.iter().find(|(l, _)| *l == layout) {
+            Some((_, name)) => (*name).to_owned(),
+            None => format!("layout {}", layout.as_raw()),
         }
     }
 
