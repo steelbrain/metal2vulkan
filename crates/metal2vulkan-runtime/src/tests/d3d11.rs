@@ -1055,7 +1055,9 @@ mod on_device {
         }
 
         /// The image usage and format list the import gave a plane before its images took their
-        /// textures' bind flags (development at 3073230664), recomputed: sampled, rendered,
+        /// textures' bind flags, recomputed from `import_d3d11_surface` in
+        /// `crates/metal2vulkan-runtime/src/d3d11.rs` at commit 3073230664 (its `WANTED` usage
+        /// and its `plane_list`): sampled, rendered,
         /// copied from and into, and storage, with the descriptor's own usage, each where the
         /// view's format's optimal tiling holds it and the import query takes it with the image's
         /// and the view's formats; the feedback usage where the plane asks it and the query takes
