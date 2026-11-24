@@ -25,8 +25,24 @@ enum Scalar {
     },
 }
 
-/// `LocalSizeId`'s value in SPIR-V's `ExecutionMode`.
-const LOCAL_SIZE_ID: u32 = 38;
+/// The instructions the pass reads or rewrites; it copies every other as it is.
+const READ: [Op; 15] = [
+    Op::Decorate,
+    Op::EntryPoint,
+    Op::ExecutionMode,
+    Op::TypeBool,
+    Op::TypeInt,
+    Op::TypeFloat,
+    Op::ConstantTrue,
+    Op::ConstantFalse,
+    Op::Constant,
+    Op::ConstantComposite,
+    Op::SpecConstantTrue,
+    Op::SpecConstantFalse,
+    Op::SpecConstant,
+    Op::SpecConstantComposite,
+    Op::SpecConstantOperation,
+];
 
 /// `words`, a module this crate wrote, with every specialization constant made the fixed constant
 /// of its value: `values` gives `(SpecId, bits)` as a `VkSpecializationInfo` would (the low bits of
@@ -40,7 +56,7 @@ const LOCAL_SIZE_ID: u32 = 38;
 ///
 /// Err: [`Error::Internal`] where the words are not such a module: a malformed instruction, a
 /// specialization operation of an opcode the translator does not write, or a `WorkgroupSize`
-/// beside a local-size mode or beside other than one entry point.
+/// beside a `LocalSize` mode or beside other than one entry point.
 pub fn specialize(words: &[u32], values: &[(u32, u64)]) -> Result<Vec<u32>, Error> {
     let header = words
         .get(..5)
@@ -70,7 +86,8 @@ pub fn specialize(words: &[u32], values: &[(u32, u64)]) -> Result<Vec<u32>, Erro
             (inst.get(i).copied()).ok_or_else(|| malformed("an instruction short of its operands"))
         };
         let tail = |i: usize| inst.get(i..).unwrap_or_default();
-        match Op::from_u32(opcode) {
+        let op = READ.into_iter().find(|&op| op as u32 == opcode);
+        match op {
             Some(Op::Decorate) if operand(2)? == Decoration::SpecId as u32 => {
                 spec_ids.insert(operand(1)?, operand(3)?);
                 continue;
@@ -87,9 +104,8 @@ pub fn specialize(words: &[u32], values: &[(u32, u64)]) -> Result<Vec<u32>, Erro
                 entries.push((operand(2)?, out.len()));
                 continue;
             }
-            Some(Op::ExecutionMode | Op::ExecutionModeId) => {
-                let mode = operand(2)?;
-                local_size |= mode == ExecutionMode::LocalSize as u32 || mode == LOCAL_SIZE_ID;
+            Some(Op::ExecutionMode) => {
+                local_size |= operand(2)? == ExecutionMode::LocalSize as u32;
             }
             Some(Op::TypeBool) => {
                 types.insert(operand(1)?, Scalar::Bool);
@@ -120,7 +136,7 @@ pub fn specialize(words: &[u32], values: &[(u32, u64)]) -> Result<Vec<u32>, Erro
             Some(Op::SpecConstantTrue | Op::SpecConstantFalse | Op::SpecConstant) => {
                 let (ty, id) = (operand(1)?, operand(2)?);
                 let scalar = scalar(&types, ty)?;
-                let default = match Op::from_u32(opcode) {
+                let default = match op {
                     Some(Op::SpecConstant) => literal(tail(3)),
                     _ => u64::from(opcode == Op::SpecConstantTrue as u32),
                 };
