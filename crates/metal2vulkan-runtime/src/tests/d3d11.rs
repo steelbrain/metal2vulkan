@@ -29,13 +29,14 @@
 //! Under `m2v_gpu`, on every device, the real-size pictures' planes (`real_size.rs`): luma
 //! `R16_UNORM` at 3840x2160 with chroma `R32_UINT` at 1920x1080 (which rt views as `RG16Unorm`),
 //! and luma `R8_UNORM` with chroma `R16_UINT` (`RG8Unorm`), made as above, each imported with an
-//! index. Direct3D 11 draws each plane's complement and then its words; then rt samples every
-//! texel, reads it through `read()`, copies it out and samples it again, Direct3D 11 reads it
-//! back through a staging copy, and rt samples it a third time, each read printed with its count
-//! of wrong texels; then Direct3D 11 draws the complement, and rt's next sample reads it. Two
-//! images over the same textures in the form the import made before its images took their
-//! textures' bind flags (one with storage usage, one with the long format list) are each sampled
-//! after a fresh draw and printed, not asserted.
+//! index under a texture of the consumer's planes' usage (`ShaderRead | RenderTarget |
+//! PixelFormatView`). Direct3D 11 draws each plane's complement and then its words; then rt
+//! samples every texel, reads it through `read()`, copies it out and samples it again, Direct3D
+//! 11 reads it back through a staging copy, and rt samples it a third time, each read printed
+//! with its count of wrong texels; then Direct3D 11 draws the complement, and rt's next sample
+//! reads it. Two images over the same textures in the form the import made before its images
+//! took their textures' bind flags (one with storage usage, one with the long format list) are
+//! each sampled after a fresh draw and printed, not asserted.
 
 #[cfg(all(windows, any(m2v_gpu, m2v_cpu_icd)))]
 mod on_device {
@@ -996,7 +997,10 @@ mod on_device {
             copy_out, differs, library, read, sampled, Cells, Plane, Readers, PICTURES,
         };
         use crate::texture::TextureObject;
-        use crate::{D3d11Plane, Device, IndexClass, PixelFormat, TextureDescriptor, TextureType};
+        use crate::{
+            D3d11Plane, Device, IndexClass, PixelFormat, TextureDescriptor, TextureType,
+            TextureUsage,
+        };
         use ash::vk;
         use std::os::windows::io::AsHandle;
 
@@ -1140,15 +1144,26 @@ mod on_device {
                     handle: texture.handle.as_handle(),
                     image_format: plane.image,
                     bind_flags: BIND,
-                    descriptor: TextureDescriptor::new(
-                        TextureType::Type2D,
-                        plane.view,
-                        plane.size[0],
-                        plane.size[1],
-                    ),
+                    descriptor: descriptor(plane),
                     index: Some(index),
                 })
                 .collect()
+        }
+
+        /// The texture rt makes over `plane`, of the usage the consumer's planes take: read by
+        /// shaders, rendered to and viewed in another format (`ShaderRead | RenderTarget |
+        /// PixelFormatView`), so the old form's list is the long one.
+        fn descriptor(plane: &Plane) -> TextureDescriptor {
+            let mut d = TextureDescriptor::new(
+                TextureType::Type2D,
+                plane.view,
+                plane.size[0],
+                plane.size[1],
+            );
+            d.usage = TextureUsage::SHADER_READ
+                | TextureUsage::RENDER_TARGET
+                | TextureUsage::PIXEL_FORMAT_VIEW;
+            d
         }
 
         /// The formats of a list, raw.
