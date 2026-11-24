@@ -218,7 +218,12 @@ pub fn specialize(words: &[u32], values: &[(u32, u64)]) -> Result<Vec<u32>, Erro
     };
     match modes.as_slice() {
         // The composite takes precedence over the mode, which takes its values.
-        [mode] => out[mode + 3..mode + 6].copy_from_slice(&[*x, *y, *z]),
+        [mode] => {
+            let Some(sizes) = out.get_mut(mode + 3..mode + 6) else {
+                return Err(malformed("a LocalSize mode past the module's end"));
+            };
+            sizes.copy_from_slice(&[*x, *y, *z]);
+        }
         [] => {
             let mode = [
                 (6 << 16) | Op::ExecutionMode as u32,
