@@ -53,14 +53,17 @@ const READ: [Op; 17] = [
 /// `OpSpecConstantComposite` an `OpConstantComposite`; the `SpecId` decorations go. Where the
 /// module declares a `WorkgroupSize` composite, its `BuiltIn` decoration goes too and the entry
 /// point takes the composite's values as its `LocalSize` execution mode, as a compute shader of a
-/// literal workgroup size states it. The result is valid where `words` is, under the same
-/// requirements, and runs as `words` specialized by `values` does.
+/// literal workgroup size states it: a `LocalSize` mode the module has takes them, as the
+/// composite "takes precedence over any LocalSize or LocalSizeId execution mode" (the
+/// `WorkgroupSize` built-in's rule; a module `glslang` writes from `local_size_x_id` has both).
+/// The result is valid where `words` is, under the same requirements, and runs as `words`
+/// specialized by `values` does.
 ///
 /// Err: [`Error::Internal`], naming what it met, where the words are not such a module: a
 /// malformed instruction; an instruction the translator does not write, whose constants the pass
 /// would leave half specialized (an `OpExecutionModeId`, a `LocalSizeId` mode among them; an
-/// `OpDecorationGroup`; an `OpSpecConstantOp` of another opcode); or a `WorkgroupSize` beside a
-/// `LocalSize` mode or beside other than one entry point.
+/// `OpDecorationGroup`; an `OpSpecConstantOp` of another opcode); or a `WorkgroupSize` beside
+/// more than one `LocalSize` mode or beside other than one entry point.
 pub fn specialize(words: &[u32], values: &[(u32, u64)]) -> Result<Vec<u32>, Error> {
     let header = words
         .get(..5)
@@ -72,7 +75,8 @@ pub fn specialize(words: &[u32], values: &[(u32, u64)]) -> Result<Vec<u32>, Erro
     let mut spec_ids = BTreeMap::new();
     let mut workgroup = None;
     let mut entries = Vec::new();
-    let mut local_size = false;
+    // Where each `LocalSize` mode starts in `out`.
+    let mut modes = Vec::new();
     let mut types = BTreeMap::new();
     // Each scalar constant's value and type, by result id.
     let mut known: BTreeMap<u32, (u64, Scalar)> = BTreeMap::new();
@@ -115,8 +119,11 @@ pub fn specialize(words: &[u32], values: &[(u32, u64)]) -> Result<Vec<u32>, Erro
                 entries.push((operand(2)?, out.len()));
                 continue;
             }
-            Some(Op::ExecutionMode) => {
-                local_size |= operand(2)? == ExecutionMode::LocalSize as u32;
+            Some(Op::ExecutionMode) if operand(2)? == ExecutionMode::LocalSize as u32 => {
+                if count != 6 {
+                    return Err(malformed("a LocalSize mode of other than three sizes"));
+                }
+                modes.push(out.len());
             }
             Some(Op::TypeBool) => {
                 types.insert(operand(1)?, Scalar::Bool);
@@ -204,22 +211,27 @@ pub fn specialize(words: &[u32], values: &[(u32, u64)]) -> Result<Vec<u32>, Erro
             None => Ok(out),
         };
     };
-    let ([(entry, at)], false, [x, y, z]) = (entries.as_slice(), local_size, sizes.as_slice())
-    else {
+    let ([(entry, at)], [x, y, z]) = (entries.as_slice(), sizes.as_slice()) else {
         return Err(malformed(
-            "a WorkgroupSize of other than three parts, beside a local-size mode, or beside other \
-             than one entry point",
+            "a WorkgroupSize of other than three parts, or beside other than one entry point",
         ));
     };
-    let mode = [
-        (6 << 16) | Op::ExecutionMode as u32,
-        *entry,
-        ExecutionMode::LocalSize as u32,
-        *x,
-        *y,
-        *z,
-    ];
-    out.splice(*at..*at, mode);
+    match modes.as_slice() {
+        // The composite takes precedence over the mode, which takes its values.
+        [mode] => out[mode + 3..mode + 6].copy_from_slice(&[*x, *y, *z]),
+        [] => {
+            let mode = [
+                (6 << 16) | Op::ExecutionMode as u32,
+                *entry,
+                ExecutionMode::LocalSize as u32,
+                *x,
+                *y,
+                *z,
+            ];
+            out.splice(*at..*at, mode);
+        }
+        _ => return Err(malformed("a WorkgroupSize beside more than one LocalSize mode")),
+    }
     Ok(out)
 }
 

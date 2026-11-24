@@ -274,8 +274,14 @@ fn a_module_of_an_instruction_the_pass_does_not_specialize_is_refused() {
     }
     subtract[at + 3] = Op::ISub as u32;
     for (module, named) in [
-        (inserted(&words, Op::EntryPoint, &mode_id, 0), "OpExecutionModeId"),
-        (inserted(&words, Op::Decorate, &group, 1), "OpDecorationGroup"),
+        (
+            inserted(&words, Op::EntryPoint, &mode_id, 0),
+            "OpExecutionModeId",
+        ),
+        (
+            inserted(&words, Op::Decorate, &group, 1),
+            "OpDecorationGroup",
+        ),
         (subtract, "OpSpecConstantOp of opcode 130"),
     ] {
         match specialize(&module, &[]) {
@@ -284,5 +290,48 @@ fn a_module_of_an_instruction_the_pass_does_not_specialize_is_refused() {
             }
             other => panic!("{named}: {:?}", other.map(|w| w.len())),
         }
+    }
+}
+
+/// A module with a `LocalSize` mode beside its `WorkgroupSize` composite, as `glslang` writes one
+/// from `local_size_x_id`: the composite takes precedence, so the one mode takes the composite's
+/// values, and `spirv-val` accepts the words. A second mode is refused.
+#[test]
+fn a_local_size_mode_beside_the_workgroup_composite_takes_its_values() {
+    let (words, ids, opts) = linked(deep_kernel());
+    let entry = (insts(&words).into_iter())
+        .find(|(op, _)| *op == Op::EntryPoint as u32)
+        .map(|(_, operands)| operands[1])
+        .expect("entry point");
+    let mode = [
+        (6 << 16) | Op::ExecutionMode as u32,
+        entry,
+        ExecutionMode::LocalSize as u32,
+        1,
+        1,
+        1,
+    ];
+    let both = inserted(&words, Op::EntryPoint, &mode, 0);
+    assert_valid(&both, opts);
+    let value = |key: SpecKey| match key {
+        SpecKey::WorkgroupSize(Axis::X) => 8,
+        SpecKey::WorkgroupSize(Axis::Y) => 4,
+        SpecKey::WorkgroupSize(Axis::Z) => 2,
+        _ => 1,
+    };
+    let values: Vec<(u32, u64)> = ids.iter().map(|&(key, id)| (id, value(key))).collect();
+    let frozen = specialize(&both, &values).expect("specialize");
+    assert_valid(&frozen, opts);
+    let modes: Vec<Vec<u32>> = (insts(&frozen).into_iter())
+        .filter(|(op, _)| *op == Op::ExecutionMode as u32)
+        .map(|(_, operands)| operands)
+        .collect();
+    assert_eq!(modes, [vec![entry, ExecutionMode::LocalSize as u32, 8, 4, 2]]);
+    let twice = inserted(&both, Op::EntryPoint, &mode, 0);
+    match specialize(&twice, &values) {
+        Err(crate::error::Error::Internal(error)) => {
+            assert!(error.detail.contains("more than one LocalSize"), "{error}");
+        }
+        other => panic!("two modes: {:?}", other.map(|w| w.len())),
     }
 }
