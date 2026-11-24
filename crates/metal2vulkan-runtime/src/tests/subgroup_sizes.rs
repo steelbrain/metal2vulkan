@@ -29,16 +29,13 @@ fn a_render_stage_is_made_at_the_subgroup_size_the_translator_pins() {
         stage,
         flags: vk::PipelineShaderStageCreateFlags::empty(),
         subgroup_size,
-        constants: Vec::new(),
-        values: Vec::new(),
     };
     let stages = [
         module(vk::ShaderStageFlags::VERTEX, None),
         module(vk::ShaderStageFlags::FRAGMENT, Some(32)),
     ];
-    let specializations = [vk::SpecializationInfo::default(); 2];
     let mut subgroups = subgroup_sizes(&stages);
-    let infos = stage_infos(&stages, &specializations, &mut subgroups);
+    let infos = stage_infos(&stages, &mut subgroups);
     assert_eq!(infos.len(), 2);
     assert!(infos[0].p_next.is_null(), "the vertex stage pins no size");
     let chained = infos[1]

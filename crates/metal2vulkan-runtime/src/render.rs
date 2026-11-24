@@ -90,7 +90,7 @@ use metal2vulkan::cache::{Hash256, VariantKey};
 use metal2vulkan::device::EnabledCaps;
 use metal2vulkan::metal::{BindingAccess, PrimitiveTopologyClass};
 use metal2vulkan::pipeline::{
-    BufferKind, CombinedSampler, NumberedSampler, PrecisionNote, PushField, PushLoc,
+    specialize, BufferKind, CombinedSampler, NumberedSampler, PrecisionNote, PushField, PushLoc,
     RenderPipeline, RenderPipelineDescriptor, RenderPipelineKeys, RuntimeFact, SamplerRef,
     SlotClass, SlotInterface, SlotRef, SpecKey, Stage, StageEntries, StageSource, VertexStride,
 };
@@ -218,7 +218,7 @@ const DYNAMIC: [vk::DynamicState; 17] = [
 /// device's map of contents until the map forgets it.
 pub(crate) struct RenderCompiled {
     core: Arc<Core>,
-    /// Each stage's module, entry point, stage and specialization.
+    /// Each stage's module (its specialization constants fixed), entry point and stage.
     stages: Vec<Module>,
     /// The fixed-function state every `VkPipeline` of the content takes.
     fixed: Fixed,
@@ -391,9 +391,6 @@ pub(crate) struct Module {
     /// Metal's 32, on a device that lists the stage in `requiredSubgroupSizeStages`), which its
     /// SIMD-group operations are lowered for; `None` where it pins none.
     pub(crate) subgroup_size: Option<u32>,
-    /// Its specialization constants' entries and their 4-byte values, fixed with the content.
-    pub(crate) constants: Vec<vk::SpecializationMapEntry>,
-    pub(crate) values: Vec<u8>,
 }
 
 /// Each of `stages`' required subgroup size as Vulkan chains it
@@ -411,23 +408,21 @@ pub(crate) fn subgroup_sizes(
         .collect()
 }
 
-/// The create info of each of `stages`, with its specialization of `specializations`, and its
-/// required subgroup size of `subgroups` ([`subgroup_sizes`]) chained where it has one.
+/// The create info of each of `stages`, with its required subgroup size of `subgroups`
+/// ([`subgroup_sizes`]) chained where it has one. A stage's module holds its specialization
+/// constants fixed ([`specialize`]), so no create info takes a specialization.
 pub(crate) fn stage_infos<'a>(
     stages: &'a [Module],
-    specializations: &'a [vk::SpecializationInfo<'a>],
     subgroups: &'a mut [Option<vk::PipelineShaderStageRequiredSubgroupSizeCreateInfo<'static>>],
 ) -> Vec<vk::PipelineShaderStageCreateInfo<'a>> {
     (stages.iter())
-        .zip(specializations)
         .zip(subgroups.iter_mut())
-        .map(|((stage, specialization), subgroup)| {
+        .map(|(stage, subgroup)| {
             let info = vk::PipelineShaderStageCreateInfo::default()
                 .flags(stage.flags)
                 .stage(stage.stage)
                 .module(stage.module)
-                .name(&stage.entry)
-                .specialization_info(specialization);
+                .name(&stage.entry);
             match subgroup {
                 Some(subgroup) => info.push_next(subgroup),
                 None => info,
@@ -1185,10 +1180,9 @@ impl RenderCompiled {
         let mut stages = Vec::new();
         let mut notes: Vec<_> = constexpr_notes(translator.profile(), &constexprs).collect();
         for stage in &pipeline.stages {
-            let mut constants = Vec::new();
             let mut values = Vec::new();
             for constant in &stage.specialization.constants {
-                let value = match (constant.key, constant.size) {
+                let value: u32 = match (constant.key, constant.size) {
                     (SpecKey::SampleCount, 4) => samples,
                     (SpecKey::AmplificationCount, 4) => 1,
                     _ => {
@@ -1198,13 +1192,17 @@ impl RenderCompiled {
                         }));
                     }
                 };
-                constants.push(vk::SpecializationMapEntry {
-                    constant_id: constant.id,
-                    offset: values.len() as u32,
-                    size: 4,
-                });
-                values.extend(value.to_ne_bytes());
+                values.push((constant.id, u64::from(value)));
             }
+            // The stage's constants fixed at the content's values, so the driver is handed no
+            // specialization, as a kernel's module is.
+            let words = match specialize(&stage.spirv, &values) {
+                Ok(words) => words,
+                Err(error) => {
+                    release(core, &stages);
+                    return Err(Error::translation(error));
+                }
+            };
             // The translator's entry points hold no NUL; one that did would name no entry point.
             let Ok(entry) = CString::new(stage.entry_point.as_str()) else {
                 release(core, &stages);
@@ -1214,9 +1212,9 @@ impl RenderCompiled {
             };
             let flags = vk::PipelineShaderStageCreateFlags::from_raw(stage.stage_flags.as_raw());
             let kind = vk::ShaderStageFlags::from_raw(stage.stage.as_raw());
-            let info = vk::ShaderModuleCreateInfo::default().code(&stage.spirv);
-            // SAFETY: the words are the translator's SPIR-V, for the features device creation
-            // enabled.
+            let info = vk::ShaderModuleCreateInfo::default().code(&words);
+            // SAFETY: the words are the translator's SPIR-V with its constants fixed, valid where
+            // the translator's are, for the features device creation enabled.
             let module = match unsafe { core.device.create_shader_module(&info, None) } {
                 Ok(module) => module,
                 Err(result) => {
@@ -1233,8 +1231,6 @@ impl RenderCompiled {
                 stage: kind,
                 flags,
                 subgroup_size: stage.required_subgroup_size,
-                constants,
-                values,
             });
             notes.extend(stage.precision_notes.iter().copied());
         }
@@ -1397,17 +1393,10 @@ impl RenderCompiled {
     fn make(&self, topology: vk::PrimitiveTopology, raster: Raster) -> Result<vk::Pipeline, Error> {
         let core = &self.core;
         let fixed = &self.fixed;
-        let specializations: Vec<vk::SpecializationInfo<'_>> = (self.stages.iter())
-            .map(|stage| {
-                vk::SpecializationInfo::default()
-                    .map_entries(&stage.constants)
-                    .data(&stage.values)
-            })
-            .collect();
         // A stage at the subgroup size the translator pins, as a kernel's is: one it pins none for
         // runs at the device's own size.
         let mut subgroups = subgroup_sizes(&self.stages);
-        let stages = stage_infos(&self.stages, &specializations, &mut subgroups);
+        let stages = stage_infos(&self.stages, &mut subgroups);
         let mut divided = vk::PipelineVertexInputDivisorStateCreateInfoKHR::default()
             .vertex_binding_divisors(&fixed.divisors);
         let mut vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
@@ -1500,10 +1489,9 @@ impl RenderCompiled {
             info = info.tessellation_state(&tessellation);
         }
         made_through_cache(core, "vkCreateGraphicsPipelines", |cache| {
-            // SAFETY: the modules, the layout and the cache are the device's; each specialization
-            // gives each of its stage's constants a 4-byte value; the formats are the
-            // attachments' the translator maps for the device, for the features device creation
-            // enabled.
+            // SAFETY: the modules, the layout and the cache are the device's; each module holds
+            // its constants fixed; the formats are the attachments' the translator maps for the
+            // device, for the features device creation enabled.
             unsafe { core.device.create_graphics_pipelines(cache, &[info], None) }
         })
     }

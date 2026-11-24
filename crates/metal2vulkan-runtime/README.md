@@ -3564,7 +3564,10 @@ cache is answered compile-required on both.
   (`metal2vulkan::pipeline::specialize`) and destroyed once the create returns: the driver is
   handed no `VkSpecializationInfo`, every array length is a plain constant, and the workgroup's
   size is the entry point's `LocalSize` literals, so no driver can size a workgroup or an array
-  from a constant's default. Tests: `tests::deep_threadgroups`.
+  from a constant's default. A render pipeline's stages are made the same way once, with the
+  content: each stage's module holds its sample count and amplification count fixed, and no
+  graphics `VkPipeline` takes a specialization either. Tests: `tests::deep_threadgroups`, and
+  every draw test for the render stages.
 - A kernel's module keeps 64 `VkPipeline`s of the threadgroup sizes, threadgroup memory lengths,
   imageblock sizes and tiles its dispatches give: the first 8 it made, and past them the 56
   dispatched last. A make past them evicts the least recently dispatched ones no command buffer
