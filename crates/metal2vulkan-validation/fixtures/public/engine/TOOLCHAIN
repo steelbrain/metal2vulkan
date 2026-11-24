@@ -303,6 +303,7 @@ fixture psc_sample_coverage: metal: Apple metal version 32023.921 (metalfe-32023
 fixture pull_model_interpolants: metal: Apple metal version 32023.922 (metalfe-32023.922.4); macosx-sdk: 27.2 (26B118)
 fixture px_edges: metal: Apple metal version 32023.922 (metalfe-32023.922.4); macosx-sdk: 27.2 (26B118)
 fixture px_samplers: metal: Apple metal version 32023.921 (metalfe-32023.921.6); macosx-sdk: 27.0 (26A425)
+fixture quad_helpers: metal: Apple metal version 32023.922 (metalfe-32023.922.4); macosx-sdk: 27.2 (26B118)
 fixture rate_map_integer: metal: Apple metal version 32023.922 (metalfe-32023.922.4); macosx-sdk: 27.2 (26B118)
 fixture rch_guarded_effects: metal: Apple metal version 32023.921 (metalfe-32023.921.6); macosx-sdk: 27.0 (26A425)
 fixture rch_helper_branch: metal: Apple metal version 32023.921 (metalfe-32023.921.6); macosx-sdk: 27.0 (26A425)
