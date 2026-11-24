@@ -15,11 +15,12 @@
 //!
 //! On every device of the cfg's kind, a picture's planes as rt's own textures at their real size
 //! (`every_device_reads_real_size_planes_of_its_own_every_texel`): a 16-bit picture (luma
-//! `R16Unorm` at 3840x2160, chroma `RG16Unorm` at 1920x1080) and an 8-bit one (`R8Unorm`,
-//! `RG8Unorm`), each plane written by a blit of its complement and then of its pattern
-//! ([`plane_word`]), then read by sampling, by a kernel's `read()`, by a blit out, and by
-//! sampling again, every texel compared. The Direct3D 11 planes of the same pictures are
-//! `d3d11.rs`'s.
+//! `R16Unorm` at 3840x2160, chroma an `R32Uint` texture at 1920x1080 viewed `RG16Unorm`) and an
+//! 8-bit one (`R8Unorm`; `R16Uint` viewed `RG8Unorm`), each plane's texture made for its views in
+//! its image's format and written by a blit of its complement and then of its words, then read
+//! through a view in the format the picture views it as, at an index, by sampling, by a kernel's
+//! `read()`, by a blit out, and by sampling again, every texel compared. The Direct3D 11 planes
+//! of the same pictures are `d3d11.rs`'s.
 //!
 //! `llvm-as` assembles the kernels; without it the tests skip visibly.
 
@@ -80,7 +81,7 @@ pub(crate) mod on_device {
         Buffer, BufferLayout, CommandBuffer, CommandQueue, ComputePipelineDescriptor,
         ComputePipelineState, Device, DispatchType, Error, FunctionDescriptor, IndexClass, Library,
         MemoryClass, PixelFormat, SamplerDescriptor, SamplerState, StageSource, StorageMode,
-        Texture, TextureDescriptor, TexturePlace, TextureType,
+        Texture, TextureDescriptor, TexturePlace, TextureType, TextureUsage,
     };
     use metal2vulkan_devtools::{llvm_assemble_text, AssembleError};
 
@@ -651,9 +652,10 @@ declare <2 x float> @air.convert.f.v2f32.u.v2i32(<2 x i32>)
         }
     }
 
-    /// A picture's planes as rt's own textures, each written by a blit of its complement and then
-    /// of its pattern, then read by sampling, by `read()`, by a blit out and by sampling again,
-    /// every texel compared.
+    /// A picture's planes as rt's own textures in their images' formats, each written by a blit of
+    /// its complement and then of its words, then read through a view in the format the picture
+    /// views it as by sampling, by `read()`, by a blit out and by sampling again, every texel
+    /// compared.
     #[test]
     fn every_device_reads_real_size_planes_of_its_own_every_texel() {
         let Some(library) = library() else {
@@ -670,20 +672,33 @@ declare <2 x float> @air.convert.f.v2f32.u.v2i32(<2 x i32>)
             for (index, plane) in (first..).zip(PICTURES.iter().flatten()) {
                 let mut d = TextureDescriptor::new(
                     TextureType::Type2D,
-                    plane.view,
+                    plane.image,
                     plane.size[0],
                     plane.size[1],
                 );
                 d.storage_mode = StorageMode::Private;
-                let texture = (device.new_texture(&d, Some(index)))
+                if plane.view != plane.image {
+                    d.usage = TextureUsage::SHADER_READ | TextureUsage::PIXEL_FORMAT_VIEW;
+                }
+                let texture = (device.new_texture_for_views(&d))
                     .unwrap_or_else(|error| panic!("{name}: {}: {error}", plane.what));
-                let at = (&texture, plane.size);
+                let view = texture.new_texture_view(
+                    plane.view,
+                    TextureType::Type2D,
+                    0..1,
+                    0..1,
+                    Some(index),
+                );
+                let view = view
+                    .unwrap_or_else(|error| panic!("{name}: {}: the view: {error}", plane.what));
+                let at = (&view, plane.size);
                 let (texel, width) = (plane.texel as usize, plane.size[0]);
                 let image = plane.words(false, plane.texel);
                 let words = plane.words(false, 4);
                 let pack = plane.pack();
-                let wrote = copy_in(name, on, at, plane.texel, &plane.words(true, plane.texel))
-                    .and_then(|()| copy_in(name, on, at, plane.texel, &image));
+                let into = (&texture, plane.size);
+                let wrote = copy_in(name, on, into, plane.texel, &plane.words(true, plane.texel))
+                    .and_then(|()| copy_in(name, on, into, plane.texel, &image));
                 if let Err(why) = wrote {
                     cells.check(
                         &format!("{}: the blits in", plane.what),
