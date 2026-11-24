@@ -1597,6 +1597,7 @@ field	metal2vulkan-runtime::Metrics.texture_place_lock_waits	pub texture_place_l
 field	metal2vulkan-runtime::Metrics.translation_nanos	pub translation_nanos: u64
 field	metal2vulkan-runtime::Metrics.translations	pub translations: u64
 field	metal2vulkan-runtime::Metrics.translations_loaded	pub translations_loaded: u64
+field	metal2vulkan-runtime::Metrics.unslotted_attachment_reads	pub unslotted_attachment_reads: u64
 field	metal2vulkan-runtime::Metrics.untimed_command_buffers	pub untimed_command_buffers: u64
 field	metal2vulkan-runtime::Metrics.upload_waits	pub upload_waits: u64
 field	metal2vulkan-runtime::Metrics.visibility_interrupts_refused	pub visibility_interrupts_refused: u64

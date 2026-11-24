@@ -4395,6 +4395,11 @@ cache is answered compile-required on both.
 
 ### Known gaps of render encoders
 
+- A draw that reads its own pass's attachment through an argument buffer or a resource ID reads a
+  descriptor whose layout differs from the image's, which Vulkan leaves undefined
+  (`VUID-vkCmdDraw-imageLayout-00344`); such draws count in
+  `Metrics::unslotted_attachment_reads`, and the image is back in its home layout once the pass
+  ends.
 - An indexed indirect draw's index count is the GPU's to read, so a count that runs past the index
   buffer is not refused, as a direct draw's is (`Refusal::IndexBufferOffset`, which Metal's
   validation stops). The index buffer is bound from the indices to the end of the block's

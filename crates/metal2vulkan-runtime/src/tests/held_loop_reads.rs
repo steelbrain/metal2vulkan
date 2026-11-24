@@ -34,12 +34,14 @@ mod on_device {
 
     /// A pass over a shader-read render target, cleared, in which a draw reaches the target
     /// through an argument buffer: after a draw that read it through a slot, which moves it to the
-    /// feedback layout on a device with the loop, and in a pass of its own, which moves nothing.
-    /// Each pass's loop reads (`Metrics::attachment_loop_reads`) are printed and checked: one in
-    /// the first pass through the loop, none in the second. A control pass first draws the same
-    /// way through an entry naming a green texture, and the target's first pixel is green: the
-    /// entry's triangle covers it, so the fragment function runs and reads its texture. The
-    /// layer's messages, where it has any, fail the test as any other does.
+    /// feedback layout on a device with the loop, and in a pass of its own, where it is in the
+    /// attachment layout. Each counts one in `Metrics::unslotted_attachment_reads`, the known gap
+    /// in the runtime's README, and each pass's loop reads (`Metrics::attachment_loop_reads`) are
+    /// one in the first pass through the loop, none in the second. A control pass first draws the
+    /// same way through an entry naming a green texture, which is no attachment: it counts none,
+    /// and the target's first pixel is green, so the entry's triangle covers it and the fragment
+    /// function runs and reads its texture. The layer's messages, where it has any, fail the test
+    /// as any other does; it does not check a run-time-indexed element's layout.
     #[test]
     fn every_device_reads_its_attachment_through_an_argument_buffer_in_its_own_pass() {
         let (Some(examples), Some(engine)) =
@@ -151,12 +153,19 @@ mod on_device {
                 let after = counters.metrics();
                 let loop_reads = after.attachment_loop_reads - before.attachment_loop_reads;
                 let copies = after.attachment_read_copies - before.attachment_read_copies;
+                let unslotted =
+                    after.unslotted_attachment_reads - before.unslotted_attachment_reads;
                 println!(
-                    "held-loop-reads: {name} {case}: loop reads {loop_reads}, shadow copies \
-                     {copies}"
+                    "held-loop-reads: {name} {case}: unslotted attachment reads {unslotted}, loop \
+                     reads {loop_reads}, shadow copies {copies}"
                 );
                 let want = u64::from(through_slot && looped);
                 assert_eq!(loop_reads, want, "{name} {case}: the pass's loop reads");
+                let want = u64::from(case != "control");
+                assert_eq!(
+                    unslotted, want,
+                    "{name} {case}: the pass's unslotted attachment reads"
+                );
                 if case == "control" {
                     let first = read(&color, 4)[..4].to_vec();
                     assert_eq!(

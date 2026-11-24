@@ -593,6 +593,19 @@ struct Declarations {
     /// What the first texture a declaration writes lacks for it: no storage element, or one the
     /// device cannot write without a format ([`TextureObject::storage_gap`]).
     unstored_write: Option<StorageGap>,
+    /// The heaps' blocks `use_heap` declared, each once.
+    heaps: Vec<BlockId>,
+}
+
+impl Declarations {
+    /// Whether a read declaration covers `texture`: a `use_resource` read of it or of a view
+    /// that shares its image, or a `use_heap` of the heap its image lies in.
+    fn reads(&self, texture: &Texture) -> bool {
+        let hazard = texture.hazard_id();
+        (self.each.iter()).any(|&([id, _], access, ..)| id == hazard && access.reads())
+            || (TextureObject::object(texture).heap_block())
+                .is_some_and(|b| self.heaps.contains(&b))
+    }
 }
 
 /// `MTLRenderCommandEncoder`: one dynamic rendering into its pass's attachments, begun as the
@@ -1914,7 +1927,11 @@ impl RenderCommandEncoder {
     /// every function, and the pass's barriers order its draws after every earlier command and
     /// before every later one. Every later draw of the encoder reaches the resource with the
     /// declared access, as it reaches its bound ones, for the copies a texture over a buffer in an
-    /// image of its own takes, and for what the host reads once the command buffer completes.
+    /// image of its own takes, and for what the host reads once the command buffer completes. A
+    /// later draw that may read beyond its slots while a texture declared read is an attachment of
+    /// the pass out of its home layout counts in
+    /// [`Metrics::unslotted_attachment_reads`](crate::Metrics::unslotted_attachment_reads), as Vulkan leaves such a read
+    /// undefined.
     ///
     /// A usage that writes a texture, or a view of one, made for shader writes with no storage
     /// element (not a multisampled one, which Metal's shaders only read) makes every later draw of
@@ -2001,13 +2018,19 @@ impl RenderCommandEncoder {
     /// The command buffer keeps the block until it retires, as
     /// [`ComputeCommandEncoder::use_heap`](crate::ComputeCommandEncoder::use_heap) does. It
     /// records nothing and declares no access, and the stages are not read: the pass's barriers
-    /// order its draws after every earlier command and before every later one.
+    /// order its draws after every earlier command and before every later one. A later draw that
+    /// may read beyond its slots while an attachment of the pass in the heap is out of its home
+    /// layout counts in [`Metrics::unslotted_attachment_reads`](crate::Metrics::unslotted_attachment_reads), as Vulkan leaves
+    /// such a read undefined.
     ///
     /// Err: [`Error::NoSuchBlock`] for a number no handle names.
     pub fn use_heap(&mut self, heap: BlockId) -> Result<(), Error> {
         let building = self.building();
         let block = building.device.block(heap)?;
         building.keep_block(&block);
+        if !self.declared.heaps.contains(&heap) {
+            self.declared.heaps.push(heap);
+        }
         Ok(())
     }
 
@@ -3115,12 +3138,27 @@ impl RenderCommandEncoder {
             return Err(Error::Refused(Refusal::NoPipeline));
         };
         let draws = &state.inner.compiled.draws;
+        // A draw that may read beyond its slots, while a declared read covers an attachment the
+        // pass holds out of its home layout: such a read names the texture's own element, whose
+        // layout is the home one (`Metrics::unslotted_attachment_reads`).
+        let pass = &self.pass;
+        let resolves = (pass.resolving.then(|| pass.resolves()))
+            .into_iter()
+            .flatten();
+        let unslotted = (draws.reads_unbound || commands)
+            && (pass.targets())
+                .map(|t| (&t.texture, t.moves()))
+                .chain(resolves.map(|r| (&r.texture, r.moves())))
+                .any(|(texture, moved)| moved && self.declared.reads(texture));
         let tables = &self.tables;
         let factors = (self.factors.as_ref())
             .filter(|_| draws.patches)
             .map(|(buffer, _)| &**buffer);
         let building = (self.building.as_mut())
             .expect("an encoder holds its command buffer's recording until it ends");
+        if unslotted {
+            building.count(Metric::UnslottedAttachmentReads);
+        }
         let vertex_reads = (draws.bindings.iter())
             .filter_map(|&(_, index)| tables[VERTEX].buffer(index))
             .chain(index.into_iter().flatten().map(BufferObject::object))

@@ -297,6 +297,8 @@ pub(crate) enum Metric {
     TextureClearBarriers,
     /// [`Metrics::attachment_loop_reads`].
     AttachmentLoopReads,
+    /// [`Metrics::unslotted_attachment_reads`].
+    UnslottedAttachmentReads,
     /// [`Metrics::sparse_binds`].
     SparseBinds,
     /// [`Metrics::resolves`].
@@ -365,6 +367,7 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::ExportedBlocksAddressed,
     Metric::TextureClearBarriers,
     Metric::AttachmentLoopReads,
+    Metric::UnslottedAttachmentReads,
     Metric::SparseBinds,
     Metric::Resolves,
     Metric::PreprocessRegionsRemade,
@@ -762,6 +765,7 @@ struct Atomics {
     resolve_copies: AtomicU64,
     resolve_copy_bytes: AtomicU64,
     attachment_loop_reads: AtomicU64,
+    unslotted_attachment_reads: AtomicU64,
     allocations_freed: AtomicU64,
     submissions_during_frees: AtomicU64,
     submit_call_nanos_during_frees: AtomicU64,
@@ -960,6 +964,7 @@ impl Counters {
             Metric::ExportedBlocksAddressed => &a.exported_blocks_addressed,
             Metric::TextureClearBarriers => &a.texture_clear_barriers,
             Metric::AttachmentLoopReads => &a.attachment_loop_reads,
+            Metric::UnslottedAttachmentReads => &a.unslotted_attachment_reads,
             Metric::SparseBinds => &a.sparse_binds,
             Metric::Resolves => &a.resolves,
             Metric::PreprocessRegionsRemade => &a.preprocess_regions_remade,
@@ -1869,6 +1874,7 @@ impl Counters {
             resolve_copies: a.resolve_copies.load(Relaxed),
             resolve_copy_bytes: a.resolve_copy_bytes.load(Relaxed),
             attachment_loop_reads: a.attachment_loop_reads.load(Relaxed),
+            unslotted_attachment_reads: a.unslotted_attachment_reads.load(Relaxed),
             allocations_freed: a.allocations_freed.load(Relaxed),
             submissions_during_frees: a.submissions_during_frees.load(Relaxed),
             submit_call_nanos_during_frees: a.submit_call_nanos_during_frees.load(Relaxed),
@@ -2588,6 +2594,16 @@ pub struct Metrics {
     /// such a draw reads the image's shadow instead, its copies in
     /// [`attachment_read_copies`](Self::attachment_read_copies).
     pub attachment_loop_reads: u64,
+    /// Draws whose functions may read a texture beyond their slots (an argument buffer's
+    /// texture, a resource ID) while a [`use_resource`](crate::RenderCommandEncoder::use_resource)
+    /// read or a [`use_heap`](crate::RenderCommandEncoder::use_heap) of the encoder covers a
+    /// texture that is an attachment of the draw's pass held in a layout other than its home
+    /// one: the attachment layout of a shader-read render target, or the feedback layout once a
+    /// draw of the pass read it through a slot. Such a read reaches the texture's own element,
+    /// which names the home layout, so Vulkan leaves what it reads undefined. A count of draws
+    /// that may read so, not of reads made: a draw whose functions read other textures beyond
+    /// their slots counts too. The image is back in its home layout once the pass ends.
+    pub unslotted_attachment_reads: u64,
     /// Copies between a texture over a buffer the device's linear image does not hold in place
     /// and its image of its own ([`Buffer::new_texture`](crate::Buffer::new_texture)): the
     /// buffer's bytes into the image, in the upload that leads a submission or after a command

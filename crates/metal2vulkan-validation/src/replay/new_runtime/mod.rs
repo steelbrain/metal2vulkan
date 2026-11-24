@@ -3150,6 +3150,10 @@ impl Backend for NewRuntime {
                 metrics.attachment_read_copy_bytes,
             ),
             ("attachment_loop_reads", metrics.attachment_loop_reads),
+            (
+                "unslotted_attachment_reads",
+                metrics.unslotted_attachment_reads,
+            ),
             ("bytes_zeroed", metrics.bytes_zeroed),
             ("takes_from_free_ranges", metrics.takes_from_free_ranges),
             ("block_zero_fills", metrics.block_zero_fills),

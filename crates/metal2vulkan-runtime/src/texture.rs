@@ -3921,6 +3921,15 @@ impl TextureInner {
 }
 
 impl TextureInner {
+    /// The block of the heap its image lies in, where it is a heap's texture: the block a
+    /// `use_heap` declaration names.
+    pub(crate) fn heap_block(&self) -> Option<BlockId> {
+        match &self.image_of()?._under {
+            Some(Under::Heap { block, .. }) => Some(block.id),
+            _ => None,
+        }
+    }
+
     /// Its image's placement in its heap, where it was placed in one (`crate::alias`).
     pub(crate) fn placement(&self) -> Option<&Arc<Placement>> {
         self.place.as_ref()
