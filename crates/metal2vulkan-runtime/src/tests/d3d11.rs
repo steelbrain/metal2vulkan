@@ -768,11 +768,11 @@ mod on_device {
                             given.as_raw()
                         );
                         assert_eq!(
-                                                    (usage & !given).as_raw(),
-                        ,
-                                                    "{label}: a usage the bind flags do not give, of {:#x}",
-                                                    usage.as_raw()
-                                                );
+                            (usage & !given).as_raw(),
+                            0,
+                            "{label}: a usage the bind flags do not give, of {:#x}",
+                            usage.as_raw()
+                        );
                         assert!(
                             usage.contains(read),
                             "{label}: copied and sampled: {:#x}",
