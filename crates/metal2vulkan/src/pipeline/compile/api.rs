@@ -541,6 +541,7 @@ impl Device {
             }
             None => None,
         };
+        refuse_stencil_bits(fragment.as_ref())?;
         let compiled: Vec<&CompiledFunction> = object
             .iter()
             .chain(std::iter::once(&mesh))
@@ -832,6 +833,9 @@ impl Device {
         };
         if let Some(f) = &fragment {
             check_call_stack(f.artifact(), d.max_fragment_call_stack_depth)?;
+        }
+        if d.support_indirect_command_buffers {
+            refuse_stencil_bits(fragment.as_ref())?;
         }
         let compiled: Vec<&CompiledFunction> = std::iter::once(&vertex).chain(&fragment).collect();
         let artifacts: Vec<&FunctionArtifact> = compiled.iter().map(|c| c.artifact()).collect();
@@ -1411,6 +1415,16 @@ fn check_open_cl_mode(a: &FunctionArtifact, given: bool) -> Result<(), Error> {
         }));
     }
     Ok(())
+}
+
+/// A fragment stage whose stencil output is drawn by bits (`RuntimeFact::StencilBitDraws`) in a
+/// pipeline whose draws do not take the repeats, a mesh pipeline or one made for indirect command
+/// buffers, refuses the output as a device without stencil export does (`Feature::StencilExport`).
+fn refuse_stencil_bits(fragment: Option<&CompiledFunction>) -> Result<(), Error> {
+    match fragment.is_some_and(|f| (f.artifact().facts).contains(&RuntimeFact::StencilBitDraws)) {
+        true => Err(crate::lower::stage_io::stencil_export_refused()),
+        false => Ok(()),
+    }
 }
 
 /// The stage of artifact `a` has the call stack its pipeline's `maxCallStackDepth` for it,

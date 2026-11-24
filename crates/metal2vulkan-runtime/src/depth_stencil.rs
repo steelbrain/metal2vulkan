@@ -81,6 +81,132 @@ impl Tests {
     }
 }
 
+/// The bit a draw through a pipeline whose fragment function's stencil output is drawn by bits
+/// pushes to keep every fragment (`PushField::StencilBit` at 8 or more).
+pub(crate) const EVERY_FRAGMENT: u32 = 8;
+
+/// The most draws one draw takes: its first, one per stencil bit, and its depth's.
+const MOST_DRAWS: usize = 10;
+
+/// One of the draws a draw takes through a pipeline whose fragment function's stencil output is
+/// drawn by bits (`RuntimeFact::StencilBitDraws`, on a device without
+/// `VK_EXT_shader_stencil_export`): its tests, its stencil reference of each face, and the bit its
+/// function keeps (`PushField::StencilBit`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct BitDraw {
+    pub(crate) tests: Tests,
+    pub(crate) reference: [u32; 2],
+    pub(crate) bit: u32,
+}
+
+/// The draws one draw takes through such a pipeline, in order ([`BitDraws::of`]).
+pub(crate) struct BitDraws {
+    draws: [BitDraw; MOST_DRAWS],
+    len: usize,
+}
+
+impl BitDraws {
+    /// The draws of a draw under the encoder's `tests` and `reference`. Where the stencil test
+    /// replaces no bit (it is off, no operation of a face is `Replace`, or those faces' write
+    /// masks are 0), the draw alone, every fragment kept: its output is no reference anything
+    /// reads. Otherwise, with `w` the low 8 bits of the write masks of the faces with a `Replace`
+    /// operation:
+    ///
+    /// 1. every fragment kept, under the tests but the reference 0 on both faces, so `Replace`
+    ///    zeroes the bits of `w` and every other operation runs once;
+    /// 2. for each bit `k` of `w`, the fragments whose output holds bit `k`, under the reference
+    ///    255, each face's write mask cut to bit `k`, its `Replace` operations kept and its others
+    ///    `Keep`, and no depth write, so `Replace` sets bit `k` where the output holds it;
+    /// 3. where the tests write depth under a compare other than `Always` and `Never`, the first
+    ///    draw writes none, and a last one, every fragment kept, writes it under the tests with
+    ///    stencil write masks of 0: each draw before it tests against the depth from before the
+    ///    draw, as Metal's draw does.
+    ///
+    /// Each draw takes the same fragments through the same tests where the compare is `Always`
+    /// or `Never` on both faces, which the reference does not change, so a sample one fragment
+    /// reaches stores Metal's value.
+    ///
+    /// `None` for a stencil test that compares by another function on a face, whose answer the
+    /// reference decides.
+    pub(crate) fn of(tests: Tests, reference: [u32; 2]) -> Option<BitDraws> {
+        let own = BitDraw {
+            tests,
+            reference,
+            bit: EVERY_FRAGMENT,
+        };
+        let mut draws = BitDraws {
+            draws: [own; MOST_DRAWS],
+            len: 1,
+        };
+        if !tests.stencil {
+            return Some(draws);
+        }
+        let fixed = |compare| matches!(compare, vk::CompareOp::ALWAYS | vk::CompareOp::NEVER);
+        if !tests.faces.iter().all(|face| fixed(face.compare)) {
+            return None;
+        }
+        let replaces = |f: &&Face| [f.fail, f.pass, f.depth_fail].contains(&vk::StencilOp::REPLACE);
+        let bits = (tests.faces.iter().filter(replaces)).fold(0, |bits, f| bits | f.write_mask);
+        let bits = bits & 0xff;
+        if bits == 0 {
+            return Some(draws);
+        }
+        let last = tests.depth_write && !fixed(tests.depth_compare);
+        draws.draws[0] = BitDraw {
+            tests: Tests {
+                depth_write: tests.depth_write && !last,
+                ..tests
+            },
+            reference: [0; 2],
+            bit: EVERY_FRAGMENT,
+        };
+        let kept = |op| match op {
+            vk::StencilOp::REPLACE => op,
+            _ => vk::StencilOp::KEEP,
+        };
+        for k in (0..8).filter(|k| bits & (1 << k) != 0) {
+            let face = |f: Face| Face {
+                fail: kept(f.fail),
+                pass: kept(f.pass),
+                depth_fail: kept(f.depth_fail),
+                write_mask: f.write_mask & (1 << k),
+                ..f
+            };
+            draws.push(BitDraw {
+                tests: Tests {
+                    depth_write: false,
+                    faces: tests.faces.map(face),
+                    ..tests
+                },
+                reference: [255; 2],
+                bit: k,
+            });
+        }
+        if last {
+            let unwritten = |f: Face| Face { write_mask: 0, ..f };
+            draws.push(BitDraw {
+                tests: Tests {
+                    faces: tests.faces.map(unwritten),
+                    ..tests
+                },
+                reference,
+                bit: EVERY_FRAGMENT,
+            });
+        }
+        Some(draws)
+    }
+
+    fn push(&mut self, draw: BitDraw) {
+        self.draws[self.len] = draw;
+        self.len += 1;
+    }
+
+    /// The draws, in order: at least one.
+    pub(crate) fn draws(&self) -> &[BitDraw] {
+        &self.draws[..self.len]
+    }
+}
+
 impl Device {
     /// `newDepthStencilStateWithDescriptor:`.
     pub fn new_depth_stencil_state(

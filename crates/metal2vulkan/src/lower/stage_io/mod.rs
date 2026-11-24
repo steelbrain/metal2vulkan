@@ -178,7 +178,8 @@ use crate::spirv::ir::{
 };
 
 pub(crate) use plan::{
-    amplification_count_form, finish_merged, note_device_point_size, view_index_enabled,
+    amplification_count_form, finish_merged, note_device_point_size, stencil_export_refused,
+    view_index_enabled,
 };
 pub use plan::{DrawBase, Link, Place, Shape};
 
@@ -434,6 +435,10 @@ pub struct StageIoPlan {
     /// The render pipeline's private alpha test the fragment function runs at each return
     /// (`LoweringInputs::alpha_test`).
     pub alpha_test: Option<AlphaTest>,
+    /// A fragment function's `[[stencil]]` output on a device without stencil export
+    /// (`RuntimeFact::StencilBitDraws`): the field of a returned struct (0 for a returned value
+    /// itself) whose bit `PushField::StencilBit` each return tests ([`stencil_bit`]).
+    pub stencil_bits: Option<u32>,
     /// The second outputs a fragment function writes for attachments held with their channels
     /// rotated (`LoweringInputs::rotated_factors`), each beside its first output there.
     pub rotated_seconds: Vec<RotatedSecond>,
@@ -1793,6 +1798,7 @@ pub fn emit_return(
     let (outputs, returned, point) = (plan.outputs.clone(), plan.returned, plan.point_size_default);
     let seconds = plan.rotated_seconds.clone();
     let depth_clamp = plan.depth_clamp;
+    let stencil_bits = plan.stencil_bits;
     let primitive_id = plan.primitive_id;
     // The private masks: the pixel's ANDed into the function's own `[[sample_mask]]` output
     // where this return stores one, else stored as that output.
@@ -1802,6 +1808,12 @@ pub fn emit_return(
     if let (Some(v), Some(test)) = (v, plan.alpha_test) {
         let x = cx.operand(fb, v)?;
         alpha_test(cx, fb, test, x, returned)?;
+    }
+    // The stencil output's bit, before any output is stored: a fragment the draw does not keep
+    // is killed.
+    if let (Some(v), Some(field)) = (v, stencil_bits) {
+        let x = cx.operand(fb, v)?;
+        stencil_bit(cx, fb, field, x, returned)?;
     }
     match (v, returned) {
         (None, Returned::Void) => {}
@@ -2331,6 +2343,41 @@ fn alpha_test(
             fb.store(p, now, MemAccess::default())
         }
     }
+}
+
+/// A fragment function's `[[stencil]]` output on a device without stencil export
+/// (`RuntimeFact::StencilBitDraws`), field `field` of the returned `x`: where the draw's
+/// `PushField::StencilBit` `k` is below 8 and bit `k` of the output is 0, the fragment is killed,
+/// and at 8 or more every fragment is kept. The shift takes `k`'s low 3 bits, so no shift reaches
+/// the value's width.
+fn stencil_bit(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    field: u32,
+    x: SValue,
+    returned: Returned,
+) -> BResult<()> {
+    let Some(form) = cx.plan.families.fragment.return_kill() else {
+        return Err(
+            cx.fail("a stencil output drawn by bits in a function whose returns cannot kill")
+        );
+    };
+    let value = match returned {
+        Returned::Struct => fb.composite_extract(x, &[field])?,
+        Returned::Value | Returned::Void => x,
+    };
+    let bit = cx.push_field(fb, PushField::StencilBit)?;
+    let low = u32_constant(fb, 7)?;
+    let shift = fb.binary(BinOp::BitwiseAnd, bit, low)?;
+    let shifted = fb.binary(BinOp::ShiftRightLogical, value, shift)?;
+    let one = u32_constant(fb, 1)?;
+    let held = fb.binary(BinOp::BitwiseAnd, shifted, one)?;
+    let zero = u32_constant(fb, 0)?;
+    let lacks = fb.binary(BinOp::IEqual, held, zero)?;
+    let eight = u32_constant(fb, 8)?;
+    let tested = fb.binary(BinOp::ULessThan, bit, eight)?;
+    let kill = fb.binary(BinOp::LogicalAnd, tested, lacks)?;
+    crate::lower::fragment::kill_if(fb, kill, form)
 }
 
 /// How the entry's returns drop a positive NaN depth, or `None` in a function looping over its

@@ -3993,10 +3993,26 @@ cache is answered compile-required on both.
   states (jobs m3-max-63105 to 63108, and m3-max-63132 and m3-max-63156 for the two streams that
   ran past those jobs' 300-second limit).
 - On a device that does not list `VK_EXT_shader_stencil_export`, a fragment function's `[[stencil]]`
-  output is refused at creation, an `Error::Translation` naming `StencilExport`: the translator has
-  no other form. The runtime has refused it on such a device all along, worded otherwise before:
-  the translator's other form bound a storage image through a descriptor, which the identity
-  domains hold none of. Metal's feature set tables give stencil
+  output is drawn by bits (`RuntimeFact::StencilBitDraws`). Each draw through its state is drawn
+  once under the stencil reference 0, then once for each bit of the low 8 of the write masks of
+  the faces whose operations replace, each keeping only the fragments whose output holds that bit
+  (`PushField::StencilBit`), under the reference 255, that bit's write mask, `Replace` kept and
+  every other operation `Keep`, and no depth write; where the state writes the depth under a
+  compare other than `Always` and `Never`, the first draw writes none and a last draw writes it.
+  That is up to 10 draws where Metal draws once (`Metrics::stencil_bit_draws`), and a draw whose
+  state replaces no bit, or tests no stencil, is drawn once. Two fragments of one draw on one
+  sample store the OR of their outputs where Metal stores the later one, and under a depth test
+  that writes, each fragment's stencil operation is chosen against the depth from before the
+  draw: the static note `PrecisionNote::StencilOutputOverlap` on the fragment stage of every such
+  function. Refused at creation there, an `Error::Translation` naming `StencilExport`: a function
+  that also writes a colour or memory, one whose returns cannot discard, a mesh pipeline, and a
+  state made for indirect command buffers. Refused at a draw, `Gap::Draw` of
+  `DrawKind::StencilOutput`: a stencil compare other than `Always` and `Never` on a face, whose
+  answer the output decides, and, where the state replaces a bit, a draw inside a `Counting`
+  visibility result's segment, whose count every one of the draws would add to. A colour beside
+  the output can be built under this form when a guest needs it: every draw through the one
+  pipeline, the colour written the same each time, with blending off on every attachment, the
+  logic operation off and no colour input. Metal's feature set tables give stencil
   feedback to the Apple5 family and later and to Metal 3 and Metal 4. NVIDIA's 615 and 620 drivers
   on the RTX 2080, RTX 3090 and RTX 5080 Laptop list none (`vulkaninfo`, jobs m3-max-48727, 48729
   and 48731); RADV on the RX 7900 XTX, the 780Ms and the RX 550, ANV on the Iris Xe, lavapipe,
@@ -5113,7 +5129,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `VK_KHR_shader_subgroup_uniform_control_flow` | device, where listed | SIMD groups' reconvergence where maximal reconvergence is not offered |
 | `VK_KHR_shader_quad_control` | device, where listed | a fragment function's group operations over other lanes, through the quad-control feature below |
 | `VK_EXT_fragment_shader_interlock` | device, where listed | a fragment function's raster order groups on memory it reads and writes, through the pixel-interlock feature below |
-| `VK_EXT_shader_stencil_export` | device, where listed | a fragment function's `[[stencil]]` output as the fragment's stencil reference (`FragStencilRefEXT`); RADV, ANV, lavapipe, KosmicKrisp and the UHD 630's Windows driver list it, NVIDIA's 615 and 620 drivers do not |
+| `VK_EXT_shader_stencil_export` | device, where listed | a fragment function's `[[stencil]]` output as the fragment's stencil reference (`FragStencilRefEXT`); a device without it draws the output by bits (the known gaps); RADV, ANV, lavapipe, KosmicKrisp and the UHD 630's Windows driver list it, NVIDIA's 615 and 620 drivers do not |
 | `VK_KHR_portability_enumeration` | instance, where offered | listing portability devices, each checked against the floor as any other |
 | `VK_KHR_portability_subset` | device, where listed | Vulkan requires it enabled where a device lists it; the device is asked for the portability features below |
 | `VK_EXT_attachment_feedback_loop_layout` | device, with the feedback loop | a draw's read of an attachment of its own pass through a texture, in the feedback layout, with the colour flag every render pipeline takes (below) |

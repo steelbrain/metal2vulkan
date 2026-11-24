@@ -18,8 +18,12 @@
 //!   specialization constant (`RuntimeFact::SampleCount`, default 1), which the binder sets to the
 //!   pipeline's `rasterizationSamples`. A call with another operand is refused: no other operand's
 //!   meaning is established.
-//! - **Stencil output**: a `[[stencil]]` output needs `VK_EXT_shader_stencil_export`
-//!   (`stage_io`), refused naming it on a device without the extension.
+//! - **Stencil output**: a `[[stencil]]` output is `FragStencilRefEXT` where the device has
+//!   `VK_EXT_shader_stencil_export` (`stage_io`). Without it the function stores no reference and
+//!   keeps a fragment only where its output holds the bit the draw pushes, and the consumer draws
+//!   once per stencil bit (`RuntimeFact::StencilBitDraws`); a function whose returns cannot kill
+//!   (an interlocked body, a loop over the covered samples) refuses the output naming the
+//!   extension ([`finish`]).
 //! - **Coverage at sample rate** (`coverage`): a function that reads `[[sample_mask]]` and that
 //!   Metal runs once per covered sample runs, compiled for a multisampled pipeline, once per pixel,
 //!   and its body once per covered sample from a loop over the pixel's coverage ([`wrap_entry`]),
@@ -269,6 +273,10 @@ pub fn finish(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<(), Error> {
     fp.guarded = guarded;
     fp.terminate_invocation = terminate;
     fp.interlock = interlock;
+    // A stencil output drawn by bits kills at each return the fragments the draw does not keep.
+    if cx.families.stage_io.stencil_bits.is_some() && fp.return_kill().is_none() {
+        return Err(crate::lower::stage_io::stencil_export_refused());
+    }
     Ok(())
 }
 

@@ -938,7 +938,13 @@ Where Metal's rules differ from Vulkan's, the pipeline gives Metal's answer:
   its channels rotated. A raster order group on a color input, or on a color output of an
   attachment the function reads, orders that read alone and takes no interlock; a group on
   anything else needs the pixel interlock (`Unsupported{RasterOrderGroups}`). A `[[stencil]]` output uses
-  `VK_EXT_shader_stencil_export`; a device without it refuses the function
+  `VK_EXT_shader_stencil_export`; on a device without it the function discards a fragment whose
+  output lacks the bit its push field names (`PushField::StencilBit`, every fragment kept at 8 or
+  more) and states `RuntimeFact::StencilBitDraws`: the runtime draws each draw once and then once
+  for each bit its depth-stencil state can replace (`metal2vulkan-degrade-stencil-output-overlap`).
+  There a function that also writes a color or memory, one whose returns cannot discard (an
+  interlocked body, a loop over its covered samples), a mesh pipeline and a pipeline made for
+  indirect command buffers refuse the output
   (`Unsupported{StencilExport}` naming the extension).
 - `[[barycentric_coord]]` reads `BaryCoordKHR` or `BaryCoordNoPerspKHR`, whose vertex order is
   Vulkan's first-vertex order and Metal's for every primitive type. A `float3` read takes the
@@ -1931,6 +1937,26 @@ bound.
   of these copies. Cost: a depth uploaded outside `[0, 1]` is the device's, and so is every read,
   sample, comparison and copy of it; one within it is copied exactly, except a denormal or
   `-0.0`, which a device may store as `+0.0` (`metal2vulkan-degrade-depth-denormals`).
+- `metal2vulkan-degrade-stencil-output-overlap` (precision).
+  `PrecisionNote::StencilOutputOverlap`: A fragment function that writes `[[stencil]]`, on a
+  device without `VK_EXT_shader_stencil_export`, recorded on its fragment stage on every such
+  device (`RuntimeFact::StencilBitDraws`). `metal2vulkan-runtime` draws each draw of its pipeline
+  once with a stencil reference of 0, which clears the stencil bits its depth-stencil state can
+  replace and runs its other stencil operations, then once for each of those bits (the low 8 of
+  the write masks of the faces that replace), keeping the fragments whose output holds that bit,
+  under the reference 255, that bit's write mask, `Replace` kept and every other operation
+  `Keep`, and no depth write; and, where the draw writes depth under a depth compare other than
+  always or never, once more for the depth, with stencil write masks of 0, the first draw then
+  writing none. Cost: fragments of one draw that overlap leave the OR of their values. Where two
+  fragments of one draw reach one sample under `Replace`, the sample stores the bitwise OR of
+  their outputs' low 8 bits within the write mask, where Metal stores the later fragment's value.
+  Measured on an RTX 3090 (NVIDIA 620.70.06) under the validation layer: two triangles of one
+  draw whose outputs are `0x35` and then `0x4a` store `0x7f` on the 32 texels both reach, where
+  Metal stores the later fragment's `0x4a`, and `0x35` on the 32 that one reaches. Under a depth
+  test that writes, each fragment's stencil operation is also chosen against the depth from
+  before the draw, where Metal tests a later fragment against the depth an earlier one wrote. A
+  draw whose fragments reach each sample at most once (a quad of two triangles, one fullscreen
+  triangle) stores Metal's values.
 - `metal2vulkan-degrade-cube-gradient-footprint` (precision).
   `PrecisionNote::CubeGradientFootprint`: An explicit-gradient sample of a cube texture takes
   Metal's footprint in the form Vulkan's rule reads, in every stage on every device. Cost: the

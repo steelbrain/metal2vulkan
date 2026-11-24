@@ -87,6 +87,7 @@ fn draws(fields: Vec<(DrawPlace, usize, FieldValue)>) -> Draws {
         first_instance_zero: false,
         patches: false,
         selects_viewport: false,
+        stencil_bit: None,
     }
 }
 

@@ -58,6 +58,7 @@ use crate::pipeline::descriptor::{
     LinkedFunctions, LinkedList, MeshPipelineDescriptor, RenderPipelineDescriptor,
     VertexDescriptor,
 };
+use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::interface::{SlotInterface, StageInterface};
 use crate::pipeline::sym::{SlotClass, SlotRef, Stage, VaryingKey};
 use crate::reflection;
@@ -3091,6 +3092,11 @@ fn lower_bounded<K>(
     // The function's own side effects; the `ExecutionStatus` buffer's words (the resident-miss
     // count's) are the product's.
     let writes_memory = crate::spirv::requirements::writes_memory(&module)?;
+    // A stencil output drawn by bits runs the function once more for each bit, so its memory
+    // writes would be made again.
+    if writes_memory && plan.facts.contains(&RuntimeFact::StencilBitDraws) {
+        return Err(crate::lower::stage_io::stencil_export_refused());
+    }
     // A fragment function's texture slots read only at the fragment's own pixel.
     let own_pixel_textures = crate::spirv::requirements::own_pixel_textures(&module, m)?;
     // The levels of its bound view each texture slot's reads reach.

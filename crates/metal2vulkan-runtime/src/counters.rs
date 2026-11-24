@@ -317,10 +317,12 @@ pub(crate) enum Metric {
     OverlappingCopiesRefused,
     /// [`Metrics::heap_moves`].
     HeapMoves,
+    /// [`Metrics::stencil_bit_draws`].
+    StencilBitDraws,
 }
 
 /// The number of [`Metric`]s.
-const METRICS: usize = Metric::HeapMoves as usize + 1;
+const METRICS: usize = Metric::StencilBitDraws as usize + 1;
 
 /// Every [`Metric`], in its order: each at its own index.
 const METRIC_ORDER: [Metric; METRICS] = [
@@ -377,6 +379,7 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::AccumulatedVisibilityRefused,
     Metric::OverlappingCopiesRefused,
     Metric::HeapMoves,
+    Metric::StencilBitDraws,
 ];
 
 // Each metric of the order is at its own index.
@@ -804,6 +807,7 @@ struct Atomics {
     accumulated_visibility_refused: AtomicU64,
     overlapping_copies_refused: AtomicU64,
     heap_moves: AtomicU64,
+    stencil_bit_draws: AtomicU64,
     /// Each [`Part`]'s calls, at its index: their count, bytes, total and longest nanoseconds,
     /// and those over each of [`OVER_NANOS`].
     parts: [[AtomicU64; 7]; PARTS],
@@ -974,6 +978,7 @@ impl Counters {
             Metric::AccumulatedVisibilityRefused => &a.accumulated_visibility_refused,
             Metric::OverlappingCopiesRefused => &a.overlapping_copies_refused,
             Metric::HeapMoves => &a.heap_moves,
+            Metric::StencilBitDraws => &a.stencil_bit_draws,
         }
     }
 
@@ -1915,6 +1920,7 @@ impl Counters {
             accumulated_visibility_refused: a.accumulated_visibility_refused.load(Relaxed),
             overlapping_copies_refused: a.overlapping_copies_refused.load(Relaxed),
             heap_moves: a.heap_moves.load(Relaxed),
+            stencil_bit_draws: a.stencil_bit_draws.load(Relaxed),
             takes: part(Part::Take),
             take_lock_waits: part(Part::TakeLock),
             take_makes: part(Part::TakeMake),
@@ -2910,6 +2916,13 @@ pub struct Metrics {
     /// command buffer of its own that leads the command's part of its command buffer. No Metal
     /// counterpart.
     pub heap_moves: u64,
+    /// On a device without `VK_EXT_shader_stencil_export`, the draws recorded beyond a draw's
+    /// own for a pipeline state whose fragment function writes `[[stencil]]`: one for each
+    /// stencil bit the draw's depth-stencil state can replace, and one that writes the depth last
+    /// where the state writes it under a compare other than `Always` and `Never`
+    /// ([`DrawKind::StencilOutput`](crate::DrawKind::StencilOutput) says where they are refused).
+    /// 0 on a device with the extension. Metal draws once.
+    pub stencil_bit_draws: u64,
     /// Takes from the pool on the consumer's threads, each whole: a block of
     /// [`Device::take_block`](crate::Device::take_block) and a texture block, carved from a free
     /// range or from an allocation the take made ([`take_makes`](Self::take_makes)); their bytes

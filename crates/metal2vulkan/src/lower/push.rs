@@ -193,8 +193,8 @@ pub const fn shape(f: PushField) -> FieldShape {
         // A draw's depth bias: its constant, slope and clamp as `f32`s' bits, and a zero word.
         // Base vertex, base instance.
         PushField::BaseVertexInstance => FieldShape::UVec2,
-        // The draw's vertices per primitive.
-        PushField::VerticesPerPrimitive => FieldShape::U32,
+        // The draw's vertices per primitive, and the stencil bit a draw keeps.
+        PushField::VerticesPerPrimitive | PushField::StencilBit => FieldShape::U32,
         // A zero word, the index count, the first instance, and the base vertex.
         PushField::CaptureLayout => FieldShape::UVec4Array(1),
         // A constexpr sampler's index in its use's sampler array, and the sampled-texture array's

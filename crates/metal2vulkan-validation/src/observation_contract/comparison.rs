@@ -184,6 +184,8 @@ impl UlpTable {
 ///   otherwise.
 /// - `RestrictedDepthUpload`: unbounded: a depth uploaded outside `[0, 1]` is the device's, which
 ///   Vulkan does not define without `VK_EXT_depth_range_unrestricted`.
+/// - `StencilOutputOverlap`: unbounded: a sample two fragments of one draw reach stores the OR of
+///   their stencil outputs where Metal stores the later one, which moves any of its 8 bits.
 /// - `CubeGradientFootprint`: unbounded: Apple's approximate length and truncated level against the
 ///   device's can select another level or filter near a boundary, which changes whole texels, not
 ///   lanes.
@@ -334,7 +336,8 @@ pub fn allowance(note: PrecisionNote) -> Allowance {
         | N::DeviceFragmentRuns
         | N::DeviceOcclusionCount
         | N::VertexSimdgroupGrouping
-        | N::RestrictedDepthUpload => Allowance::Unbounded,
+        | N::RestrictedDepthUpload
+        | N::StencilOutputOverlap => Allowance::Unbounded,
     }
 }
 

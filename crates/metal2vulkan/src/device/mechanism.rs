@@ -166,6 +166,9 @@ pub fn mechanism(fact: &RuntimeFact, profile: &DeviceProfile) -> Mechanism {
         // The runtime pushes its arena's address, and sizes and orders the arena's slots by the
         // slot's bytes.
         RuntimeFact::PrivateArena { .. } => Mechanism::PushConstant,
+        // The consumer draws each draw once and then once per stencil bit its state can replace,
+        // pushing the bit for each.
+        RuntimeFact::StencilBitDraws => Mechanism::PushConstant,
         // Keyed by the slots bound to a texture buffer of more texels than one view holds.
         RuntimeFact::TexelBufferParts { .. } => Mechanism::Variant,
         // The runtime refuses a dispatch whose slot address is not a multiple of the alignment.

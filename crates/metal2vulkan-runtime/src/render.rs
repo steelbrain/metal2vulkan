@@ -72,6 +72,7 @@
 
 use crate::cache::{self, Lowerings};
 use crate::counters::{Counters, FirstUse, Gauge, Metric};
+use crate::depth_stencil::EVERY_FRAGMENT;
 use crate::device::{lock, Core};
 use crate::error::{Error, Gap, Refusal, RenderPipelineKind, StageGap};
 use crate::hazard::Access;
@@ -191,6 +192,11 @@ pub(crate) struct Draws {
     /// (`GraphicsState::writes_viewport_index`): its primitives reach every viewport the encoder
     /// set, where any other function's reach viewport 0.
     pub(crate) selects_viewport: bool,
+    /// The push offset of the bit the fragment function keeps its fragments for
+    /// (`PushField::StencilBit`), where its stencil output is drawn by bits
+    /// (`RuntimeFact::StencilBitDraws`): each draw takes the draws of
+    /// [`BitDraws`](crate::depth_stencil::BitDraws), each pushing its bit there.
+    pub(crate) stencil_bit: Option<u32>,
 }
 
 /// The state Vulkan 1.3 lets a draw set, which every render `VkPipeline` takes as dynamic.
@@ -669,6 +675,9 @@ fn draws(
             // past the encoder's viewport count, read from its push field
             // (`FieldValue::ViewportCount`).
             RuntimeFact::ViewportCount => {}
+            // A fragment function's stencil output on a device without stencil export, which each
+            // draw takes by bits through its push field (`Draws::stencil_bit`).
+            RuntimeFact::StencilBitDraws => {}
             // `RuntimeFact` is non-exhaustive: a fact this match does not name is one a draw does
             // not supply.
             _ => return Err(draw_input()),
@@ -713,6 +722,7 @@ fn draws(
     let mut levels = Vec::new();
     let mut push_len = 0;
     let mut blocks = [None; 2];
+    let mut stencil_bit = None;
     for placement in &translated.push {
         let at = table(placement.stage)?;
         if let Some((offset, size)) = placement.push_range {
@@ -852,6 +862,16 @@ fn draws(
                 PushField::IndirectRange if at == VERTEX => FieldValue::IndirectRange,
                 PushField::IndirectSequence if at == VERTEX => FieldValue::IndirectSequence,
                 PushField::IndirectBase if at == VERTEX => FieldValue::IndirectBase,
+                // The bit a fragment function whose stencil output is drawn by bits keeps its
+                // fragments for: every fragment, but in a draw's bit draws, which write their own
+                // bit over it. One in the parameter block is not supplied.
+                PushField::StencilBit if at == FRAGMENT => match offset {
+                    DrawPlace::Push(pushed) => {
+                        stencil_bit = Some(pushed);
+                        FieldValue::Word(EVERY_FRAGMENT)
+                    }
+                    DrawPlace::Block(..) => return Err(draw_input()),
+                },
                 _ => return Err(draw_input()),
             };
             fields.push((offset, at, value));
@@ -902,6 +922,7 @@ fn draws(
         first_instance_zero: divided && !nonzero_first_instance,
         patches: pipeline.graphics.tessellation.is_some(),
         selects_viewport: pipeline.graphics.writes_viewport_index,
+        stencil_bit,
     };
     Ok((draws, (numbered, constexprs)))
 }

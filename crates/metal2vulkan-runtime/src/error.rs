@@ -1829,6 +1829,15 @@ pub enum DrawKind {
     /// word is not built. Counted in
     /// [`Metrics::accumulated_visibility_refused`](crate::Metrics::accumulated_visibility_refused).
     AccumulatedVisibilityResults,
+    /// On a device without `VK_EXT_shader_stencil_export`, a draw through a pipeline state whose
+    /// fragment function writes `[[stencil]]`, which the runtime draws once and then once per
+    /// stencil bit the depth-stencil state can replace (`Metrics::stencil_bit_draws`), where
+    /// those draws do not give Metal's answer: under a stencil test whose compare function is
+    /// other than `Always` and `Never` on a face, as the fragment's output is that test's
+    /// reference; and, where the state replaces a bit, inside a `Counting` visibility result's
+    /// segment, whose count each draw would add to. Metal tests and writes the stencil against the
+    /// output in one draw.
+    StencilOutput,
 }
 
 /// What a render pass asks that the runtime does not build ([`Gap::RenderPass`]).

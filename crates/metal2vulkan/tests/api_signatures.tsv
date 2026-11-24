@@ -1567,6 +1567,7 @@ field	metal2vulkan-runtime::Metrics.staging_buffer_allocations	pub staging_buffe
 field	metal2vulkan-runtime::Metrics.staging_region_allocations	pub staging_region_allocations: SiteAllocations
 field	metal2vulkan-runtime::Metrics.staging_sleeps	pub staging_sleeps: u64
 field	metal2vulkan-runtime::Metrics.stamps_not_available	pub stamps_not_available: u64
+field	metal2vulkan-runtime::Metrics.stencil_bit_draws	pub stencil_bit_draws: u64
 field	metal2vulkan-runtime::Metrics.submissions	pub submissions: u64
 field	metal2vulkan-runtime::Metrics.submissions_during_frees	pub submissions_during_frees: u64
 field	metal2vulkan-runtime::Metrics.submit_call_max_nanos	pub submit_call_max_nanos: u64
@@ -8376,6 +8377,7 @@ variant	metal2vulkan-runtime::DrawKind::FetchedAttachment	FetchedAttachment
 variant	metal2vulkan-runtime::DrawKind::FillMode	FillMode
 variant	metal2vulkan-runtime::DrawKind::LineWidth	LineWidth
 variant	metal2vulkan-runtime::DrawKind::PatchIndexBuffer	PatchIndexBuffer
+variant	metal2vulkan-runtime::DrawKind::StencilOutput	StencilOutput
 variant	metal2vulkan-runtime::DrawKind::Viewport	Viewport
 variant	metal2vulkan-runtime::DrawKind::Viewports	Viewports
 variant	metal2vulkan-runtime::DrawKind::VisibilityResultInterrupt	VisibilityResultInterrupt
@@ -8575,6 +8577,7 @@ variant	metal2vulkan-runtime::PrecisionNote::SimdgroupAccessOrder	SimdgroupAcces
 variant	metal2vulkan-runtime::PrecisionNote::SnormMinimumKept	SnormMinimumKept
 variant	metal2vulkan-runtime::PrecisionNote::SparseResidency	SparseResidency
 variant	metal2vulkan-runtime::PrecisionNote::SrgbTexelDecode	SrgbTexelDecode
+variant	metal2vulkan-runtime::PrecisionNote::StencilOutputOverlap	StencilOutputOverlap
 variant	metal2vulkan-runtime::PrecisionNote::SwizzledOpaqueBlackBorder	SwizzledOpaqueBlackBorder
 variant	metal2vulkan-runtime::PrecisionNote::TessellationFactorEdgeCases	TessellationFactorEdgeCases
 variant	metal2vulkan-runtime::PrecisionNote::TessellationFactorInstance	TessellationFactorInstance
@@ -9893,6 +9896,7 @@ variant	metal2vulkan::pipeline::PrecisionNote::SimdgroupAccessOrder	SimdgroupAcc
 variant	metal2vulkan::pipeline::PrecisionNote::SnormMinimumKept	SnormMinimumKept
 variant	metal2vulkan::pipeline::PrecisionNote::SparseResidency	SparseResidency
 variant	metal2vulkan::pipeline::PrecisionNote::SrgbTexelDecode	SrgbTexelDecode
+variant	metal2vulkan::pipeline::PrecisionNote::StencilOutputOverlap	StencilOutputOverlap
 variant	metal2vulkan::pipeline::PrecisionNote::SwizzledOpaqueBlackBorder	SwizzledOpaqueBlackBorder
 variant	metal2vulkan::pipeline::PrecisionNote::TessellationFactorEdgeCases	TessellationFactorEdgeCases
 variant	metal2vulkan::pipeline::PrecisionNote::TessellationFactorInstance	TessellationFactorInstance
@@ -9939,6 +9943,7 @@ variant	metal2vulkan::pipeline::PushField::SlotBounds	SlotBounds(SlotRef)
 variant	metal2vulkan::pipeline::PushField::SlotGuestBase	SlotGuestBase(SlotRef)
 variant	metal2vulkan::pipeline::PushField::StageInRegion	StageInRegion
 variant	metal2vulkan::pipeline::PushField::StageInStride	StageInStride(u32)
+variant	metal2vulkan::pipeline::PushField::StencilBit	StencilBit
 variant	metal2vulkan::pipeline::PushField::TailWord	TailWord
 variant	metal2vulkan::pipeline::PushField::TessellationFactorAddress	TessellationFactorAddress
 variant	metal2vulkan::pipeline::PushField::TessellationFactorInstanceStride	TessellationFactorInstanceStride
@@ -10036,6 +10041,7 @@ variant	metal2vulkan::pipeline::RuntimeFact::SparseTextureWrites	SparseTextureWr
 variant	metal2vulkan::pipeline::RuntimeFact::SrgbTexture	SrgbTexture { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::StageInRegion	StageInRegion
 variant	metal2vulkan::pipeline::RuntimeFact::StageInStride	StageInStride { layout: u32 }
+variant	metal2vulkan::pipeline::RuntimeFact::StencilBitDraws	StencilBitDraws
 variant	metal2vulkan::pipeline::RuntimeFact::StorageTextureFormat	StorageTextureFormat { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::StorageTextureIntegerChannels	StorageTextureIntegerChannels { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::StorageTextureLevelViews	StorageTextureLevelViews { slot: SlotRef }

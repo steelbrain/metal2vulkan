@@ -2113,6 +2113,27 @@ pub enum PrecisionNote {
     /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
     /// explains.
     RestrictedDepthUpload,
+    /// A fragment function writes `[[stencil]]` on a device without
+    /// `VK_EXT_shader_stencil_export` (`RuntimeFact::StencilBitDraws`): each draw of its pipeline
+    /// is drawn once with a stencil reference of 0, which clears the stencil bits its
+    /// depth-stencil state can replace and runs its other stencil operations, then once for each
+    /// of those bits, keeping the fragments whose output has that bit and replacing it with 1,
+    /// and, where the draw writes depth under a depth compare other than always or never, once
+    /// more for the depth. Fragments of one draw that overlap leave the OR of their values: a
+    /// sample two fragments of one draw reach under `Replace` stores the bitwise OR of their
+    /// outputs' low 8 bits within the write mask, where Metal stores the later fragment's value.
+    /// On an RTX 3090 (NVIDIA 620.70.06), two triangles of one draw whose outputs are `0x35` and
+    /// then `0x4a` store `0x7f` where both reach, where Metal stores the later fragment's `0x4a`.
+    /// Under a depth test that writes, each fragment's stencil operation is also chosen against
+    /// the depth from before the draw, where Metal tests a later fragment against the depth an
+    /// earlier one wrote. A draw whose fragments cover each sample at most once (a quad of two
+    /// triangles, one fullscreen triangle) stores Metal's values.
+    /// Static per function: recorded on the fragment stage of every such function on every device
+    /// without the extension.
+    ///
+    /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
+    /// explains.
+    StencilOutputOverlap,
 }
 
 /// Which lowering strategies a module used, with their word costs.

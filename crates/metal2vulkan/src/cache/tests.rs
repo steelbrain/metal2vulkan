@@ -716,6 +716,22 @@ fn the_version_535_member_round_trips() {
     assert_ne!(encode(&facts), encode(&KernelFacts::default()));
 }
 
+/// The members format version 596 appends encode and decode as themselves: a stencil output drawn
+/// by bits, `PushField::StencilBit`, `RuntimeFact::StencilBitDraws` and
+/// `PrecisionNote::StencilOutputOverlap`.
+#[test]
+fn the_version_596_members_round_trip() {
+    use crate::pipeline::artifact::PrecisionNote;
+    use crate::pipeline::facts::RuntimeFact;
+    use crate::pipeline::sym::PushField;
+    let field = PushField::StencilBit;
+    assert_eq!(decode::<PushField>(&encode(&field)), Ok(field));
+    let fact = RuntimeFact::StencilBitDraws;
+    assert_eq!(decode::<RuntimeFact>(&encode(&fact)), Ok(fact));
+    let note = PrecisionNote::StencilOutputOverlap;
+    assert_eq!(decode::<PrecisionNote>(&encode(&note)), Ok(note));
+}
+
 /// The members format versions 153, 154, 155, 157 and 161 joined from every side encode and
 /// decode together in one render pipeline: `PrecisionNote::CubeGradientFootprint` and
 /// `CombinedSampler`, `RuntimeFact::SrgbTexture` and

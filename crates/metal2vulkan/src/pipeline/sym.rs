@@ -861,6 +861,11 @@ pub enum PushField {
     /// Residual bind offset of a descriptor-form slot: the bind offset minus the descriptor base,
     /// modulo 2^32.
     SlotBindOffset(SlotRef),
+    /// The stencil bit a fragment function that writes `[[stencil]]` on a device without
+    /// `VK_EXT_shader_stencil_export` keeps its fragment for (`RuntimeFact::StencilBitDraws`): one
+    /// `u32`, `k`. Below 8 the function discards a fragment whose output's bit `k` is 0; at 8 or
+    /// more it keeps every fragment. Ordered before the slot addresses, as `FetchedColor` is.
+    StencilBit,
     /// Under the identity domains, the element of the set-1 sampled-texture array
     /// through which a fragment function reads color attachment `color` (`[[color(n)]]`): one
     /// `u32`, the index of an element holding a 2D view of the attachment's level and slice

@@ -607,6 +607,22 @@ pub enum RuntimeFact {
     /// them in its own slots' memory or ordered after the last one that used it. The kernel's own
     /// bytes decide it, never a device fact.
     PrivateArena { slot_bytes: u32 },
+    /// The fragment function writes `[[stencil]]` on a profile without
+    /// `VK_EXT_shader_stencil_export` (`FragmentCaps::stencil_export`): it stores no stencil
+    /// reference, and keeps a fragment only where its output's low 8 bits hold the bit
+    /// `PushField::StencilBit` names, every fragment at 8 or more. The consumer draws each draw of
+    /// its pipeline first at 8, under the draw's own depth-stencil state but a reference of 0 on
+    /// both faces; then at each bit `k` of the stencil write masks of the faces whose operations
+    /// include `Replace`, under a reference of 255, each face's write mask cut to bit `k`, its
+    /// `Replace` operations kept and its others `Keep`, and no depth write; and, where the state
+    /// writes depth under a compare other than `Always` and `Never`, the first draw writes none
+    /// and a last one at 8 writes it under stencil write masks of 0. Under a stencil compare of
+    /// `Always` or `Never` on both faces that stores Metal's values, but where fragments of one
+    /// draw meet at a sample (`PrecisionNote::StencilOutputOverlap`). The function writes no color
+    /// and no memory, and its pipeline is no mesh pipeline and is not made for indirect command
+    /// buffers, so each draw takes the repeats; anything else refuses the output
+    /// (`Feature::StencilExport`).
+    StencilBitDraws,
 }
 
 impl RuntimeFact {
@@ -703,6 +719,7 @@ impl RuntimeFact {
             RuntimeFact::AddressAlignment { .. } => "AddressAlignment",
             RuntimeFact::GridTiles => "GridTiles",
             RuntimeFact::PrivateArena { .. } => "PrivateArena",
+            RuntimeFact::StencilBitDraws => "StencilBitDraws",
         }
     }
 }

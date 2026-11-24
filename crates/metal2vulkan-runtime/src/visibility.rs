@@ -151,6 +151,8 @@ pub(crate) struct Results {
     /// The `Boolean` or `Counting` mode set last, where no mode set or end of the encoder ended
     /// it: its offset, its query, and whether a draw began the query.
     segment: Option<(u64, Query, bool)>,
+    /// Whether that segment's mode is `Counting`, whose result each draw's passing samples add to.
+    counted: bool,
     /// The segments ended, in order.
     ended: Vec<(u64, Query)>,
     /// The offsets the encoder's modes took.
@@ -174,10 +176,18 @@ impl Results {
         matches!(self.segment, Some((_, _, true)))
     }
 
-    /// A segment of `query` at `offset` starts, the one before it ended ([`end`](Self::end)).
-    pub(crate) fn start(&mut self, offset: u64, query: Query) {
+    /// A segment of `query` at `offset` starts, of mode `Counting` where `counted`, the one before it
+    /// ended ([`end`](Self::end)).
+    pub(crate) fn start(&mut self, offset: u64, query: Query, counted: bool) {
         self.taken.insert(offset);
         self.segment = Some((offset, query, false));
+        self.counted = counted;
+    }
+
+    /// Whether a `Counting` mode's segment holds the draws: each draw adds its passing samples to
+    /// the result.
+    pub(crate) fn counts_samples(&self) -> bool {
+        self.segment.is_some() && self.counted
     }
 
     /// Before a draw: begins the segment's query where no draw of it began it.

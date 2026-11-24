@@ -1868,7 +1868,9 @@ fn identity_unsourced(f: &RuntimeFact) -> bool {
 /// reference code a fragment function under the private alpha test compares with
 /// (`PushField::AlphaTestReference`); the index of the sampled-texture array's element a
 /// fragment function reads a colour attachment through (`PushField::FetchedColor`, framebuffer
-/// fetch on a device with neither ordered form); the render pass's length, at or past which a
+/// fetch on a device with neither ordered form); the stencil bit a fragment function whose
+/// stencil output is drawn by bits keeps (`PushField::StencilBit`); the render pass's length, at
+/// or past which a
 /// vertex function that writes `[[render_target_array_index]]` stores `Layer` 0
 /// (`PushField::RenderTargetArrayLength`); the address of the runtime's memory that holds a
 /// kernel's private arena past the floor (`PushField::PrivateArenaAddress`); the draw's viewport
@@ -1916,6 +1918,7 @@ fn identity_refusal(plan: &Plan) -> Option<String> {
                 | PushField::VertexBufferStride(_)
                 | PushField::AlphaTestReference
                 | PushField::FetchedColor { .. }
+                | PushField::StencilBit
                 | PushField::RenderTargetArrayLength
                 | PushField::PrivateArenaAddress
                 | PushField::ViewportCount

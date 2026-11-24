@@ -2094,16 +2094,19 @@ pub fn entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         if let OutputRole::ImageblockData(_) = &o.role {
             return Err(Unsupported::not_implemented(Feature::Imageblocks).into());
         }
-        // A stencil output needs stencil export.
+        // A stencil output on a device without stencil export is no output: each return keeps
+        // the fragment only where the output holds the bit the draw pushes, and the consumer
+        // draws once per stencil bit (`RuntimeFact::StencilBitDraws`).
         if matches!(o.role, OutputRole::Stencil)
             && cx.stage == Stage::Fragment
             && !cx.profile.fields().fragment.stencil_export
         {
-            return Err(Unsupported::needs(
-                Feature::StencilExport,
-                Capability::Extension(VkExtension::ExtShaderStencilExport),
-            )
-            .into());
+            int_scalar(io_form(cx, ty)?)?;
+            cx.families.stage_io.stencil_bits = Some(o.field);
+            cx.push.insert(PushField::StencilBit);
+            cx.facts.insert(RuntimeFact::StencilBitDraws);
+            cx.precision.insert(PrecisionNote::StencilOutputOverlap);
+            continue;
         }
         // An output to a color the pass lacks is stored nowhere, as plain Metal drops it: no
         // output variable, so the pipeline writes no location without an attachment. So is one to a
@@ -2299,6 +2302,15 @@ pub fn entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         let second = rotated_second(cx, attachment, (field, form), lanes)
             .map_err(|e| e.at_attachment(Attachment::Color(attachment)))?;
         cx.families.stage_io.rotated_seconds.push(second);
+    }
+    // A stencil output drawn by bits runs the function once more for each bit, so a color it
+    // writes is written again: kept to one write only with blending and the logic operation off
+    // on every attachment and no color read, which is not built.
+    let sp = &cx.families.stage_io;
+    if sp.stencil_bits.is_some()
+        && (sp.interface.outputs.iter()).any(|o| matches!(o.role, IoRole::Color { .. }))
+    {
+        return Err(stencil_export_refused());
     }
     // The indices a draw of one amplification stores though the function writes none: `Layer`
     // in a pass of at least two layers, and `ViewportIndex` under mappings that offset the
@@ -2827,7 +2839,7 @@ fn output(cx: &mut SelectCx<'_>, o: &OutputBinding, ty: AirTypeId) -> Result<Lin
             cx.families.fragment.depth_output = true;
             link
         }
-        // A device without stencil export refuses the output (`entry`).
+        // A device without stencil export draws the output by bits (`entry`).
         OutputRole::Stencil if !vertex && frag.stencil_export => {
             let f = io_form(cx, ty)?;
             int_scalar(f)?;
@@ -2998,6 +3010,18 @@ fn half_color(e: &crate::air::Entry, ty: AirTypeId) -> bool {
         other => other,
     };
     matches!(scalar, Some(Type::Half))
+}
+
+/// The refusal of a stencil output on a device without `VK_EXT_shader_stencil_export` where its
+/// draws by bits (`RuntimeFact::StencilBitDraws`) do not give Metal's answer: a function that also
+/// writes a color or memory, whose returns cannot kill a fragment, or of a pipeline whose draws do
+/// not take the repeats (a mesh pipeline, one made for indirect command buffers).
+pub(crate) fn stencil_export_refused() -> Error {
+    Unsupported::needs(
+        Feature::StencilExport,
+        Capability::Extension(VkExtension::ExtShaderStencilExport),
+    )
+    .into()
 }
 
 /// The refusal of a private alpha test the translation has not built (`PrivateRenderField`'s

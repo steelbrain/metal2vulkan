@@ -173,6 +173,8 @@ pub enum Degradation {
     VertexSimdgroupGrouping,
     /// `metal2vulkan-degrade-restricted-depth-upload`.
     RestrictedDepthUpload,
+    /// `metal2vulkan-degrade-stencil-output-overlap`.
+    StencilOutputOverlap,
 }
 
 impl Degradation {
@@ -259,6 +261,7 @@ impl Degradation {
         Degradation::DeviceOcclusionCount,
         Degradation::VertexSimdgroupGrouping,
         Degradation::RestrictedDepthUpload,
+        Degradation::StencilOutputOverlap,
     ];
 
     /// The kind's code, `metal2vulkan-degrade-<kind>`.
@@ -387,6 +390,7 @@ impl Degradation {
                 "metal2vulkan-degrade-vertex-simdgroup-grouping"
             }
             Degradation::RestrictedDepthUpload => "metal2vulkan-degrade-restricted-depth-upload",
+            Degradation::StencilOutputOverlap => "metal2vulkan-degrade-stencil-output-overlap",
         }
     }
 
@@ -476,6 +480,7 @@ impl Degradation {
             PrecisionNote::DeviceOcclusionCount => Degradation::DeviceOcclusionCount,
             PrecisionNote::VertexSimdgroupGrouping => Degradation::VertexSimdgroupGrouping,
             PrecisionNote::RestrictedDepthUpload => Degradation::RestrictedDepthUpload,
+            PrecisionNote::StencilOutputOverlap => Degradation::StencilOutputOverlap,
         }
     }
 }

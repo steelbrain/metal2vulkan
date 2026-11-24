@@ -200,6 +200,7 @@ fn every_fact() -> Vec<RuntimeFact> {
             payload: None,
         },
         RuntimeFact::PrivateArena { slot_bytes: 28_704 },
+        RuntimeFact::StencilBitDraws,
     ]
 }
 
@@ -294,6 +295,7 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::AddressAlignment { .. } => 66,
         RuntimeFact::GridTiles => 51,
         RuntimeFact::PrivateArena { .. } => 70,
+        RuntimeFact::StencilBitDraws => 87,
     }
 }
 
@@ -301,7 +303,7 @@ fn variant(f: &RuntimeFact) -> usize {
 fn mechanism_is_total_over_every_fact_and_profile() {
     let facts = every_fact();
     let covered: std::collections::BTreeSet<usize> = facts.iter().map(variant).collect();
-    assert_eq!(covered, (0..87).collect(), "every_fact misses a variant");
+    assert_eq!(covered, (0..88).collect(), "every_fact misses a variant");
     for (stem, _) in super::committed_profiles() {
         let dev = device(&stem);
         let p = dev.profile();
@@ -424,7 +426,8 @@ fn mechanism_is_total_over_every_fact_and_profile() {
                 | RuntimeFact::StorageTextureIntegerChannels { .. }
                 | RuntimeFact::AccelerationStructureInstanceCount { .. }
                 | RuntimeFact::ViewportCount
-                | RuntimeFact::PrivateArena { .. } => Mechanism::PushConstant,
+                | RuntimeFact::PrivateArena { .. }
+                | RuntimeFact::StencilBitDraws => Mechanism::PushConstant,
                 RuntimeFact::AliasedImageblock { .. } => Mechanism::None,
                 RuntimeFact::CallStackDepth { .. } | RuntimeFact::OpenClMode => Mechanism::None,
             };

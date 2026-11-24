@@ -899,6 +899,7 @@ codec_enum! {
         IndirectSequence,
         IndirectBase,
         TextureLevelBase(f0),
+        StencilBit,
     }
     Symbol { Binding(f0), DescriptorSet(f0), Location(f0), Component(f0), SpecId(f0) }
 }
@@ -1266,6 +1267,7 @@ codec_enum! {
         AddressAlignment { slot, align },
         GridTiles,
         PrivateArena { slot_bytes },
+        StencilBitDraws,
     }
     Mechanism {
         Specialization, Variant, PushConstant, DynamicState, DynamicStateOrPushConstant,
@@ -1446,6 +1448,7 @@ codec_enum! {
         DeviceOcclusionCount,
         VertexSimdgroupGrouping,
         RestrictedDepthUpload,
+        StencilOutputOverlap,
     }
     BindingSource {
         Buffer(f0), Texture(f0), Sampler(f0), CombinedTextureSampler { texture, sampler },
