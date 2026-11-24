@@ -237,5 +237,41 @@
       ],
       "validated": "ran"
     }
+  ],
+  "times": [
+    {
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 12.11",
+      "instrument": 385,
+      "times": {
+        "case": "depth-stencil-copies-d32s8",
+        "calls": 1,
+        "in_calls": 4936833,
+        "on_cpu": 224667,
+        "blocked": 4735333,
+        "elsewhere": 4414750,
+        "spend": 9517959,
+        "spend_least": 7882792,
+        "spend_most": 18007459,
+        "per_call": [
+          {
+            "call": "work",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 4936833,
+            "on_cpu": 224667,
+            "blocked": 4735333,
+            "wall_least": 4097500,
+            "wall_most": 12187792,
+            "wall_total": 4936833,
+            "on_cpu_total": 224667,
+            "blocked_total": 4735333
+          }
+        ]
+      }
+    }
   ]
 }
