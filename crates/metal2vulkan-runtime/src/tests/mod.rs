@@ -91,6 +91,7 @@ mod quad_control;
 mod raster;
 mod read_write_tier;
 mod readback;
+pub(crate) mod real_size;
 mod refusal_basis;
 mod render;
 mod resolve;
