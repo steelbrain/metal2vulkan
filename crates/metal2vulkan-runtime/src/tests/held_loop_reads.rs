@@ -19,15 +19,16 @@ mod on_device {
     use crate::tests::blit::on_device::settled;
     use crate::tests::command::on_device::each_device;
     use crate::tests::draw::on_device::{
-        descriptor, examples, floats, library, pass, readable, run, state, Buffers, SIDE,
+        descriptor, examples, floats, library, pass, read, readable, run, state, Buffers, SIDE,
     };
     use crate::{
-        ColorAttachmentDescriptor, FunctionDescriptor, IndexClass, PixelFormat, PrimitiveType,
-        RenderPipelineDescriptor, Resource, ResourceUsage, SamplerDescriptor, StageSource,
+        ColorAttachmentDescriptor, FunctionDescriptor, HostBytes, IndexClass, PixelFormat,
+        PrimitiveType, Region, RenderPipelineDescriptor, Resource, ResourceUsage,
+        SamplerDescriptor, StageSource,
     };
     use metal2vulkan_devtools::engine_dir;
 
-    /// The attachment's index, and the sampler's.
+    /// The attachment's index (the control texture's the next), and the sampler's.
     const TEXTURE: u32 = 4096;
     const SAMPLER: u32 = 7;
 
@@ -35,8 +36,10 @@ mod on_device {
     /// through an argument buffer: after a draw that read it through a slot, which moves it to the
     /// feedback layout on a device with the loop, and in a pass of its own, which moves nothing.
     /// Each pass's loop reads (`Metrics::attachment_loop_reads`) are printed and checked: one in
-    /// the first pass through the loop, none in the second. The layer's messages, where it has
-    /// any, fail the test as any other does.
+    /// the first pass through the loop, none in the second. A control pass first draws the same
+    /// way through an entry naming a green texture, and the target's first pixel is green: the
+    /// entry's triangle covers it, so the fragment function runs and reads its texture. The
+    /// layer's messages, where it has any, fail the test as any other does.
     #[test]
     fn every_device_reads_its_attachment_through_an_argument_buffer_in_its_own_pass() {
         let (Some(examples), Some(engine)) =
@@ -62,40 +65,65 @@ mod on_device {
                 return;
             }
             let _grants = [
-                (IndexClass::Texture, TEXTURE),
-                (IndexClass::Sampler, SAMPLER),
+                (IndexClass::Texture, TEXTURE, 2),
+                (IndexClass::Sampler, SAMPLER, 1),
             ]
-            .map(|(class, first)| {
-                (device.grant_indices(class, first, 1))
+            .map(|(class, first, count)| {
+                (device.grant_indices(class, first, count))
                     .unwrap_or_else(|error| panic!("{name}: {error}"))
             });
             let own = state(name, &device, &own);
             let held = state(name, &device, &held);
             let color = readable(&device, PixelFormat::RGBA8Unorm, 1, TEXTURE);
+            let green = readable(&device, PixelFormat::RGBA8Unorm, 1, TEXTURE + 1);
+            let texel = [0u8, 255, 0, 255];
+            let row = u64::from(SIDE) * 4;
+            let whole = Region {
+                origin: [0; 3],
+                size: [SIDE, SIDE, 1],
+            };
+            let bytes = texel.repeat((SIDE * SIDE) as usize);
+            (green.replace_region(
+                whole,
+                0,
+                0,
+                HostBytes::from(&bytes[..]),
+                row,
+                row * u64::from(SIDE),
+            ))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
             let sampler = (device.new_sampler_state(&SamplerDescriptor::new(), SAMPLER))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let mut buffers = Buffers::new(&device);
             // One triangle over the whole target, no colour added.
             let whole = buffers.of(&device, &floats(&[-1.0, -1.0, 3.0, -1.0, -1.0, 3.0]));
             let colors = buffers.of(&device, &floats(&[0.0; 12]));
-            // The entry's triangle covers the centre of the target's first pixel.
-            let first = -1.0 + 1.0 / SIDE as f32 - 0.005;
-            let position = buffers.of(&device, &floats(&[first, first, 0.0, 1.0]));
-            let entry: Vec<u8> = [
-                position.gpu_address(),
-                color.gpu_resource_id().to_bits(),
-                sampler.gpu_resource_id().to_bits(),
-            ]
-            .iter()
-            .flat_map(|word| word.to_le_bytes())
-            .collect();
-            let entry = buffers.of(&device, &entry);
+            // The entry's triangle covers the centre of the target's first pixel, its top left
+            // (Metal's clip space has y up), from just below and left of it.
+            let centre = 1.0 - 1.0 / SIDE as f32;
+            let at = [-centre - 0.005, centre - 0.005, 0.0, 1.0];
+            let position = buffers.of(&device, &floats(&at));
+            let mut entry = |texture: &crate::Texture| {
+                let words = [
+                    position.gpu_address(),
+                    texture.gpu_resource_id().to_bits(),
+                    sampler.gpu_resource_id().to_bits(),
+                ];
+                let bytes: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+                buffers.of(&device, &bytes)
+            };
+            let (held_color, held_green) = (entry(&color), entry(&green));
             let queue = device.new_command_queue(4).expect("a queue");
             // The upload that moves the new target to its home layout, in a submission apart.
             let upload = queue.command_buffer().expect("a command buffer");
             (upload.record_for_test(&[], |_, _| {})).expect("a command buffer's commands");
             run(name, &upload);
-            for (case, through_slot) in [("after a slot's read", true), ("alone", false)] {
+            let cases = [
+                ("control", &held_green, &green, false),
+                ("after a slot's read", &held_color, &color, true),
+                ("alone", &held_color, &color, false),
+            ];
+            for (case, entry, reached, through_slot) in cases {
                 let counters = device.counters();
                 settled(&device);
                 let before = counters.metrics();
@@ -112,10 +140,10 @@ mod on_device {
                     draw(encoder.set_render_pipeline_state(&own));
                     draw(encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0));
                 }
-                draw(encoder.use_resource(Resource::Texture(&color), ResourceUsage::READ));
+                draw(encoder.use_resource(Resource::Texture(reached), ResourceUsage::READ));
                 draw(encoder.use_resource(Resource::Buffer(&position), ResourceUsage::READ));
-                draw(encoder.set_vertex_buffer(Some(&entry), 0, 0));
-                draw(encoder.set_fragment_buffer(Some(&entry), 0, 0));
+                draw(encoder.set_vertex_buffer(Some(entry), 0, 0));
+                draw(encoder.set_fragment_buffer(Some(entry), 0, 0));
                 draw(encoder.set_render_pipeline_state(&held));
                 draw(encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0));
                 encoder.end_encoding();
@@ -129,6 +157,13 @@ mod on_device {
                 );
                 let want = u64::from(through_slot && looped);
                 assert_eq!(loop_reads, want, "{name} {case}: the pass's loop reads");
+                if case == "control" {
+                    let first = read(&color, 4)[..4].to_vec();
+                    assert_eq!(
+                        first, texel,
+                        "{name}: the entry's triangle drew the first pixel"
+                    );
+                }
             }
         });
     }
