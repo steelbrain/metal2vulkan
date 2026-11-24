@@ -302,6 +302,14 @@ pub(crate) const SHARED_MEMORY: vk::MemoryPropertyFlags = vk::MemoryPropertyFlag
         | vk::MemoryPropertyFlags::HOST_CACHED.as_raw(),
 );
 
+/// The flags of the memory type write-combined Shared storage lives in, where the device has one
+/// that lacks `HOST_CACHED` ([`choose`]): memory the host maps, writes through its write-combining
+/// buffers and reads uncached.
+pub(crate) const WRITE_COMBINED_MEMORY: vk::MemoryPropertyFlags = vk::MemoryPropertyFlags::from_raw(
+    vk::MemoryPropertyFlags::HOST_VISIBLE.as_raw()
+        | vk::MemoryPropertyFlags::HOST_COHERENT.as_raw(),
+);
+
 /// The flags of the memory type the parameter ring lives in: memory the GPU reads at its own speed
 /// and the host writes without a flush.
 pub(crate) const RING_MEMORY: vk::MemoryPropertyFlags = vk::MemoryPropertyFlags::from_raw(
@@ -1085,6 +1093,10 @@ pub struct MemoryTypes {
     pub private: u32,
     /// Host-visible, host-coherent and host-cached: Shared storage.
     pub shared: u32,
+    /// Host-visible and host-coherent, and not host-cached, where the device has such a type;
+    /// else [`shared`](Self::shared): write-combined Shared storage
+    /// ([`MemoryClass::SharedWriteCombined`](crate::MemoryClass::SharedWriteCombined)).
+    pub write_combined: u32,
     /// Device-local, host-visible and host-coherent: the parameter ring.
     pub ring: u32,
 }
@@ -1526,6 +1538,18 @@ pub(crate) fn choose(
             .find(|(index, kind)| usable & (1 << index) != 0 && kind.property_flags.contains(flags))
             .map(|(index, _)| index)
     };
+    // Write-combined Shared storage asks no type of the floor: it is the Shared type where the
+    // device has no host-visible, host-coherent type without `HOST_CACHED`.
+    let write_combined = (0u32..)
+        .zip(memory.memory_types_as_slice())
+        .find(|(index, kind)| {
+            usable & (1 << index) != 0
+                && kind.property_flags.contains(WRITE_COMBINED_MEMORY)
+                && !kind
+                    .property_flags
+                    .contains(vk::MemoryPropertyFlags::HOST_CACHED)
+        })
+        .map(|(index, _)| index);
     match (
         first(PRIVATE_MEMORY),
         first(SHARED_MEMORY),
@@ -1534,6 +1558,7 @@ pub(crate) fn choose(
         (Some(private), Some(shared), Some(ring)) => Ok(MemoryTypes {
             private,
             shared,
+            write_combined: write_combined.unwrap_or(shared),
             ring,
         }),
         // Vulkan guarantees the device-local type, so only a device that breaks that rule is

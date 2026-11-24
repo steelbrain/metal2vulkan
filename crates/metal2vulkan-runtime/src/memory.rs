@@ -137,10 +137,58 @@ pub enum MemoryClass {
     /// block's life. On a discrete GPU it is system memory the GPU reads across its bus, as on a
     /// Mac with a discrete GPU.
     Shared,
+    /// `MTLStorageModeShared` with `MTLCPUCacheModeWriteCombined`: host-visible and host-coherent
+    /// memory that is not host-cached, mapped for the block's life, where the device has such a
+    /// memory type; the Shared type otherwise. The host's writes go through its write-combining
+    /// buffers and its reads are uncached, as Metal says of the mode ("optimized for resources
+    /// that the CPU writes into, but never reads"). A consumer that maps the blocks into a
+    /// hypervisor's guest whose host refuses a cacheable mapping of device memory takes it.
+    ///
+    /// The device makes the class no allocation until its first take
+    /// ([`Device::take_block`](crate::Device::take_block)), and none ahead of need before then.
+    /// Its bytes count in the Shared class's gauges.
+    SharedWriteCombined,
 }
 
+/// The number of [`MemoryClass`]es.
+const CLASSES: usize = 3;
+
 impl MemoryClass {
-    const ALL: [MemoryClass; 2] = [MemoryClass::Private, MemoryClass::Shared];
+    const ALL: [MemoryClass; CLASSES] = [
+        MemoryClass::Private,
+        MemoryClass::Shared,
+        MemoryClass::SharedWriteCombined,
+    ];
+
+    /// Whether the device makes the class's allocations from its making on, taken or not: its
+    /// first in the device's making ([`stock`]) and those ahead of need. The other class is made
+    /// from its first take on.
+    fn eager(self) -> bool {
+        match self {
+            MemoryClass::Private | MemoryClass::Shared => true,
+            MemoryClass::SharedWriteCombined => false,
+        }
+    }
+
+    /// Which class's set-valued diagnostics (when its oldest idle allocation became idle, its
+    /// reserve, its long allocations reused) it sets: Some(false) the Private class's, Some(true)
+    /// the Shared class's; None for the write-combined class, which sets none, so that it never
+    /// overwrites the Shared class's.
+    fn diagnosed(self) -> Option<bool> {
+        match self {
+            MemoryClass::Private => Some(false),
+            MemoryClass::Shared => Some(true),
+            MemoryClass::SharedWriteCombined => None,
+        }
+    }
+
+    /// Whether its blocks are host-mapped: `MTLStorageModeShared`, whatever its CPU cache mode.
+    pub(crate) fn host_mapped(self) -> bool {
+        match self {
+            MemoryClass::Private => false,
+            MemoryClass::Shared | MemoryClass::SharedWriteCombined => true,
+        }
+    }
 
     /// No Metal counterpart: the length of the allocations the device makes for the class ahead
     /// of need, 16 MiB of either class.
@@ -158,7 +206,7 @@ impl MemoryClass {
     fn allocation_gauge(self) -> Gauge {
         match self {
             MemoryClass::Private => Gauge::PrivateAllocationBytes,
-            MemoryClass::Shared => Gauge::SharedAllocationBytes,
+            MemoryClass::Shared | MemoryClass::SharedWriteCombined => Gauge::SharedAllocationBytes,
         }
     }
 
@@ -166,7 +214,7 @@ impl MemoryClass {
     fn idle_gauge(self) -> Gauge {
         match self {
             MemoryClass::Private => Gauge::PrivateIdleBytes,
-            MemoryClass::Shared => Gauge::SharedIdleBytes,
+            MemoryClass::Shared | MemoryClass::SharedWriteCombined => Gauge::SharedIdleBytes,
         }
     }
 
@@ -174,7 +222,7 @@ impl MemoryClass {
     fn placed_gauge(self) -> Gauge {
         match self {
             MemoryClass::Private => Gauge::PrivatePlacedBytes,
-            MemoryClass::Shared => Gauge::SharedPlacedBytes,
+            MemoryClass::Shared | MemoryClass::SharedWriteCombined => Gauge::SharedPlacedBytes,
         }
     }
 
@@ -182,7 +230,7 @@ impl MemoryClass {
     pub(crate) fn buffer_gauge(self) -> Gauge {
         match self {
             MemoryClass::Private => Gauge::PrivateBufferBytes,
-            MemoryClass::Shared => Gauge::SharedBufferBytes,
+            MemoryClass::Shared | MemoryClass::SharedWriteCombined => Gauge::SharedBufferBytes,
         }
     }
 
@@ -190,6 +238,7 @@ impl MemoryClass {
         match self {
             MemoryClass::Private => 0,
             MemoryClass::Shared => 1,
+            MemoryClass::SharedWriteCombined => 2,
         }
     }
 }
@@ -788,7 +837,7 @@ pub(crate) enum Loose {
 
 struct State {
     /// Per class, its allocations in the order they were made.
-    allocations: [Vec<Allocation>; 2],
+    allocations: [Vec<Allocation>; CLASSES],
     /// Imported and exported blocks given back, with the imports' releases, for the block-maker
     /// thread to free, each with its [`Wait`].
     owned: VecDeque<((Memory, Option<Release>), Wait)>,
@@ -800,10 +849,13 @@ struct State {
     held: VecDeque<(Free, Wait)>,
     /// Per class, the block-maker thread could not make the last allocation it tried. It tries
     /// again after the class's next take or give-back.
-    failed: [bool; 2],
+    failed: [bool; CLASSES],
     /// Per class, when the block-maker thread's last free of an idle allocation of it ended, in
     /// nanoseconds of [`host_time`](crate::host_time); 0 before one.
-    freed_at: [u64; 2],
+    freed_at: [u64; CLASSES],
+    /// Per class, whether the device makes its allocations: from the device's making for a
+    /// class [`MemoryClass::eager`], from its first take for the other.
+    taken: [bool; CLASSES],
     /// The internals asked of the block-maker thread and not yet taken up, by [`Internal::index`]:
     /// the zero source, the ring's first block and the staging region from the device's making,
     /// and each later ring block a take asks for.
@@ -819,7 +871,7 @@ struct State {
     /// again.
     unmapped: bool,
     /// Per class, the idle allocations' bytes the class's gauge shows.
-    idle_bytes: [u64; 2],
+    idle_bytes: [u64; CLASSES],
     /// The bytes of the consumer's blocks in the Private units, the pool's share of
     /// [`Gauges::private_unit_used_bytes`](crate::Gauges::private_unit_used_bytes).
     unit_take_bytes: u64,
@@ -924,12 +976,13 @@ impl Pool {
     ) -> Pool {
         Pool {
             state: Mutex::new(State {
-                allocations: [Vec::new(), Vec::new()],
+                allocations: [Vec::new(), Vec::new(), Vec::new()],
                 owned: VecDeque::new(),
                 loose: VecDeque::new(),
                 held: VecDeque::new(),
-                failed: [false, false],
-                freed_at: [0, 0],
+                failed: [false; CLASSES],
+                freed_at: [0; CLASSES],
+                taken: MemoryClass::ALL.map(MemoryClass::eager),
                 // The device's fixed-size internals: the block-maker thread's first work.
                 asked: [true; INTERNALS],
                 making: None,
@@ -938,7 +991,7 @@ impl Pool {
                 next_allocation: 1,
                 mapped: HashSet::new(),
                 unmapped: false,
-                idle_bytes: [0, 0],
+                idle_bytes: [0; CLASSES],
                 unit_take_bytes: 0,
                 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
                 returned: HashSet::new(),
@@ -1149,6 +1202,9 @@ impl Pool {
         };
         // A take is a pool event: the block-maker thread tries a failed allocation again.
         state.failed[index] = false;
+        // From its first take on, the block-maker thread makes the class's allocations ahead of
+        // need, as it does a stocked class's from the device's making.
+        state.taken[index] = true;
         let id = number(&mut state)?;
         if state.stop {
             return Err(Error::Quiesced);
@@ -1162,7 +1218,7 @@ impl Pool {
                 (self.counters).reused_idle(crate::host_time().saturating_sub(since));
             }
             if long {
-                (self.counters).long_reuse(class == MemoryClass::Shared);
+                (self.counters).long_reuse(class.host_mapped());
             }
             self.counters.carved();
             self.settle(&mut state, class);
@@ -1282,9 +1338,11 @@ impl Pool {
             self.counters.fall_by(class.idle_gauge(), was - idle);
         }
         state.idle_bytes[index] = idle;
+        let Some(shared) = class.diagnosed() else {
+            return;
+        };
         let (weighed, reserve) = state.aging(class);
         let oldest = weighed.first().map_or(0, |&(since, _)| since);
-        let shared = class == MemoryClass::Shared;
         (self.counters).idle_since(shared, oldest);
         (self.counters).reserve_bytes(shared, reserve);
         let reused: u64 = (state.allocations[index].iter())
@@ -1680,7 +1738,7 @@ fn ahead(core: &Core, class: MemoryClass) -> Option<Allocation> {
 pub(crate) fn stock(core: &Core) {
     // Made ahead of need, as the block-maker thread's are: counted with them.
     make_ahead_here(Some(Arc::clone(&core.submit_calls)));
-    for class in MemoryClass::ALL {
+    for class in MemoryClass::ALL.into_iter().filter(|class| class.eager()) {
         let made = ahead(core, class);
         let mut state = core.pool.lock();
         match made {
@@ -1770,8 +1828,9 @@ pub(crate) fn run(core: Arc<Core>) {
             state = pool.lock();
             continue;
         }
-        let wanted = (MemoryClass::ALL.into_iter())
-            .find(|&class| !state.failed[class.index()] && !state.whole(class));
+        let wanted = (MemoryClass::ALL.into_iter()).find(|&class| {
+            state.taken[class.index()] && !state.failed[class.index()] && !state.whole(class)
+        });
         if let Some(class) = wanted {
             drop(state);
             let made = ahead(&core, class);
@@ -1929,7 +1988,7 @@ pub(crate) unsafe fn allocate_spilling(
             )
         },
     };
-    if class == MemoryClass::Shared {
+    if class.host_mapped() {
         return result.map(|memory| (memory, false));
     }
     for index in (0..u32::BITS).filter(|&index| index != first && bits & (1 << index) != 0) {
@@ -2065,7 +2124,7 @@ fn make_allocation(
     core.counters.count(Metric::BlocksMade);
     core.counters.allocated(len);
     if freed_at != 0 && remade(freed_at, crate::host_time()) {
-        (core.counters).remade_after_free(class == MemoryClass::Shared);
+        (core.counters).remade_after_free(class.host_mapped());
     }
     core.counters.rise_by(class.allocation_gauge(), len);
     if spilled {
@@ -2089,7 +2148,7 @@ fn make_allocation(
         len,
         RangeKind::Allocation(id, class),
     );
-    if class == MemoryClass::Shared {
+    if class.host_mapped() {
         // SAFETY: the memory type is host-visible, and the memory is not mapped.
         let mapped = unsafe {
             device.map_memory(
@@ -2806,7 +2865,7 @@ fn free_allocation(core: &Core, allocation: Allocation) {
 /// consumer's unmap of it where it is mapped.
 pub(crate) fn free_all(core: &mut Core) {
     let mut allocations = Vec::new();
-    let mut idle = [0; 2];
+    let mut idle = [0; CLASSES];
     // The GPU completed everything submitted: no wait holds. What was held goes first, as its
     // memory and places come back here.
     let held: Vec<Free> = {
@@ -2842,15 +2901,16 @@ pub(crate) fn free_all(core: &mut Core) {
         state.unit_take_bytes = 0;
     }
     for class in MemoryClass::ALL {
-        let shared = class == MemoryClass::Shared;
         core.counters
             .fall_by(class.idle_gauge(), idle[class.index()]);
         // The blocks still taken (the texture set's empty block kept for its next place among
         // them) go with their allocations.
         core.counters.set(class.placed_gauge(), 0);
-        (core.counters).idle_since(shared, 0);
-        (core.counters).reserve_bytes(shared, 0);
-        (core.counters).long_reused_bytes(shared, 0);
+        if let Some(shared) = class.diagnosed() {
+            (core.counters).idle_since(shared, 0);
+            (core.counters).reserve_bytes(shared, 0);
+            (core.counters).long_reused_bytes(shared, 0);
+        }
     }
     // The texture block kept for the next place and the blocks still taken go with their
     // allocations.

@@ -1621,6 +1621,7 @@ impl Core {
         match class {
             MemoryClass::Private => self.memory_types.private,
             MemoryClass::Shared => self.memory_types.shared,
+            MemoryClass::SharedWriteCombined => self.memory_types.write_combined,
         }
     }
 

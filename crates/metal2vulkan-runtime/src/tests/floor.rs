@@ -419,6 +419,7 @@ fn a_device_at_the_floor_is_above_it() {
         Ok(MemoryTypes {
             private: 0,
             shared: 1,
+            write_combined: 2,
             ring: 2
         })
     );
@@ -1035,6 +1036,7 @@ fn memory_types_are_the_first_with_their_flags_that_buffers_can_use() {
         Ok(MemoryTypes {
             private: 0,
             shared: 2,
+            write_combined: 1,
             ring: 4
         })
     );
@@ -1043,6 +1045,7 @@ fn memory_types_are_the_first_with_their_flags_that_buffers_can_use() {
         Ok(MemoryTypes {
             private: 0,
             shared: 3,
+            write_combined: 1,
             ring: 5
         })
     );
@@ -1052,18 +1055,38 @@ fn memory_types_are_the_first_with_their_flags_that_buffers_can_use() {
         Ok(MemoryTypes {
             private: 5,
             shared: 2,
+            write_combined: 1,
             ring: 5
         })
     );
-    // One type with every flag serves all three, as on a CPU device.
+    // One type with every flag serves all three, as on a CPU device, and write-combined Shared
+    // storage, which no type without `HOST_CACHED` holds.
     let all = memory(&[SHARED_MEMORY | RING_MEMORY]);
     assert_eq!(
         choose(&all, 1),
         Ok(MemoryTypes {
             private: 0,
             shared: 0,
+            write_combined: 0,
             ring: 0
         })
+    );
+    // A cached and an uncached device-local, host-visible, host-coherent type, as Honeykrisp lists
+    // them: write-combined Shared storage takes the uncached one, every other kind the first.
+    let honeykrisp = memory(&[SHARED_MEMORY | RING_MEMORY, RING_MEMORY]);
+    assert_eq!(
+        choose(&honeykrisp, u32::MAX),
+        Ok(MemoryTypes {
+            private: 0,
+            shared: 0,
+            write_combined: 1,
+            ring: 0
+        })
+    );
+    // Where buffers cannot use the uncached type, write-combined storage is the Shared type.
+    assert_eq!(
+        choose(&honeykrisp, 1).map(|types| types.write_combined),
+        Ok(0)
     );
     // Bits past the device's types choose nothing.
     assert_eq!(

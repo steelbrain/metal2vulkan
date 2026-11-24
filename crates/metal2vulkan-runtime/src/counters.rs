@@ -570,7 +570,9 @@ impl Site {
     /// The site of the consumer's takes of `class` ([`Device::take_block`](crate::Device::take_block)).
     pub(crate) fn take(class: crate::MemoryClass) -> Site {
         match class {
-            crate::MemoryClass::Shared => Site::SharedTake,
+            crate::MemoryClass::Shared | crate::MemoryClass::SharedWriteCombined => {
+                Site::SharedTake
+            }
             crate::MemoryClass::Private => Site::PrivateTake,
         }
     }

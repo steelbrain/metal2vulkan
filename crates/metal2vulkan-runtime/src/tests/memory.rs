@@ -773,7 +773,9 @@ mod on_device {
             );
             // Each class's take site, whose allocations and takes landed ahead count apart.
             let site = |metrics: &Metrics, class: MemoryClass| match class {
-                MemoryClass::Shared => metrics.shared_take_allocations,
+                MemoryClass::Shared | MemoryClass::SharedWriteCombined => {
+                    metrics.shared_take_allocations
+                }
                 MemoryClass::Private => metrics.private_take_allocations,
             };
             let mut held = Vec::new();
@@ -846,6 +848,73 @@ mod on_device {
                 "memory: {name}: the next allocation made once no unit is wholly free, a 16 MiB \
                  take on this thread allocated nothing; metrics {:?}",
                 counters.metrics()
+            );
+        }
+    }
+
+    /// The write-combined Shared class costs a device nothing until its first take: the device's
+    /// making stocks only the Private and Shared classes, and the block-maker thread makes it no
+    /// allocation ahead of need. Its first take makes its first allocation, which the hook maps
+    /// before the block goes out, in the device's write-combined memory type; the block is
+    /// host-mapped, the host reads what the GPU filled it with, and the GPU's fill of one word
+    /// over what the host wrote leaves the host's bytes around it. From then on the block-maker
+    /// thread keeps a wholly free unit of the class, as of the others, and teardown unmaps every
+    /// allocation once, with the gauges at zero.
+    #[test]
+    fn every_device_makes_write_combined_memory_from_its_first_take() {
+        let instance = crate::tests::validation::instance(&[]);
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let hook = Arc::new(Hook::default());
+            let device = device_with(&hook, physical, name);
+            let core = device.core();
+            let counters = device.counters();
+            let class = MemoryClass::SharedWriteCombined;
+            // The block-maker thread's first work is done; an allocation it made ahead of the
+            // class would be made within this wait.
+            thread::sleep(Duration::from_millis(100));
+            assert!(
+                core.pool.allocations(class).is_empty()
+                    && hook.mapped().iter().all(|mapped| mapped.class != class),
+                "{name}: write-combined memory before the class's first take"
+            );
+            assert_eq!(
+                counters.gauges().blocks,
+                INTERNALS + 2,
+                "{name}: the internals and the stocked classes' first allocations"
+            );
+            let block = (device.take_block(class, 4096))
+                .unwrap_or_else(|error| panic!("{name}: a write-combined block: {error}"));
+            hook.assert_mapped(name, &block);
+            assert_eq!(
+                core.memory_type(class),
+                device.memory_types().write_combined,
+                "{name}: the class's memory type"
+            );
+            let gpu = Gpu::new(&device);
+            gpu.fill(vk_buffer(&device, block.id), 0, 4096, 0x5A5A_5A5A);
+            let host = bytes(&block);
+            assert!(
+                host[..4096].iter().all(|&byte| byte == 0x5A),
+                "{name}: the GPU's fill, read by the host"
+            );
+            host[..4096].fill(0x11);
+            gpu.fill(vk_buffer(&device, block.id), 8, 4, 0x2222_2222);
+            assert_eq!(
+                (&host[..8], &host[8..12], &host[12..16]),
+                (&[0x11; 8][..], &[0x22; 4][..], &[0x11; 4][..]),
+                "{name}: the GPU's word over the host's bytes"
+            );
+            wait_until("the class's unit made ahead", || core.pool.stocked(class));
+            drop(gpu);
+            drop(block);
+            drop(device);
+            assert_each_unmapped_once(name, &hook);
+            assert_eq!(
+                counters.gauges(),
+                Gauges::default(),
+                "{name}: gauges after teardown"
             );
         }
     }

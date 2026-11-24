@@ -238,10 +238,15 @@ Memory comes in blocks the consumer takes and places buffers in, as a placement 
 in its memory.
 
 - `Device::take_block(class, len)` gives a block of `MemoryClass::Private` (device-local, no host
-  mapping) or `MemoryClass::Shared` (host-visible, host-coherent and host-cached, mapped for the
-  block's life) memory, as a `Block`: rt's own handle, with no Metal counterpart, which derefs to
-  the block's `BlockInfo` (its number, class, length, device address and, for Shared, its host
-  address, and the allocation it is a range of with its offset there). One `VkBuffer` spans each
+  mapping), `MemoryClass::Shared` (host-visible, host-coherent and host-cached, mapped for the
+  block's life) or `MemoryClass::SharedWriteCombined` (Metal's Shared storage with
+  `MTLCPUCacheModeWriteCombined`: host-visible and host-coherent memory that is not host-cached,
+  mapped for the block's life, where the device has such a type, and the Shared type elsewhere)
+  memory, as a `Block`: rt's own handle, with no Metal counterpart, which derefs to the block's
+  `BlockInfo` (its number, class, length, device address and, for the two Shared classes, its host
+  address, and the allocation it is a range of with its offset there). The device makes the
+  write-combined class no allocation until its first take, and its bytes count in the Shared
+  class's gauges. One `VkBuffer` spans each
   of the pool's allocations, with every buffer usage and a device address; a block is a range of
   it. Nothing in a block is exportable.
 - A block is a range of one of the device's allocations of its class: the length asked rounded up

@@ -5844,7 +5844,7 @@ impl Buffer {
         d.storage_mode = match self.held() {
             (_, Some(_)) => StorageMode::Managed,
             (block, None) => match block.memory.class {
-                MemoryClass::Shared => StorageMode::Shared,
+                MemoryClass::Shared | MemoryClass::SharedWriteCombined => StorageMode::Shared,
                 MemoryClass::Private => StorageMode::Private,
             },
         };

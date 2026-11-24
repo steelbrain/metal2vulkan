@@ -644,7 +644,7 @@ pub(crate) trait BufferObject {
     /// Whether shaders reach the buffer in Shared memory, which the host reads.
     fn is_shared(&self) -> bool {
         let inner = self.object();
-        inner.copy.is_none() && inner.block.memory.class == MemoryClass::Shared
+        inner.copy.is_none() && inner.block.memory.class.host_mapped()
     }
 
     /// Its textures over its device copy in images of their own, where it is a Managed buffer

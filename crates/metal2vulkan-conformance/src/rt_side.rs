@@ -959,7 +959,9 @@ impl Side for RtSide<'_> {
                     Failure::named("NoSuchHandle", format!("buffer {}", handle.0))
                 })?;
                 match block.class {
-                    rt::MemoryClass::Shared => storage_mode(rt::StorageMode::Shared),
+                    rt::MemoryClass::Shared | rt::MemoryClass::SharedWriteCombined => {
+                        storage_mode(rt::StorageMode::Shared)
+                    }
                     rt::MemoryClass::Private => storage_mode(rt::StorageMode::Private),
                 }
             }

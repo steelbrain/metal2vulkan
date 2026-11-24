@@ -65,11 +65,12 @@ pub(super) struct Places {
     slack: (u64, u64),
 }
 
-/// `class`'s index in a pair of per-class values: Private, then Shared.
+/// `class`'s index in a pair of per-class values: Private, then Shared, whose CPU cache mode
+/// the pair does not tell apart.
 pub(super) fn class_index(class: rt::MemoryClass) -> usize {
     match class {
         rt::MemoryClass::Private => 0,
-        rt::MemoryClass::Shared => 1,
+        rt::MemoryClass::Shared | rt::MemoryClass::SharedWriteCombined => 1,
     }
 }
 
