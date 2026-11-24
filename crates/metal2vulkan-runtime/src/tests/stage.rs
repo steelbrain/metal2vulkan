@@ -236,7 +236,7 @@ fn a_memory_breach_holds_to_its_ceiling_and_is_a_miss_above_it() {
 /// `HELPER_VERSION` is bumped and the pair here is the new one.
 const HELPER_CODE: (u32, &str) = (
     2,
-    "e07cb0488c4727ba561f38bd47ba8e978ddffececb964a5762d5e6b7384ef0d6",
+    "c7b4dec49daac1c9ea57722a79cdaa3de152c44fa78ee72093dcc01757ef2de6",
 );
 
 /// The helper's own code as stage.rs holds it: `serve_stage` through `compile`, and

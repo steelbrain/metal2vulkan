@@ -7141,7 +7141,6 @@ trait-impl	metal2vulkan-runtime::ComputeCommandEncoder impl Drop	impl Drop for C
 trait-impl	metal2vulkan-runtime::ComputePipelineState impl crate::kept::Handle	impl crate::kept::Handle for ComputePipelineState
 trait-impl	metal2vulkan-runtime::ComputePipelineState impl crate::kept::Uncount	impl crate::kept::Uncount for ComputePipelineState
 trait-impl	metal2vulkan-runtime::DepthStencilDescriptor impl Default	impl Default for DepthStencilDescriptor
-trait-impl	metal2vulkan-runtime::Error impl From<Unmade>	impl From<Unmade> for Error
 trait-impl	metal2vulkan-runtime::Error impl fmt::Display	impl fmt::Display for Error
 trait-impl	metal2vulkan-runtime::Error impl std::error::Error	impl std::error::Error for Error
 trait-impl	metal2vulkan-runtime::FaultAddress impl fmt::Debug	impl fmt::Debug for FaultAddress
