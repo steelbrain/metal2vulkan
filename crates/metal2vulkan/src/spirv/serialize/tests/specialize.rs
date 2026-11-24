@@ -326,7 +326,10 @@ fn a_local_size_mode_beside_the_workgroup_composite_takes_its_values() {
         .filter(|(op, _)| *op == Op::ExecutionMode as u32)
         .map(|(_, operands)| operands)
         .collect();
-    assert_eq!(modes, [vec![entry, ExecutionMode::LocalSize as u32, 8, 4, 2]]);
+    assert_eq!(
+        modes,
+        [vec![entry, ExecutionMode::LocalSize as u32, 8, 4, 2]]
+    );
     let twice = inserted(&both, Op::EntryPoint, &mode, 0);
     match specialize(&twice, &values) {
         Err(crate::error::Error::Internal(error)) => {

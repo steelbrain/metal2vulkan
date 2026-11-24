@@ -230,7 +230,11 @@ pub fn specialize(words: &[u32], values: &[(u32, u64)]) -> Result<Vec<u32>, Erro
             ];
             out.splice(*at..*at, mode);
         }
-        _ => return Err(malformed("a WorkgroupSize beside more than one LocalSize mode")),
+        _ => {
+            return Err(malformed(
+                "a WorkgroupSize beside more than one LocalSize mode",
+            ))
+        }
     }
     Ok(out)
 }
