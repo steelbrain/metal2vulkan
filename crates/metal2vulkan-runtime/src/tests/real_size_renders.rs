@@ -55,6 +55,20 @@
 //!   complement of what it read: copied out and sampled through the view, every texel compared,
 //!   with the device's form and the pass's attachment counters.
 //!
+//! The shaders write each unorm channel's `k` of `L` (its largest value) as a float the target
+//! is to store as `k`. Vulkan's conversion of a float to a normalized fixed-point value pins only
+//! an exactly integral `r = f L`: it "returns one of the two unsigned binary integer values with
+//! exactly b bits which are closest to the floating-point value r", and "if r is equal to an
+//! integer, then that integer value must be returned"; it should round to nearest but need not.
+//! So the cells rely on each device's rounding of the forms they write, one form a width: every
+//! 8- and 16-bit write, a clear's too, is a quarter step up, `(k + 0.25) / L`, and every 10-bit
+//! one is `k / L` (`L` 1,023, or 3 for the 2-bit alpha), since a device may store
+//! `(k + 0.25) / 1023` as `k + 1` (lavapipe's `A2R10G10B10` targets do from `k` near 767 up). A
+//! device that stores one otherwise fails a cell by its own rounding, not by a wrong texel; a
+//! 10-bit cell that is not exact says which, with the first wrong texel's word and channels read
+//! and wanted, the difference in steps, and how many wrong texels are one step off at most in
+//! every channel.
+//!
 //! `llvm-as` assembles the shaders; without it the tests skip visibly.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
@@ -83,18 +97,19 @@ mod on_device {
     /// The owned shaders. `cover` draws the triangle that covers clip space. Each fragment writes
     /// render targets 0 and 1. `unorm8_pair` writes the 8-bit pattern (`real_size.rs`'s
     /// `unorm_pattern(8, 8, x, y)`) as `(k + 0.25) / 255`, `alpha8_pair` that pattern's alpha in
-    /// every channel, and `unorm10_pair` `unorm_pattern(10, 2, x, y)` as `(k + 0.25) / 1023`, its
-    /// alpha `(k + 0.25) / 3`, each with its pixel's position to target 1; `float_pair` writes
-    /// the float pattern (`real_size_overs.rs`) to both. `loop_front` and `loop_back` sample
-    /// texture 0 through sampler 0 at the pixel's centre (its position scaled by buffer 0's second
+    /// every channel, and `unorm10_pair` `unorm_pattern(10, 2, x, y)` as `k / 1023`, its alpha
+    /// `k / 3`, each with its pixel's position to target 1; `float_pair` writes the float
+    /// pattern (`real_size_overs.rs`) to both. `loop_front` and `loop_back` sample texture 0
+    /// through sampler 0 at the pixel's centre (its position scaled by buffer 0's second
     /// `float4`) and write to both buffer 0's first `float4` less what they read: `loop_front` the
     /// read's four channels, `loop_back` its red and green twice (red, green, red, green), as a
     /// two-channel target reads. `unorm8_one`, `unorm16_one` and `unorm10_one` write render target
     /// 0 alone: the 8-bit pattern, its channels times 257 as `(257 k + 0.25) / 65535`, and the
     /// 10-bit pattern. `loop_one` samples texture 0 as the loops do and writes render target 0
-    /// alone: with each channel's largest value `L` in buffer 0's first `float4`, the read `v`
-    /// rounded to its step, `k = uint(v L + 0.5)`, and its complement written a quarter step up,
-    /// `(L - k + 0.25) / L`, so neither the read's precision nor the write's rounding moves it.
+    /// alone: with each channel's largest value `L` in buffer 0's first `float4` and the part of
+    /// a step its width's writes add in its third (0.25, or 0 for 10 bits), the read `v` rounded
+    /// to its step, `k = uint(v L + 0.5)`, and its complement written as that width's writes are,
+    /// `(L - k + up) / L`, so the read's precision does not move it.
     /// `UNORM8`, `UNORM16`, `UNORM10` and `FLOAT` stand for the lines that make `%v`, the pattern
     /// at `(%x, %y)`.
     const SHADERS: &str = r#"; Owned synthetic shaders.
@@ -242,7 +257,9 @@ entry:
   %k = fptoui <4 x float> %vh to <4 x i32>
   %kf = tail call <4 x float> @air.convert.f.v4f32.u.v4i32(<4 x i32> %k)
   %c = fsub <4 x float> %m, %kf
-  %cq = fadd <4 x float> %c, <float 2.500000e-01, float 2.500000e-01, float 2.500000e-01, float 2.500000e-01>
+  %pup = getelementptr inbounds <4 x float>, ptr addrspace(2) %p, i64 2
+  %up = load <4 x float>, ptr addrspace(2) %pup, align 16
+  %cq = fadd <4 x float> %c, %up
   %o = fdiv <4 x float> %cq, %m
   ret <4 x float> %o
 }
@@ -331,7 +348,7 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr a
 "#;
 
     /// The lines that make `%v`, the 10-bit pattern at `(%x, %y)`, each colour channel's `k` as
-    /// `(k + 0.25) / 1023` and its alpha's as `(k + 0.25) / 3`.
+    /// `k / 1023` and its alpha's as `k / 3`.
     const UNORM10: &str = r#"  %k0 = and i32 %x, 1023
   %k1 = and i32 %y, 1023
   %xh = lshr i32 %x, 10
@@ -348,8 +365,7 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr a
   %kv1 = insertelement <4 x float> %kv0, float %f1, i64 1
   %kv2 = insertelement <4 x float> %kv1, float %f2, i64 2
   %kv = insertelement <4 x float> %kv2, float %f3, i64 3
-  %kq = fadd <4 x float> %kv, <float 2.500000e-01, float 2.500000e-01, float 2.500000e-01, float 2.500000e-01>
-  %v = fdiv <4 x float> %kq, <float 1.023000e+03, float 1.023000e+03, float 1.023000e+03, float 3.000000e+00>
+  %v = fdiv <4 x float> %kv, <float 1.023000e+03, float 1.023000e+03, float 1.023000e+03, float 3.000000e+00>
 "#;
 
     /// The libraries the device tests take: `real_size.rs`'s readers, `real_size_overs.rs`'s
@@ -436,9 +452,18 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr a
             }
         }
 
-        /// The clear colour of [`clear`](Self::clear): `(k + 0.25)` over each channel's largest.
+        /// The part of a step each write of this kind adds: a quarter for 8 bits, none for 10.
+        fn up(self) -> f64 {
+            match self {
+                Kind::Bgra8 | Kind::R8 => 0.25,
+                Kind::Rgb10a2 => 0.0,
+            }
+        }
+
+        /// The clear colour of [`clear`](Self::clear): `k` and [`up`](Self::up) over each
+        /// channel's largest.
         fn clear_color(self) -> ClearColor {
-            let [r, g, b, a] = self.clear().map(|k| f64::from(k) + 0.25);
+            let [r, g, b, a] = self.clear().map(|k| f64::from(k) + self.up());
             match self {
                 Kind::Rgb10a2 => ClearColor::new(r / 1023.0, g / 1023.0, b / 1023.0, a / 3.0),
                 Kind::Bgra8 | Kind::R8 => {
@@ -482,6 +507,13 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr a
             }
         }
     }
+
+    /// Where an `RGB10A2Unorm` texel's word, and a reader's word of any 10-bit texel, keep red,
+    /// green, blue and alpha.
+    const RGBA10: [u32; 4] = [0, 10, 20, 30];
+
+    /// Where a `BGR10A2Unorm` texel's word keeps red, green, blue and alpha.
+    const BGRA10: [u32; 4] = [20, 10, 0, 30];
 
     /// How a reader packs an `A8Unorm` view's alpha: bits 0 to 7.
     const ALPHA: Pack = Pack {
@@ -660,6 +692,56 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr a
             bytes[start..start + row].fill(0);
         }
         bytes
+    }
+
+    /// A 10-bit texel's channels, red, green, blue and alpha, from bits `at` of its
+    /// little-endian word: ten bits each, two for alpha.
+    fn channels10(texel: &[u8], at: [u32; 4]) -> [i64; 4] {
+        let word = u32::from_le_bytes(texel.try_into().expect("a word"));
+        let mask = [1023, 1023, 1023, 3];
+        std::array::from_fn(|c| i64::from((word >> at[c]) & mask[c]))
+    }
+
+    /// Where a 10-bit cell's read `got` of words in rows of `width` is not `want`: the first
+    /// wrong texel's word and channels (at bits `at`, as [`channels10`]) read and wanted, the
+    /// read less the wanted in steps, and how many wrong texels are one step off at most in
+    /// every channel, so a device's rounding of a write shows apart from a stale texel (the
+    /// complement) or a misplaced one. Empty where `got` is `want` or no read.
+    fn steps_off(got: &Result<Vec<u8>, String>, want: &[u8], at: [u32; 4], width: u32) -> String {
+        let Ok(got) = got else {
+            return String::new();
+        };
+        if got.len() != want.len() {
+            return String::new();
+        }
+        let (mut wrong, mut near, mut first) = (0u64, 0u64, None);
+        for (i, (g, w)) in (got.chunks_exact(4).zip(want.chunks_exact(4))).enumerate() {
+            if g == w {
+                continue;
+            }
+            let (read, wanted) = (channels10(g, at), channels10(w, at));
+            let off: [i64; 4] = std::array::from_fn(|c| read[c] - wanted[c]);
+            wrong += 1;
+            if off.iter().all(|d| d.abs() <= 1) {
+                near += 1;
+            }
+            if first.is_none() {
+                first = Some((i as u32, (g, read), (w, wanted), off));
+            }
+        }
+        let Some((i, (g, read), (w, wanted), off)) = first else {
+            return String::new();
+        };
+        let word = |texel: &[u8]| u32::from_le_bytes(texel.try_into().expect("a word"));
+        format!(
+            " (the first wrong texel, ({}, {}), reads word {:#010x}, channels {read:?}, not \
+             {:#010x}, {wanted:?}: {off:?} steps; {near} of {wrong} wrong texels are one step off \
+             at most in every channel)",
+            i % width,
+            i / width,
+            word(g),
+            word(w)
+        )
     }
 
     /// An error's text, with its variant.
@@ -898,16 +980,16 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr a
             );
             let cell = |how: &str| format!("{what}: {how}");
             let width = size[0];
+            let noted = |how: &str, got: &Result<Vec<u8>, String>, want: &[u8]| match kind {
+                Kind::Rgb10a2 => format!("{what}: {how}{}", steps_off(got, want, RGBA10, width)),
+                Kind::Bgra8 | Kind::R8 => cell(how),
+            };
             let words = |of: &dyn Fn(u32, u32) -> [u32; 4]| each(size, |x, y| kind.word(of(x, y)));
             let stale = words(&|x, y| kind.channels(x, y, true));
             let at_size = (&made.texture, size);
             let got = sampled(name, on, &self.readers, at_size, &kind.pack(), &stale);
-            cells.check(
-                &cell("sampled first, the CPU's complement"),
-                got,
-                &stale,
-                (4, width),
-            );
+            let how = "sampled first, the CPU's complement";
+            cells.check(&noted(how, &got, &stale), got, &stale, (4, width));
             if let Some(view) = &made.view {
                 let got = sampled(name, on, &self.readers, (view, size), &ALPHA, &stale);
                 let how = "its A8Unorm view sampled first, the CPU's complement";
@@ -933,13 +1015,24 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr a
             let place = (shape, at);
             let got = Ok(texels_in(&block, place));
             let how = "(a) the block's bytes the CPU reads after synchronizeResource";
-            cells.check(&cell(how), got, &image, (texel as usize, width));
+            cells.check(
+                &noted(how, &got, &image),
+                got,
+                &image,
+                (texel as usize, width),
+            );
             let got = copy_out(name, on, at_size, texel, &image);
             let how = "(b) a blit of the texture into another buffer";
-            cells.check(&cell(how), got, &image, (texel as usize, width));
+            cells.check(
+                &noted(how, &got, &image),
+                got,
+                &image,
+                (texel as usize, width),
+            );
             let want = words(&|x, y| after(kind, size, x, y));
             let got = sampled(name, on, &self.readers, at_size, &kind.pack(), &want);
-            cells.check(&cell("(c) sampled last"), got, &want, (4, width));
+            let how = "(c) sampled last";
+            cells.check(&noted(how, &got, &want), got, &want, (4, width));
             if let Some(view) = &made.view {
                 let got = sampled(name, on, &self.readers, (view, size), &ALPHA, &want);
                 let how = "(c) its A8Unorm view sampled last";
@@ -1408,6 +1501,15 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr a
             self.largest().map(|largest| largest as f32)
         }
 
+        /// The part of a step each write of this layer adds: a quarter for 8 and 16 bits, none
+        /// for 10.
+        fn up(self) -> f32 {
+            match self {
+                Layer::Bgra8 | Layer::Rgba16 => 0.25,
+                Layer::Bgr10a2 => 0.0,
+            }
+        }
+
         /// The pattern's channels at `(x, y)`, or their complement, in shader order.
         fn channels(self, x: u32, y: u32, complemented: bool) -> [u32; 4] {
             let k = match self {
@@ -1432,11 +1534,12 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr a
             }
         }
 
-        /// The clear colour of [`clear`](Self::clear): `(k + 0.25)` over each channel's largest.
+        /// The clear colour of [`clear`](Self::clear): `k` and [`up`](Self::up) over each
+        /// channel's largest.
         fn clear_color(self) -> ClearColor {
-            let (clear, largest) = (self.clear(), self.largest());
+            let (clear, largest, up) = (self.clear(), self.largest(), f64::from(self.up()));
             let [r, g, b, a] =
-                std::array::from_fn(|c| (f64::from(clear[c]) + 0.25) / f64::from(largest[c]));
+                std::array::from_fn(|c| (f64::from(clear[c]) + up) / f64::from(largest[c]));
             ClearColor::new(r, g, b, a)
         }
 
@@ -1545,19 +1648,27 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr a
                 Layer::Rgba16 => [" (red and green)", " (blue and alpha)"][read],
                 Layer::Bgra8 | Layer::Bgr10a2 => "",
             };
-            cells.check(&format!("{what}: {how}{part}"), got, &want, (4, size[0]));
+            let off = match layer {
+                Layer::Bgr10a2 => steps_off(&got, &want, RGBA10, size[0]),
+                Layer::Bgra8 | Layer::Rgba16 => String::new(),
+            };
+            cells.check(
+                &format!("{what}: {how}{part}{off}"),
+                got,
+                &want,
+                (4, size[0]),
+            );
         }
     }
 
     /// Draws `pattern` into `pass`'s one target, cut to [`drawn`] of `size`; then, where `looped`
     /// names one, after a memory barrier its loop over the whole target, sampling the texture it
-    /// names through sampler `sampler` as its attachment, with each channel's largest value it
-    /// names.
+    /// names through the sampler it names as its attachment, writing as the layer it names does.
     fn draw_one(
         name: &str,
         queue: &CommandQueue,
         (pass, pattern, size): (&RenderPassDescriptor, &RenderPipelineState, [u32; 2]),
-        looped: Option<(&RenderPipelineState, &Texture, &SamplerState, [f32; 4])>,
+        looped: Option<(&RenderPipelineState, &Texture, &SamplerState, Layer)>,
     ) -> Result<(), String> {
         let [x, y, width, height] = drawn(size).map(u64::from);
         let command_buffer = queue.command_buffer().map_err(said)?;
@@ -1570,10 +1681,10 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr a
             height,
         });
         (encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)).map_err(said)?;
-        if let Some((state, texture, sampler, steps)) = looped {
-            let constants: Vec<u8> = steps
-                .into_iter()
+        if let Some((state, texture, sampler, layer)) = looped {
+            let constants: Vec<u8> = (layer.steps().into_iter())
                 .chain([1.0 / size[0] as f32, 1.0 / size[1] as f32, 0.0, 0.0])
+                .chain([layer.up(); 4])
                 .flat_map(f32::to_le_bytes)
                 .collect();
             encoder.memory_barrier().map_err(said)?;
@@ -1740,7 +1851,7 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr a
                 target.store_action = StoreAction::Store;
                 let counters = device.counters();
                 let before = counters.metrics();
-                let loops = Some((&looping, &view, &readers.sampler, layer.steps()));
+                let loops = Some((&looping, &view, &readers.sampler, layer));
                 let drew = draw_one(name, &queue, (&pass, &pattern, size), loops);
                 let moved = counters.metrics();
                 let what = format!(
@@ -1760,8 +1871,12 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr a
                 };
                 let image = each(size, |x, y| layer.bytes(after(x, y)));
                 let got = copy_out(name, on, (&texture, size), texel, &image);
+                let off = match layer {
+                    Layer::Bgr10a2 => steps_off(&got, &image, BGRA10, width),
+                    Layer::Bgra8 | Layer::Rgba16 => String::new(),
+                };
                 cells.check(
-                    &format!("{what}: copied out"),
+                    &format!("{what}: copied out{off}"),
                     got,
                     &image,
                     (texel as usize, width),
