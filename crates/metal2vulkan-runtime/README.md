@@ -3998,6 +3998,9 @@ cache is answered compile-required on both.
   on the RTX 2080, RTX 3090 and RTX 5080 Laptop list none (`vulkaninfo`, jobs m3-max-48727, 48729
   and 48731); RADV on the RX 7900 XTX, the 780Ms and the RX 550, ANV on the Iris Xe, lavapipe,
   KosmicKrisp and the UHD 630's Windows driver list it (48727 to 48731, 48736, 48737 and 61508).
+  A WebGL 2 page reaches it: a browser's GL-on-Metal layer copies stencil for `blitFramebuffer`
+  with `STENCIL_BUFFER_BIT` by a draw whose fragment function writes `[[stencil]]`, on a Metal
+  device that it does not take for an Intel or NVIDIA GPU.
 - On a device without `shaderQuadControl` (Quad control, under Floor), a fragment function whose
   group operations read, combine or count other lanes (every SIMD-group and quad group function, and
   the SIMD-group matrix functions) is refused at creation, an `Error::Translation` naming
