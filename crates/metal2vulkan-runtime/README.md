@@ -1209,6 +1209,15 @@ the Direct3D 11 texture's payload until it is freed.
   own first submission can wait out that allocation: on the same card (rt at ac1896537f) a
   16 MiB Private allocation of 661 µs held the next submit for 603 µs, and on an RTX 2080 one of
   647 µs held it for 579 µs.
+- Under AMD's open Linux driver (AMDVLK 2025.Q2.1) on a Radeon 780M, a 16 MiB allocation takes
+  over 5 ms about one time in eight. In one 591-second guest desktop session (rt at 7360a148bb),
+  60 of the block-maker thread's 502 allocations took over 5 ms, the longest 129.1 ms, and 8 of
+  the 62 made on a caller's thread did, the longest 35.5 ms. The pool keeps one wholly free
+  16 MiB unit per class made ahead, so textures made in a burst, faster than one allocation each,
+  take their blocks on the call, and that `Device::new_texture` waits for the allocation: 49 of
+  the session's 350 texture blocks were made so, the longest in 29.06 ms. The pool holds no more
+  memory ahead to avoid it. A take does not wait for an allocation the block-maker thread is
+  making, which would inherit that allocation's tail.
 - NVIDIA's Linux driver allocates host-visible memory at about 0.14 ms per MiB on an RTX 3090 and
   0.2 ms per MiB on an RTX 2080, in every form we tried (plain, with a device address, dedicated,
   cached or not), against about 0.03 ms per MiB for device-local memory on the 3090. Device-local
