@@ -63,19 +63,29 @@ fn barrier_alone() -> String {
     format!("  call void @air.wg.barrier(i32 2, i32 1)\n  %r = add i32 %1, 1\n{STORE}")
 }
 
-/// A threadgroup barrier at the head of a loop of four trips whose two latches, one in each arm
-/// of a selection on the thread's parity, branch back to the head: every thread reaches the
-/// barrier each trip, and the loop is re-entered by back edges from inside a selection.
-fn barrier_in_two_latches() -> String {
+/// `take` (defining `%v` from `%acc`) at the head of a loop of four trips whose two latches, one
+/// in each arm of a selection on the trip's parity, each branch back to the head or out: every
+/// thread takes the same arm each trip, and the loop is re-entered by back edges from inside a
+/// selection. (On the thread's parity instead, the loop's exit differs between threads, and the
+/// kernel's barriers take the predicated walk, whose loop one latch closes.)
+fn re_entered(take: &str) -> String {
     format!(
-        "  %odd = and i32 %1, 1\n  %c = icmp eq i32 %odd, 0\n  br label %head\n\n\
-         head:\n  %i = phi i32 [ 0, %entry ], [ %i1, %a ], [ %i1, %b ]\n  call void @air.wg.barrier(i32 2, i32 1)\n\
-         %i1 = add i32 %i, 1\n  %more = icmp ult i32 %i1, 4\n  br i1 %c, label %a, label %b\n\n\
-         a:\n  br i1 %more, label %head, label %exit\n\n\
-         b:\n  br i1 %more, label %head, label %exit\n\n\
-         exit:\n  %r = add i32 %i1, %1\n{STORE}"
+        "  br label %head\n\n\
+         head:\n  %i = phi i32 [ 0, %entry ], [ %i1, %a ], [ %i1, %b ]\n\
+         %acc = phi i32 [ %1, %entry ], [ %x1, %a ], [ %x2, %b ]\n  {take}\n\
+         %i1 = add i32 %i, 1\n  %more = icmp ult i32 %i1, 4\n  %odd = and i32 %i, 1\n\
+         %c = icmp eq i32 %odd, 0\n  br i1 %c, label %a, label %b\n\n\
+         a:\n  %x1 = add i32 %v, 1\n  br i1 %more, label %head, label %exit\n\n\
+         b:\n  %x2 = mul i32 %v, 3\n  br i1 %more, label %head, label %exit\n\n\
+         exit:\n  %r = phi i32 [ %x1, %a ], [ %x2, %b ]\n{STORE}"
     )
 }
+
+/// A threadgroup barrier at the head of the re-entered loop.
+const BARRIER_TAKE: &str = "call void @air.wg.barrier(i32 2, i32 1)\n  %v = add i32 %acc, 0";
+
+/// A shuffle at the head of the re-entered loop, reading lane 0.
+const SHUFFLE_TAKE: &str = "%v = tail call i32 @air.simd_shuffle.u.i32(i32 %acc, i16 0)";
 
 /// A shuffle in a loop of four trips, each reading lane `i` of the running value.
 fn shuffle_counted() -> String {
@@ -89,15 +99,17 @@ fn shuffle_counted() -> String {
 }
 
 /// A shuffle after the merge of a selection on the thread's parity, inside a branch only threads
-/// below 8 take.
+/// below 8 take, which also stores its result: the store keeps the shuffle in the branch (with
+/// the store after the branch, the shuffle is hoisted out of it, to the entry).
 fn shuffle_after_merge_in_branch() -> String {
-    format!(
-        "  %c = icmp ult i32 %1, 8\n  br i1 %c, label %in, label %done\n\n\
-         in:\n  %odd = and i32 %1, 1\n  %d = icmp eq i32 %odd, 0\n  br i1 %d, label %a, label %b\n\n\
-         a:\n  br label %m\n\nb:\n  br label %m\n\n\
-         m:\n  %v = phi i32 [ 1, %a ], [ 2, %b ]\n  %s = tail call i32 @air.simd_shuffle.u.i32(i32 %v, i16 0)\n  br label %done\n\n\
-         done:\n  %r = phi i32 [ %s, %m ], [ 7, %entry ]\n{STORE}"
-    )
+    "  %c = icmp ult i32 %1, 8\n  br i1 %c, label %in, label %done\n\n\
+     in:\n  %odd = and i32 %1, 1\n  %d = icmp eq i32 %odd, 0\n  br i1 %d, label %a, label %b\n\n\
+     a:\n  br label %m\n\nb:\n  br label %m\n\n\
+     m:\n  %v = phi i32 [ 1, %a ], [ 2, %b ]\n  %s = tail call i32 @air.simd_shuffle.u.i32(i32 %v, i16 0)\n\
+     %e = zext i32 %1 to i64\n  %p = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %e\n\
+     store i32 %s, ptr addrspace(1) %p, align 4\n  br label %done\n\n\
+     done:\n  ret void\n"
+        .to_string()
 }
 
 /// A shuffle in a loop whose exit compares the trip with the thread's index.
@@ -179,21 +191,38 @@ fn a_threadgroup_barrier_alone_states_no_mode() {
 /// A threadgroup barrier in a loop two latches inside a selection re-enter takes the profile's
 /// mode: `MaximallyReconvergesKHR` and `Guaranteed` with maximal reconvergence; else
 /// `SubgroupUniformControlFlowKHR` where offered, or no mode, with `ImplementationDefined` and
-/// `DeviceReconvergence`.
+/// `DeviceReconvergence`. So does a shuffle there, wherever it compiles to a subgroup shuffle.
 #[test]
-fn a_threadgroup_barrier_in_a_re_entered_loop_keeps_the_mode() {
-    let Some(bc) = kernel("barrier_two_latches", &barrier_in_two_latches()) else {
+fn a_tangled_instruction_in_a_re_entered_loop_keeps_the_mode() {
+    let Some(barrier) = kernel("barrier_re_entered", &re_entered(BARRIER_TAKE)) else {
         return;
     };
+    let Some(shuffle) = kernel("shuffle_re_entered", &re_entered(SHUFFLE_TAKE)) else {
+        return;
+    };
+    let mut shuffled = 0;
     for (stem, p) in committed_profiles().expect("profiles") {
-        let r = reading(&bc, &stem, &p).unwrap_or_else(|| panic!("{stem}: refused"));
         let (mode, reconvergence, noted) = tangled_on(&p);
+        let r = reading(&barrier, &stem, &p).unwrap_or_else(|| panic!("{stem}: refused"));
         assert_eq!(
             (r.0, r.1, r.2, r.3),
             (mode, reconvergence, noted, true),
-            "{stem}"
+            "{stem} barrier"
+        );
+        let Some(r) = reading(&shuffle, &stem, &p) else {
+            continue;
+        };
+        if !r.4 {
+            continue;
+        }
+        shuffled += 1;
+        assert_eq!(
+            (r.0, r.1, r.2, r.3),
+            (mode, reconvergence, noted, true),
+            "{stem} shuffle"
         );
     }
+    assert!(shuffled > 0, "no profile compiled a subgroup shuffle");
 }
 
 /// A shuffle in a loop of a constant trip count stands where every thread of the threadgroup

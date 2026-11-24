@@ -1578,9 +1578,10 @@ fn an_empty_region_declares_the_arena_beside_the_scratch() {
 }
 
 /// An emulated operation exchanges through workgroup memory between workgroup barriers in
-/// workgroup-uniform control flow, so its result does not depend on how subgroups reconverge; a
-/// threadgroup barrier keeps the profile's reconvergence (`roadmap-2022` has no maximal
-/// reconvergence).
+/// workgroup-uniform control flow, so its result does not depend on how subgroups reconverge.
+/// `region_k`'s shuffle stands in its entry block and its threadgroup barrier outside any loop, so
+/// on `runtime-floor`, which has no maximal reconvergence, it states no mode and records
+/// `Guaranteed` with no `DeviceReconvergence` (`lower::simd::reentry`).
 #[test]
 fn emulated_operations_do_not_depend_on_reconvergence() {
     let Some(bc) = assemble("simd_uniform") else {
@@ -1600,7 +1601,13 @@ fn emulated_operations_do_not_depend_on_reconvergence() {
     let floor = profile("runtime-floor", DevicePolicy::RESIDENT_TABLES).expect("profile");
     assert!(!floor.fields().subgroup.maximal_reconvergence);
     let a = compile(&bc, "region_k", &floor).expect("region_k");
-    assert_eq!(a.reconvergence, Reconvergence::ImplementationDefined);
+    assert_eq!(
+        (
+            a.reconvergence,
+            a.precision.contains(&PrecisionNote::DeviceReconvergence)
+        ),
+        (Reconvergence::Guaranteed, false)
+    );
 }
 
 /// On lavapipe without maximal reconvergence (its description with `shaderMaximalReconvergence`
