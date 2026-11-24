@@ -691,6 +691,9 @@ pub(crate) fn run(core: Arc<Core>) {
         if newly_lost.is_some() || !retire.is_empty() || !fire.is_empty() {
             state.waiting = Waiting::Not;
             drop(state);
+            // A round that fired events or found the device lost wakes held work whatever it
+            // reached (`Work::completed`).
+            let reached = (newly_lost.is_none() && fire.is_empty()).then(|| done.completed());
             if let Some(loss) = newly_lost {
                 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
                 done.enter(format!("the loss's fault report and work.lose ({loss:?})"));
@@ -701,7 +704,7 @@ pub(crate) fn run(core: Arc<Core>) {
             // it ends, so held work waits for its end.
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             done.enter("work.completed".to_owned());
-            core.work.completed();
+            core.work.completed(reached);
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             done.enter("pool.retired".to_owned());
             core.pool.retired();

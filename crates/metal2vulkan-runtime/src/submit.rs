@@ -196,9 +196,12 @@ pub(crate) struct Work {
     /// lost: a staging call asleep for it looks again ([`Work::stage`]). Signalled only while one
     /// sleeps ([`WorkState::span_sleepers`]).
     spans: Condvar,
-    /// A queue holds a group, or a command buffer for room: the completion thread wakes the
-    /// thread as submissions complete.
-    keeping: AtomicBool,
+    /// The progress value whose completion can leave room for what a queue holds, a group or a
+    /// command buffer held for room: the first of that queue's submissions not seen complete
+    /// ([`room`]), the lowest over the queues that hold. The completion thread wakes the thread
+    /// for a completion that reaches it ([`Work::completed`]); 0 while the thread passes, so any
+    /// completion then wakes it again, and `u64::MAX` while no queue holds.
+    wake_at: AtomicU64,
     /// Bytes of textures and blocks released while an upload held them, since the last
     /// submission that left no upload unsent: they count against [`UPLOAD_BYTES`]. A texture's
     /// release adds without the work lock, which its drop may run under.
@@ -654,7 +657,7 @@ impl Work {
             }),
             changed: Condvar::new(),
             spans: Condvar::new(),
-            keeping: AtomicBool::new(false),
+            wake_at: AtomicU64::new(u64::MAX),
             released: AtomicU64::new(0),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             counting: AtomicBool::new(false),
@@ -754,10 +757,13 @@ impl Work {
         self.wake();
     }
 
-    /// Submissions completed: where a queue holds a group or a command buffer for room, it may
-    /// go.
-    pub(crate) fn completed(&self) {
-        if self.keeping.load(Ordering::SeqCst) {
+    /// Submissions completed through `reached`, or, with none, a round that fired events or found
+    /// the device lost: where a queue holds a group or a command buffer for room, it may go. A
+    /// completion short of the submission whose end leaves room, as a member of a group sent
+    /// member by member before its last, wakes nothing.
+    pub(crate) fn completed(&self, reached: Option<u64>) {
+        let at = self.wake_at.load(Ordering::SeqCst);
+        if at != u64::MAX && reached.is_none_or(|reached| reached >= at) {
             self.poke();
         }
     }
@@ -2387,7 +2393,7 @@ fn pass<'a>(core: &'a Core, mut state: MutexGuard<'a, WorkState>) -> MutexGuard<
     let work = &core.work;
     // Marked before the completed value is read: a completion the read misses sees the mark and
     // wakes the thread.
-    work.keeping.store(true, Ordering::SeqCst);
+    work.wake_at.store(0, Ordering::SeqCst);
     state.settle(core.done.completed());
     let mut joined: Vec<Joined> = Vec::new();
     let mut ended: Vec<Ended> = Vec::new();
@@ -2450,9 +2456,15 @@ fn pass<'a>(core: &'a Core, mut state: MutexGuard<'a, WorkState>) -> MutexGuard<
             .front()
             .is_some_and(|entry| entry.held.is_some())
     };
-    if (state.fifos.iter()).all(|fifo| fifo.group.is_none() && !holds(fifo)) {
-        work.keeping.store(false, Ordering::SeqCst);
-    }
+    // What a queue holds goes once its first submission in flight completes, so completions
+    // short of that one, as a group's members before its last, wake nothing. One during the pass
+    // saw the mark of 0 and wakes the thread again.
+    let wake_at = (state.fifos.iter())
+        .filter(|fifo| fifo.group.is_some() || holds(fifo))
+        .map(|fifo| (fifo.in_flight.front()).map_or(0, |&(value, _)| value))
+        .min()
+        .unwrap_or(u64::MAX);
+    work.wake_at.store(wake_at, Ordering::SeqCst);
     if !joined.is_empty() || !ended.is_empty() {
         drop(state);
         scheduled(&mut joined);
