@@ -944,11 +944,14 @@ promises a consistent reading to images of the same creation parameters. A textu
 ask more (`ShaderWrite` on a texture made without `D3D11_BIND_UNORDERED_ACCESS`) is
 `Gap::SurfaceUsage`. The one usage beside them is the attachment feedback loop's, which Direct3D
 11's description has no counterpart for: taken where the descriptor's texture is a render target
-a draw may read in its own pass. The image lists its own format and the descriptor's alone: where
-they differ (a chroma plane of `R16Uint` under an `RG8Unorm` texture, the same bytes per texel in
-Metal's same view class) it is mutable and lists both, else it is not mutable, and a view of any
-other format is `Gap::TextureView` of `TextureViewKind::SurfacePixelFormat`. The consumer keeps
-and closes the handles.
+a draw may read in its own pass. The image is mutable where it lists more than its own format, and
+it lists at most two more, the two places it asks beyond the texture Direct3D 11 made: the
+descriptor's format where it differs (a chroma plane of `R16Uint` under an `RG8Unorm` texture, the
+same bytes per texel in Metal's same view class), and the descriptor's sRGB sibling, which a guest
+may view the plane through (`R8Unorm_sRGB` of an 8-bit luma), where the device holds it and the
+import query takes the list. A 10-bit luma (`R16Unorm`) lists none and is not mutable. A view of
+any other format is `Gap::TextureView` of `TextureViewKind::SurfacePixelFormat`. The consumer
+keeps and closes the handles.
 
 The import submits nothing and waits for nothing. Vulkan 1.4's section 12.5.2 says "When images
 created with external memory handle types listed in the external image implied layouts table are

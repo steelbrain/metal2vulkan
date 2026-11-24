@@ -21,10 +21,10 @@
 //! no export handle. Each plane's image takes the usage its texture's bind flags give and no
 //! other: made rendered and sampled, no storage; made sampled alone, not rendered; and a texture
 //! over a plane whose uses ask storage is `Gap::SurfaceUsage`, where the device stores its
-//! format. The same planes made with `PixelFormatView` usage list only the image's own format and
-//! the texture's (the luma's image not mutable), and a swizzled view in a third format of their
-//! class (`R8Uint` of the luma, `RG8Uint` of the chroma) is `Gap::TextureView` of
-//! `SurfacePixelFormat`.
+//! format. Planes made with `PixelFormatView` usage, an 8-bit luma, a chroma and a 10-bit luma,
+//! list no format past their own, their texture's and that one's sRGB sibling (the 10-bit luma's
+//! image not mutable), and a swizzled view in a third format of their class (`R8Uint`, `RG8Uint`,
+//! `R16Uint`) is `Gap::TextureView` of `SurfacePixelFormat`.
 
 #[cfg(all(windows, any(m2v_gpu, m2v_cpu_icd)))]
 mod on_device {
@@ -120,6 +120,7 @@ mod on_device {
             TextureSwizzleChannels, TextureType, TextureUsage, TextureViewKind,
         };
         use ash::vk;
+        use metal2vulkan::metal::format::srgb_sibling;
         use std::os::windows::io::AsHandle;
         use std::time::Instant;
 
@@ -592,31 +593,56 @@ mod on_device {
             );
         }
 
-        /// Each plane made with `ShaderRead` and `PixelFormatView` usage, reached through its views
-        /// alone: its image lists its own format and its texture's alone (both where they differ,
-        /// none where they are one, so the luma's image is not mutable), as Direct3D 11 made the
-        /// texture in one format; a swizzled view of it in a third format of its class (`R8Uint` of
-        /// the luma, `RG8Uint` of the chroma) is `Gap::TextureView` of `SurfacePixelFormat`.
+        /// Three planes made with `ShaderRead`, `RenderTarget` and `PixelFormatView` usage, as a
+        /// video's are, reached through their views alone: an 8-bit luma (`R8_UNORM`), a chroma
+        /// (`R16_UINT` under `RG8Unorm`) and a 10-bit luma (`R16_UNORM`). Each image lists no
+        /// format past its own, the descriptor's and the descriptor's sRGB sibling, and the pair
+        /// where the two differ: the 10-bit luma's lists none and is not mutable. A swizzled view
+        /// in a third format of the class (`R8Uint`, `RG8Uint`, `R16Uint`) is `Gap::TextureView` of
+        /// `SurfacePixelFormat`. The lists are printed.
         #[test]
-        fn every_device_refuses_a_direct3d_11_plane_view_in_a_third_format() {
+        fn every_device_lists_a_direct3d_11_plane_s_formats_and_no_third() {
             each_device("import_d3d11_surface_views", |name, _, device| {
                 let luid = luid(&device).unwrap_or_else(|| panic!("{name}: no valid LUID"));
                 let d3d = D3d::on_luid(luid)
                     .unwrap_or_else(|| panic!("{name}: no DXGI adapter of LUID {luid:02x?}"));
-                let textures = PLANES
-                    .each_ref()
-                    .map(|p| d3d.shared_texture(p.width, p.height, p.dxgi, BOUND));
-                let descriptors = PLANES.each_ref().map(|p| {
-                    let mut d =
-                        TextureDescriptor::new(TextureType::Type2D, p.view, p.width, p.height);
-                    d.usage = TextureUsage::SHADER_READ | TextureUsage::PIXEL_FORMAT_VIEW;
+                // Each plane: the texture's format in rt's terms and DXGI's, the descriptor's, and
+                // the third format a view asks.
+                let shapes = [
+                    (
+                        PixelFormat::R8Unorm,
+                        d3d::DXGI_FORMAT_R8_UNORM,
+                        PixelFormat::R8Unorm,
+                        PixelFormat::R8Uint,
+                    ),
+                    (
+                        PixelFormat::R16Uint,
+                        d3d::DXGI_FORMAT_R16_UINT,
+                        PixelFormat::RG8Unorm,
+                        PixelFormat::RG8Uint,
+                    ),
+                    (
+                        PixelFormat::R16Unorm,
+                        d3d::DXGI_FORMAT_R16_UNORM,
+                        PixelFormat::R16Unorm,
+                        PixelFormat::R16Uint,
+                    ),
+                ];
+                let (width, height) = (64, 32);
+                let textures =
+                    shapes.map(|(_, dxgi, _, _)| d3d.shared_texture(width, height, dxgi, BOUND));
+                let descriptors = shapes.map(|(_, _, view, _)| {
+                    let mut d = TextureDescriptor::new(TextureType::Type2D, view, width, height);
+                    d.usage = TextureUsage::SHADER_READ
+                        | TextureUsage::RENDER_TARGET
+                        | TextureUsage::PIXEL_FORMAT_VIEW;
                     d
                 });
-                let planes: Vec<D3d11Plane<'_>> = (textures.iter().zip(&PLANES))
+                let planes: Vec<D3d11Plane<'_>> = (textures.iter().zip(&shapes))
                     .zip(&descriptors)
-                    .map(|((texture, plane), descriptor)| D3d11Plane {
+                    .map(|((texture, &(image, ..)), descriptor)| D3d11Plane {
                         handle: texture.handle.as_handle(),
-                        image_format: plane.image,
+                        image_format: image,
                         bind_flags: BOUND,
                         descriptor: *descriptor,
                         index: None,
@@ -626,36 +652,49 @@ mod on_device {
                     .unwrap_or_else(|error| panic!("{name}: the import: {error}"));
                 let first = IndexClass::Texture.range().start;
                 let _grant =
-                    (device.grant_indices(IndexClass::Texture, first, 2)).expect("a grant");
+                    (device.grant_indices(IndexClass::Texture, first, 3)).expect("a grant");
                 let swizzle = TextureSwizzleChannels {
                     red: TextureSwizzle::Red,
                     green: TextureSwizzle::Red,
                     blue: TextureSwizzle::Red,
                     alpha: TextureSwizzle::One,
                 };
-                // Each view's format, and its index.
-                let views = [
-                    (PixelFormat::R8Uint, first),
-                    (PixelFormat::RG8Uint, first + 1),
-                ];
-                for ((texture, plane), (d, (view, at))) in
-                    (surface.planes().iter().zip(&PLANES)).zip(descriptors.iter().zip(views))
+                for (((texture, d), &(image, _, view, third)), at) in
+                    (surface.planes().iter().zip(&descriptors))
+                        .zip(&shapes)
+                        .zip(first..)
                 {
-                    let label = format!("{name}: {:?} as {:?}", plane.image, plane.view);
-                    // The Vulkan format rt holds `pixel_format` in, for this plane's texture.
+                    let label = format!("{name}: {image:?} as {view:?}");
+                    // The Vulkan format rt holds `pixel_format` in as a view of this plane's
+                    // texture, where the device holds it.
                     let format = |pixel_format| {
                         let mut d = *d;
                         d.pixel_format = pixel_format;
-                        device.plane_plan(&d).expect("the plan").format
+                        device.plane_plan(&d).ok().map(|plan| plan.format.as_raw())
                     };
-                    let listed = texture.object().image_view_formats().to_vec();
-                    let want = match plane.image == plane.view {
+                    let listed: Vec<i32> = (texture.object().image_view_formats().iter())
+                        .map(|format| format.as_raw())
+                        .collect();
+                    let own = [format(image), format(view)].map(|f| f.expect("the plane's format"));
+                    let sibling = srgb_sibling(view).and_then(format);
+                    let pair: Vec<i32> = match image == view {
                         true => Vec::new(),
-                        false => vec![format(plane.image), format(plane.view)],
+                        false => own.to_vec(),
                     };
-                    assert_eq!(listed, want, "{label}: the formats the image lists");
+                    assert!(
+                        (listed.iter()).all(|f| own.contains(f) || Some(*f) == sibling),
+                        "{label}: the image lists {listed:?}, past its own, the descriptor's \
+                         ({own:?}) and the sibling's ({sibling:?})"
+                    );
+                    assert!(
+                        pair.iter().all(|f| listed.contains(f)),
+                        "{label}: the image lists {listed:?}, not the pair {pair:?}"
+                    );
+                    if image == view && sibling.is_none() {
+                        assert!(listed.is_empty(), "{label}: not mutable: {listed:?}");
+                    }
                     let made = texture.new_texture_view_with_swizzle(
-                        view,
+                        third,
                         TextureType::Type2D,
                         0..1,
                         0..1,
@@ -669,13 +708,12 @@ mod on_device {
                                 kind: TextureViewKind::SurfacePixelFormat,
                             }))
                         ),
-                        "{label}: the {view:?} view: {:?}",
+                        "{label}: the {third:?} view: {:?}",
                         made.err()
                     );
-                    let raw: Vec<i32> = listed.iter().map(|format| format.as_raw()).collect();
                     println!(
-                        "d3d11-views: {label}: the image lists {raw:?}; the swizzled {view:?} view \
-                         refused"
+                        "d3d11-views: {label}: the image lists {listed:?} (own and descriptor's \
+                         {own:?}, sibling {sibling:?}); the swizzled {third:?} view refused"
                     );
                 }
             });
@@ -730,13 +768,15 @@ mod on_device {
                             given.as_raw()
                         );
                         assert_eq!(
-                            usage & !given,
-                            vk::ImageUsageFlags::empty(),
-                            "{label}: a usage the bind flags do not give, of {usage:?}"
-                        );
+                                                    (usage & !given).as_raw(),
+                        ,
+                                                    "{label}: a usage the bind flags do not give, of {:#x}",
+                                                    usage.as_raw()
+                                                );
                         assert!(
                             usage.contains(read),
-                            "{label}: copied and sampled: {usage:?}"
+                            "{label}: copied and sampled: {:#x}",
+                            usage.as_raw()
                         );
                     }
                 }
@@ -936,6 +976,7 @@ mod on_device {
         use std::os::windows::io::{FromRawHandle, OwnedHandle, RawHandle};
         use std::time::{Duration, Instant};
 
+        pub(super) const DXGI_FORMAT_R16_UNORM: u32 = 56;
         pub(super) const DXGI_FORMAT_R16_UINT: u32 = 57;
         pub(super) const DXGI_FORMAT_R8_UNORM: u32 = 61;
         const D3D_DRIVER_TYPE_UNKNOWN: i32 = 0;

@@ -1945,7 +1945,8 @@ pub enum TextureViewKind {
     /// ([`Device::new_exported_surface`](crate::Device::new_exported_surface)), the device's
     /// linear image does not sample that format or its export does not take the list; over a
     /// Direct3D 11 texture (`Device::import_d3d11_surface`, on Windows), the image lists only its
-    /// own format and the plane's texture's, as Direct3D 11 made the texture in one format.
+    /// own format, the plane's texture's and that one's sRGB sibling, as Direct3D 11 made the
+    /// texture in one format.
     SurfacePixelFormat,
     /// Another texture type than the casts built
     /// ([`Texture::new_texture_view`](crate::Texture::new_texture_view)).

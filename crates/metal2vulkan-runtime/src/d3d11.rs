@@ -96,9 +96,13 @@ impl Device {
     /// flags than the texture's; its rules for an import of Vulkan's own export ask the same
     /// image (`VUID-VkMemoryDedicatedAllocateInfo-image-01876`).
     ///
-    /// **Views of another format.** The image lists no format but its own and the descriptor's.
-    /// Where the two differ (a chroma plane of `R16Uint` under an `RG8Unorm` texture), it is
-    /// mutable and lists both; else it is not mutable. A view of any other format
+    /// **Views of another format.** The image is mutable where it lists more than its own
+    /// format, and lists at most two more, the two places it asks beyond the texture Direct3D 11
+    /// made: the descriptor's format where it differs from the texture's (a chroma plane of
+    /// `R16Uint` under an `RG8Unorm` texture), and the descriptor's sRGB sibling, which a guest
+    /// may view the plane through (`R8Unorm_sRGB` of an 8-bit luma), where the device holds it as
+    /// a view of the texture and the import query takes the list with the image's usage. A
+    /// 10-bit luma (`R16Unorm`) lists none and is not mutable. A view of any other format
     /// ([`Texture::new_texture_view`](crate::Texture::new_texture_view)) is [`Gap::TextureView`]
     /// of [`TextureViewKind::SurfacePixelFormat`](crate::TextureViewKind::SurfacePixelFormat).
     ///
@@ -217,12 +221,31 @@ impl Device {
             }));
         }
         let (format, view) = (image_plan.format, plan.format);
-        // The image's own format and the descriptor's, where they differ: the formats it lists,
-        // mutable; none, and not mutable, where they are one.
-        let list: Vec<vk::Format> = match format == view {
+        // The image's own format and the descriptor's, where they differ: the list the usage is
+        // decided with.
+        let pair: Vec<vk::Format> = match format == view {
             true => Vec::new(),
             false => vec![format, view],
         };
+        // With the descriptor's sRGB sibling, which a guest may view the plane through, where the
+        // device holds it as a view of the plane's texture (`R8Unorm_sRGB` of an 8-bit luma).
+        let sibling = (formats::srgb_sibling(d.pixel_format))
+            .and_then(|sibling| {
+                let mut viewed = *d;
+                viewed.pixel_format = sibling;
+                self.plane_plan(&viewed).ok()
+            })
+            .map(|sibling| sibling.format)
+            .filter(|sibling| plan.view_formats.contains(sibling));
+        let siblings = sibling.map(|sibling| {
+            let mut siblings = vec![format];
+            for listed in [view, sibling] {
+                if !siblings.contains(&listed) {
+                    siblings.push(listed);
+                }
+            }
+            siblings
+        });
         let (instance, physical) = (core.instance.vk(), core.physical);
         let mut view_features = vk::FormatProperties2::default();
         // SAFETY: `physical` is `instance`'s.
@@ -241,17 +264,17 @@ impl Device {
             };
             held.contains(feature)
         };
-        let imports = |usage: vk::ImageUsageFlags| {
-            (import_query(core, format, usage, &list))
+        let imports = |usage: vk::ImageUsageFlags, list: &[vk::Format]| {
+            (import_query(core, format, usage, list))
                 .is_ok_and(|features| features.contains(vk::ExternalMemoryFeatureFlags::IMPORTABLE))
         };
         // The usage the texture's bind flags give, no other.
         let wanted = bound_usage(plane.bind_flags);
         let usage = (0..32)
             .map(|bit| vk::ImageUsageFlags::from_raw(1u32 << bit))
-            .filter(|&bit| wanted.contains(bit) && holds(bit) && imports(bit))
+            .filter(|&bit| wanted.contains(bit) && holds(bit) && imports(bit, &pair))
             .fold(vk::ImageUsageFlags::empty(), |all, bit| all | bit);
-        if usage.is_empty() || !imports(usage) {
+        if usage.is_empty() || !imports(usage, &pair) {
             return Err(Error::Limit(Limit::NoImport { handle }));
         }
         // With the feedback usage where the plane asks it and the import offers it with the
@@ -259,7 +282,7 @@ impl Device {
         // through its shadow. The one usage Direct3D 11's description has no counterpart for,
         // taken only where the plane's descriptor asks it.
         let looped = usage | vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT;
-        let usage = match plan.looped && imports(looped) {
+        let usage = match plan.looped && imports(looped, &pair) {
             true => looped,
             false => usage,
         };
@@ -270,6 +293,13 @@ impl Device {
                 missing: missing.as_raw(),
             }));
         }
+        // The sRGB sibling where the import takes it with the usage; else the pair, and a view of
+        // a format the pair does not list is refused at the view
+        // (`TextureViewKind::SurfacePixelFormat`).
+        let list = match siblings {
+            Some(siblings) if imports(usage, &siblings) => siblings,
+            _ => pair,
+        };
         let device = &core.device;
         let mut external = vk::ExternalMemoryImageCreateInfo::default().handle_types(HANDLE);
         let mut listed = vk::ImageFormatListCreateInfo::default().view_formats(&list);
