@@ -62,6 +62,7 @@ pub mod command_queues;
 pub mod compressed_blits;
 pub mod compressed_decode;
 pub mod compressed_moves;
+pub mod compressed_small_levels;
 pub mod compressed_views;
 pub mod compute_encoder_commands;
 pub mod compute_heap_residency;
@@ -316,6 +317,9 @@ pub fn all() -> Vec<Box<dyn Case>> {
         cases.push(Box::new(case));
     }
     for case in compressed_moves::all() {
+        cases.push(Box::new(case));
+    }
+    for case in compressed_small_levels::all() {
         cases.push(Box::new(case));
     }
     for case in compressed_views::all() {
