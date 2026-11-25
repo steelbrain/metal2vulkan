@@ -25,13 +25,22 @@
 //!
 //! Every record of the closed instruction set is decoded exactly as LLVM's reader lays it out.
 //! Codes LLVM defines outside the set are `Unsupported(Instruction { code })`, as are spellings
-//! the IR cannot represent: typed-pointer forms without an explicit type (pre-3.7 writers),
-//! vector GEPs, `inalloca`/`swifterror` allocas, label or metadata call arguments, and calling
-//! conventions other than C and fast. `DEBUG_LOC`, `DEBUG_LOC_AGAIN`, `BLOCKADDR_USERS`, and the
-//! debug records are skipped. Poison-generating flags the IR does not keep (`nneg`, `trunc
-//! nuw/nsw`, `icmp samesign`, `getelementptr nusw/nuw`) and fast-math flags on casts are dropped,
-//! which only removes poison and so refines the program; an unknown flag bit is malformed.
-//! A call's calling convention is checked (C or fast) and not stored: the callee's is.
+//! the IR cannot represent: vector GEPs, `inalloca`/`swifterror` allocas, label or metadata call
+//! arguments, and calling conventions other than C and fast. `DEBUG_LOC`, `DEBUG_LOC_AGAIN`,
+//! `BLOCKADDR_USERS`, and the debug records are skipped. Poison-generating flags the IR does not
+//! keep (`nneg`, `trunc nuw/nsw`, `icmp samesign`, `getelementptr nusw/nuw`) and fast-math flags
+//! on casts are dropped, which only removes poison and so refines the program; an unknown flag
+//! bit is malformed. A call's calling convention is checked (C or fast) and not stored: the
+//! callee's is.
+//!
+//! The typed-pointer spellings without an explicit type (pre-3.7 writers) of `load`, `call` and
+//! `getelementptr inbounds` (`INBOUNDS_GEP_OLD`) take the type from their pointer operand, as
+//! LLVM's reader does: every value carries LLVM's type id (`types::TypeIds`), its arguments'
+//! from the function type, a constant's from its `SETTYPE`, a global's or function's a pointer
+//! to the object it addresses, an instruction's as the reader's `ResTypeID` gives it
+//! (`llvm/lib/Bitcode/Reader/BitcodeReader.cpp` at `llvmorg-23.1.2`), and the record's type is
+//! that id's contained type. The same spellings of `alloca` and `load atomic`, and the older
+//! `STORE_OLD` and `GEP_OLD` (a GEP that is not inbounds), stay refused.
 //!
 //! # Calls
 //!
@@ -61,9 +70,9 @@ use super::attrs::AttrList;
 use super::codes::*;
 use super::constants::{self, binop, int_flags, ConstCx};
 use super::enum_attrs::SiteEnums;
-use super::metadata::{self, MdCx, MdKinds, MdValue};
+use super::metadata::{self, MdCx, MdIds, MdKinds, MdValue, OperandType};
 use super::stream::{signed_vbr, Item, Stream};
-use super::types::{grow, BitcodeTypes};
+use super::types::{grow, BitcodeTypes, TypeIds, NO_TYPE_ID};
 use super::ModuleValue;
 use crate::budget::Meter;
 use crate::error::{BitcodeError, DiagName, InputError, InputErrorKind, IntrinsicError, Location};
@@ -105,6 +114,14 @@ const ALLOCA_ALIGN_UPPER: u64 = 0x7;
 /// extend (types, constants, symbols).
 pub(crate) struct FnCx<'c> {
     pub bc_types: &'c BitcodeTypes,
+    /// The type ids made past the table (`TypeIds`), kept for the whole module as LLVM keeps
+    /// them.
+    pub type_ids: &'c mut TypeIds,
+    /// The type id of each module value, by value id.
+    pub value_type_ids: &'c [u32],
+    /// The type id of the function type this block defines (its parameters' ids are contained
+    /// ids 1 on).
+    pub fn_type_id: u32,
     pub types: &'c mut TypeTable,
     pub consts: &'c mut ConstTable,
     pub symbols: &'c mut Symbols,
@@ -113,6 +130,8 @@ pub(crate) struct FnCx<'c> {
     pub values: &'c [ModuleValue],
     pub attr_lists: &'c [AttrList],
     pub md_kinds: MdKinds,
+    /// LLVM's metadata ids to the module arena's.
+    pub md_ids: MdIds,
     pub sync_scopes: &'c [Option<SyncScope>],
     /// Every `air.*`/`llvm.*` declaration with its class, sorted by function.
     pub intrinsics: &'c [(FuncId, DeclClass)],
@@ -159,6 +178,7 @@ pub(crate) fn decode(
         module_count,
         next: module_count,
         local: Vec::new(),
+        local_type_ids: Vec::new(),
         insts: Vec::new(),
         blocks: Vec::new(),
         declared: None,
@@ -176,9 +196,15 @@ pub(crate) fn decode(
         func,
     };
     m.reserve(&mut d.local, params.len())?;
+    m.reserve(&mut d.local_type_ids, params.len())?;
     for (i, &ty) in params.iter().enumerate() {
-        let a = crate::ir::ArgIdx::new(u32::try_from(i).map_err(|_| s.err(BitcodeError::BadType))?);
-        d.local.push((Value::Arg(a), ty));
+        let i = u32::try_from(i).map_err(|_| s.err(BitcodeError::BadType))?;
+        d.local.push((Value::Arg(crate::ir::ArgIdx::new(i)), ty));
+        // `ArgTyID = getContainedTypeID(FTyID, ArgNo + 1)`.
+        let tid = cx
+            .type_ids
+            .contained(cx.bc_types, cx.fn_type_id, i.saturating_add(1));
+        d.local_type_ids.push(tid);
     }
     d.next = d
         .next
@@ -203,6 +229,8 @@ struct FnDecoder {
     next: u32,
     /// Function-local values (arguments, constants, instruction results) from `module_count`.
     local: Vec<(Value, TypeId)>,
+    /// The type id of each entry of `local` (`TypeIds`).
+    local_type_ids: Vec<u32>,
     insts: Vec<Inst>,
     blocks: Vec<Block>,
     declared: Option<u32>,
@@ -316,12 +344,14 @@ impl FnDecoder {
         };
         let decoded = constants::decode(s, &mut ccx, u64::from(self.next), &prior, m)?;
         m.reserve(&mut self.local, decoded.len())?;
+        m.reserve(&mut self.local_type_ids, decoded.len())?;
         for c in decoded {
             let ty = cx
                 .consts
                 .ty(c.id)
                 .ok_or_else(|| s.err(BitcodeError::BadValueRef))?;
             self.local.push((Value::Const(c.id), ty));
+            self.local_type_ids.push(c.bc_type);
             self.next = self
                 .next
                 .checked_add(1)
@@ -349,6 +379,7 @@ impl FnDecoder {
         } = self;
         let (local, module_count) = (&*local, *module_count);
         let consts = &*cx.consts;
+        let types = &*cx.types;
         let (bc_types, values) = (cx.bc_types, cx.values);
         let value = |ty: u64, id: u64| -> MdValue {
             let Some(want) = bc_types.ty(ty) else {
@@ -363,13 +394,16 @@ impl FnDecoder {
                 Some(_) => MdValue::Local,
             }
         };
+        let operand_type = |ty: u64| operand_type(bc_types, types, ty);
         let mut mcx = MdCx {
             symbols: cx.symbols,
             metadata: local_md,
             base,
             named: &mut named,
+            ids: cx.md_ids,
+            kinds: None,
         };
-        metadata::decode(s, &mut mcx, &value, &|_| false, m)?;
+        metadata::decode(s, &mut mcx, &value, &operand_type, &|_| false, m)?;
         if !named.is_empty() {
             return Err(s.malformed(METADATA_BLOCK, METADATA_NAMED_NODE));
         }
@@ -412,8 +446,7 @@ impl FnDecoder {
                     };
                     for &[kind, node] in pairs.as_chunks::<2>().0 {
                         m.tick(1)?;
-                        let node =
-                            MdId::new(u32::try_from(node).map_err(|_| s.malformed(AB, code))?);
+                        let node = cx.md_ids.arena(node).ok_or_else(|| s.malformed(AB, code))?;
                         if self.md(cx, node).is_none() {
                             return Err(s.err(BitcodeError::BadMetadata));
                         }
@@ -590,6 +623,20 @@ impl FnDecoder {
         lookup(values, consts, self.module_count, &self.local, id)
     }
 
+    /// The type id of defined value `id`.
+    fn type_id(&self, cx: &FnCx<'_>, id: u32) -> u32 {
+        let found = match id.checked_sub(self.module_count) {
+            None => cx.value_type_ids.get(id as usize),
+            Some(l) => self.local_type_ids.get(l as usize),
+        };
+        found.copied().unwrap_or(NO_TYPE_ID)
+    }
+
+    /// Contained id `i` of type id `id`.
+    fn contained(cx: &FnCx<'_>, id: u32, i: u32) -> u32 {
+        cx.type_ids.contained(cx.bc_types, id, i)
+    }
+
     /// A forward reference to value `id` of type `ty`.
     fn forward(&mut self, id: u32, ty: TypeId, m: &mut Meter) -> Result<Value, Error> {
         let k = u32::try_from(self.forward.len())
@@ -642,15 +689,30 @@ impl FnDecoder {
         r: &mut Ops<'_>,
         m: &mut Meter,
     ) -> Result<(Value, TypeId), Error> {
+        self.pair_id(s, cx, r, m).map(|(v, ty, _)| (v, ty))
+    }
+
+    /// [`Self::pair`] with the operand's type id: a defined value's own, a forward reference's
+    /// the record's (`getValueTypePair`).
+    fn pair_id(
+        &mut self,
+        s: &Stream<'_>,
+        cx: &FnCx<'_>,
+        r: &mut Ops<'_>,
+        m: &mut Meter,
+    ) -> Result<(Value, TypeId, u32), Error> {
         let rel = r.next32(s)?;
         let id = self.next.wrapping_sub(rel);
         if id < self.next {
-            return self
+            let (v, ty) = self
                 .get(cx.values, cx.consts, id)
-                .ok_or_else(|| s.err(BitcodeError::BadValueRef));
+                .ok_or_else(|| s.err(BitcodeError::BadValueRef))?;
+            return Ok((v, ty, self.type_id(cx, id)));
         }
-        let ty = bc_ty(s, cx, r.next(s)?)?;
-        Ok((self.forward(id, ty, m)?, ty))
+        let raw = r.next(s)?;
+        let ty = bc_ty(s, cx, raw)?;
+        let tid = u32::try_from(raw).map_err(|_| s.err(BitcodeError::BadType))?;
+        Ok((self.forward(id, ty, m)?, ty, tid))
     }
 
     /// A defined value by absolute id (switch cases, alloca sizes).
@@ -672,14 +734,15 @@ impl FnDecoder {
         }
     }
 
-    /// Append an instruction to the open block; a non-void result takes the next value number
-    /// and a terminator closes the block.
+    /// Append an instruction to the open block; a non-void result of type `ty` takes the next
+    /// value number, with type id `tid` (LLVM's reader's `ResTypeID`), and a terminator closes
+    /// the block.
     fn push(
         &mut self,
         s: &Stream<'_>,
         cx: &mut FnCx<'_>,
         code: u32,
-        ty: TypeId,
+        (ty, tid): (TypeId, u32),
         kind: InstKind,
         m: &mut Meter,
     ) -> Result<(), Error> {
@@ -693,7 +756,9 @@ impl FnDecoder {
         self.insts.push(Inst { ty, kind });
         if !matches!(cx.types.get(ty), Some(Type::Void)) {
             grow(m, &mut self.local)?;
+            grow(m, &mut self.local_type_ids)?;
             self.local.push((Value::Inst(id), ty));
+            self.local_type_ids.push(tid);
             self.next = self
                 .next
                 .checked_add(1)
@@ -788,7 +853,7 @@ impl FnDecoder {
                 Ok(())
             }
             FUNC_BINOP => {
-                let (a, ty) = self.pair(s, cx, &mut r, m)?;
+                let (a, ty, tid) = self.pair_id(s, cx, &mut r, m)?;
                 let b = self.typed(s, cx, &mut r, ty, m)?;
                 let float = cx.types.float_bits(ty).is_some();
                 let op = binop(r.next(s)?, float).ok_or_else(bad)?;
@@ -808,11 +873,12 @@ impl FnDecoder {
                     a,
                     b,
                 };
-                self.push(s, cx, code, ty, kind, m)
+                self.push(s, cx, code, (ty, tid), kind, m)
             }
             FUNC_CAST => {
                 let (v, _) = self.pair(s, cx, &mut r, m)?;
-                let to = bc_ty(s, cx, r.next(s)?)?;
+                let to_raw = r.next(s)?;
+                let to = bc_ty(s, cx, to_raw)?;
                 let op = match r.next(s)? {
                     0 => CastOp::Trunc,
                     1 => CastOp::ZExt,
@@ -851,10 +917,11 @@ impl FnDecoder {
                     }
                 }
                 r.end(s)?;
-                self.push(s, cx, code, to, InstKind::Cast { op, v }, m)
+                let tid = u32::try_from(to_raw).map_err(|_| bad())?;
+                self.push(s, cx, code, (to, tid), InstKind::Cast { op, v }, m)
             }
             FUNC_UNOP => {
-                let (v, ty) = self.pair(s, cx, &mut r, m)?;
+                let (v, ty, tid) = self.pair_id(s, cx, &mut r, m)?;
                 if r.next(s)? != 0 {
                     return Err(bad());
                 }
@@ -863,20 +930,22 @@ impl FnDecoder {
                     None => FastMath::NONE,
                 };
                 r.end(s)?;
-                self.push(s, cx, code, ty, InstKind::FNeg { v, fmf }, m)
+                self.push(s, cx, code, (ty, tid), InstKind::FNeg { v, fmf }, m)
             }
             FUNC_EXTRACTELT => {
-                let (vec, vt) = self.pair(s, cx, &mut r, m)?;
+                let (vec, vt, vec_tid) = self.pair_id(s, cx, &mut r, m)?;
                 let (idx, _) = self.pair(s, cx, &mut r, m)?;
                 r.end(s)?;
                 let elem = match cx.types.get(vt) {
                     Some(Type::Vector { elem, .. }) => *elem,
                     _ => return Err(bad()),
                 };
-                self.push(s, cx, code, elem, InstKind::ExtractElement { vec, idx }, m)
+                let tid = Self::contained(cx, vec_tid, 0);
+                let kind = InstKind::ExtractElement { vec, idx };
+                self.push(s, cx, code, (elem, tid), kind, m)
             }
             FUNC_INSERTELT => {
-                let (vec, vt) = self.pair(s, cx, &mut r, m)?;
+                let (vec, vt, tid) = self.pair_id(s, cx, &mut r, m)?;
                 let elem = match cx.types.get(vt) {
                     Some(Type::Vector { elem, .. }) => *elem,
                     _ => return Err(bad()),
@@ -884,17 +953,11 @@ impl FnDecoder {
                 let elt = self.typed(s, cx, &mut r, elem, m)?;
                 let (idx, _) = self.pair(s, cx, &mut r, m)?;
                 r.end(s)?;
-                self.push(
-                    s,
-                    cx,
-                    code,
-                    vt,
-                    InstKind::InsertElement { vec, elt, idx },
-                    m,
-                )
+                let kind = InstKind::InsertElement { vec, elt, idx };
+                self.push(s, cx, code, (vt, tid), kind, m)
             }
             FUNC_SHUFFLEVEC => {
-                let (a, vt) = self.pair(s, cx, &mut r, m)?;
+                let (a, vt, a_tid) = self.pair_id(s, cx, &mut r, m)?;
                 let b = self.typed(s, cx, &mut r, vt, m)?;
                 let (mask, mt) = self.pair(s, cx, &mut r, m)?;
                 r.end(s)?;
@@ -905,7 +968,10 @@ impl FnDecoder {
                 let lanes = cx.types.lanes(mt).ok_or_else(bad)?;
                 let mask = shuffle_mask(cx.consts, mask, lanes, m)?.ok_or_else(bad)?;
                 let ty = self.intern(cx, Type::Vector { elem, len: lanes }, m)?;
-                self.push(s, cx, code, ty, InstKind::ShuffleVector { a, b, mask }, m)
+                let elem_tid = Self::contained(cx, a_tid, 0);
+                let tid = cx.type_ids.id(cx.bc_types, ty, &[elem_tid], m)?;
+                let kind = InstKind::ShuffleVector { a, b, mask };
+                self.push(s, cx, code, (ty, tid), kind, m)
             }
             FUNC_CMP | FUNC_CMP2 => {
                 let (a, ty) = self.pair(s, cx, &mut r, m)?;
@@ -942,10 +1008,11 @@ impl FnDecoder {
                     }
                     InstKind::ICmp { pred, a, b }
                 };
-                self.push(s, cx, code, res, kind, m)
+                // An `i1` or a vector of them: nothing contained to read back (`TypeIds`).
+                self.push(s, cx, code, (res, NO_TYPE_ID), kind, m)
             }
             FUNC_VSELECT => {
-                let (t, ty) = self.pair(s, cx, &mut r, m)?;
+                let (t, ty, tid) = self.pair_id(s, cx, &mut r, m)?;
                 let f = self.typed(s, cx, &mut r, ty, m)?;
                 let (c, _) = self.pair(s, cx, &mut r, m)?;
                 let fmf = match r.opt() {
@@ -953,33 +1020,28 @@ impl FnDecoder {
                     None => FastMath::NONE,
                 };
                 r.end(s)?;
-                self.push(s, cx, code, ty, InstKind::Select { c, t, f, fmf }, m)
+                self.push(s, cx, code, (ty, tid), InstKind::Select { c, t, f, fmf }, m)
             }
             FUNC_EXTRACTVAL => {
-                let (agg, at) = self.pair(s, cx, &mut r, m)?;
+                let (agg, at, agg_tid) = self.pair_id(s, cx, &mut r, m)?;
                 let indices = indices(s, &mut r, m)?;
                 let leaf = aggregate_leaf(cx.types, at, &indices).ok_or_else(bad)?;
-                self.push(
-                    s,
-                    cx,
-                    code,
-                    leaf,
-                    InstKind::ExtractValue { agg, indices },
-                    m,
-                )
+                let tid = aggregate_leaf_id(cx, at, agg_tid, &indices);
+                let kind = InstKind::ExtractValue { agg, indices };
+                self.push(s, cx, code, (leaf, tid), kind, m)
             }
             FUNC_INSERTVAL => {
-                let (agg, at) = self.pair(s, cx, &mut r, m)?;
+                let (agg, at, tid) = self.pair_id(s, cx, &mut r, m)?;
                 let (val, _) = self.pair(s, cx, &mut r, m)?;
                 let indices = indices(s, &mut r, m)?;
                 aggregate_leaf(cx.types, at, &indices).ok_or_else(bad)?;
                 let kind = InstKind::InsertValue { agg, val, indices };
-                self.push(s, cx, code, at, kind, m)
+                self.push(s, cx, code, (at, tid), kind, m)
             }
             FUNC_FREEZE => {
-                let (v, ty) = self.pair(s, cx, &mut r, m)?;
+                let (v, ty, tid) = self.pair_id(s, cx, &mut r, m)?;
                 r.end(s)?;
-                self.push(s, cx, code, ty, InstKind::Freeze(v), m)
+                self.push(s, cx, code, (ty, tid), InstKind::Freeze(v), m)
             }
             FUNC_RET => {
                 let v = if r.left() == 0 {
@@ -992,7 +1054,7 @@ impl FnDecoder {
                     Some(v)
                 };
                 r.end(s)?;
-                self.push(s, cx, code, void, InstKind::Ret(v), m)
+                self.push(s, cx, code, (void, NO_TYPE_ID), InstKind::Ret(v), m)
             }
             FUNC_BR => {
                 let dest = self.block(s, code, r.next(s)?)?;
@@ -1010,7 +1072,7 @@ impl FnDecoder {
                         hints: None,
                     }
                 };
-                self.push(s, cx, code, void, kind, m)
+                self.push(s, cx, code, (void, NO_TYPE_ID), kind, m)
             }
             FUNC_SWITCH => {
                 let opty_raw = r.next(s)?;
@@ -1044,11 +1106,11 @@ impl FnDecoder {
                     cases: cases.into_boxed_slice(),
                     hints: None,
                 };
-                self.push(s, cx, code, void, kind, m)
+                self.push(s, cx, code, (void, NO_TYPE_ID), kind, m)
             }
             FUNC_UNREACHABLE => {
                 r.end(s)?;
-                self.push(s, cx, code, void, InstKind::Unreachable, m)
+                self.push(s, cx, code, (void, NO_TYPE_ID), InstKind::Unreachable, m)
             }
             FUNC_PHI => self.phi(s, cx, &mut r, m),
             FUNC_ALLOCA => {
@@ -1076,19 +1138,35 @@ impl FnDecoder {
                 };
                 let space = AddrSpace::from_raw(raw_space).map_err(|u| s.unsupported(u.feature))?;
                 let ptr = self.intern(cx, Type::Ptr { space }, m)?;
-                self.push(s, cx, code, ptr, InstKind::Alloca { ty, count, align }, m)
+                // `getVirtualTypeID(AI->getType(), TyID)`.
+                let ty_id = u32::try_from(ty_raw).map_err(|_| bad())?;
+                let tid = cx.type_ids.id(cx.bc_types, ptr, &[ty_id], m)?;
+                let kind = InstKind::Alloca { ty, count, align };
+                self.push(s, cx, code, (ptr, tid), kind, m)
             }
             FUNC_LOAD | FUNC_LOADATOMIC => {
-                let (ptr, _) = self.pair(s, cx, &mut r, m)?;
+                let (ptr, ptr_ty, ptr_tid) = self.pair_id(s, cx, &mut r, m)?;
                 let fixed = if code == FUNC_LOAD { 2 } else { 4 };
-                if r.left() == fixed {
-                    // The typed-pointer spelling without an explicit type.
+                let tid = if r.left() == fixed + 1 {
+                    table_id(s, cx, r.next(s)?)?
+                } else if r.left() == fixed && code == FUNC_LOAD {
+                    // The typed-pointer spelling without an explicit type (pre-3.7 writers): the
+                    // pointer operand's contained type, as LLVM's reader takes it
+                    // (`BitcodeReader.cpp:6418-6436` at `llvmorg-23.1.2`).
+                    if !matches!(cx.types.get(ptr_ty), Some(Type::Ptr { .. })) {
+                        return Err(bad());
+                    }
+                    Self::contained(cx, ptr_tid, 0)
+                } else if r.left() == fixed {
+                    // The same spelling of `load atomic`, which this file's writers never use.
                     return Err(s.unsupported(Feature::Instruction { code }));
-                }
-                if r.left() != fixed + 1 {
+                } else {
                     return Err(bad());
-                }
-                let ty = bc_ty(s, cx, r.next(s)?)?;
+                };
+                let ty = cx
+                    .type_ids
+                    .ty(cx.bc_types, tid)
+                    .ok_or_else(|| s.err(BitcodeError::BadType))?;
                 let align = align(r.next(s)?).ok_or_else(bad)?;
                 let volatile = flag(s, code, r.next(s)?)?;
                 let atomic = if code == FUNC_LOADATOMIC {
@@ -1103,7 +1181,7 @@ impl FnDecoder {
                     atomic,
                     range: None,
                 };
-                self.push(s, cx, code, ty, kind, m)
+                self.push(s, cx, code, (ty, tid), kind, m)
             }
             FUNC_STORE | FUNC_STOREATOMIC => {
                 let (ptr, _) = self.pair(s, cx, &mut r, m)?;
@@ -1126,16 +1204,16 @@ impl FnDecoder {
                     volatile,
                     atomic,
                 };
-                self.push(s, cx, code, void, kind, m)
+                self.push(s, cx, code, (void, NO_TYPE_ID), kind, m)
             }
             FUNC_FENCE => {
                 let a = self.atomic(s, cx, code, &mut r)?;
                 r.end(s)?;
-                self.push(s, cx, code, void, InstKind::Fence(a), m)
+                self.push(s, cx, code, (void, NO_TYPE_ID), InstKind::Fence(a), m)
             }
             FUNC_ATOMICRMW => {
                 let (ptr, _) = self.pair(s, cx, &mut r, m)?;
-                let (val, ty) = self.pair(s, cx, &mut r, m)?;
+                let (val, ty, tid) = self.pair_id(s, cx, &mut r, m)?;
                 if !(4..=5).contains(&r.left()) {
                     return Err(bad());
                 }
@@ -1155,11 +1233,11 @@ impl FnDecoder {
                     volatile,
                     align,
                 };
-                self.push(s, cx, code, ty, kind, m)
+                self.push(s, cx, code, (ty, tid), kind, m)
             }
             FUNC_CMPXCHG => {
                 let (ptr, _) = self.pair(s, cx, &mut r, m)?;
-                let (cmp, ty) = self.pair(s, cx, &mut r, m)?;
+                let (cmp, ty, cmp_tid) = self.pair_id(s, cx, &mut r, m)?;
                 let new = self.typed(s, cx, &mut r, ty, m)?;
                 if !(3..=6).contains(&r.left()) {
                     return Err(bad());
@@ -1198,16 +1276,33 @@ impl FnDecoder {
                     volatile,
                     align,
                 };
-                self.push(s, cx, code, res, kind, m)
+                // `getVirtualTypeID(I->getType(), {CmpTypeID, I1TypeID})`.
+                let tid = cx
+                    .type_ids
+                    .id(cx.bc_types, res, &[cmp_tid, NO_TYPE_ID], m)?;
+                self.push(s, cx, code, (res, tid), kind, m)
             }
-            FUNC_GEP => {
-                let flags = r.next(s)?;
-                // inbounds (bit 0); nusw and nuw (bits 1, 2) are dropped.
-                if flags & !7 != 0 {
-                    return Err(bad());
-                }
-                let src_ty = bc_ty(s, cx, r.next(s)?)?;
-                let (base, bt) = self.pair(s, cx, &mut r, m)?;
+            FUNC_GEP | FUNC_INBOUNDS_GEP_OLD => {
+                // `GEP: [flags, ty, base, indices...]`, and the typed-pointer spelling without
+                // the flags and the type (pre-3.7 writers): `INBOUNDS_GEP_OLD: [base,
+                // indices...]`, inbounds, its source element type the base pointer's contained
+                // type (`BitcodeReader.cpp:5383-5450` at `llvmorg-23.1.2`).
+                let explicit = if code == FUNC_GEP {
+                    let flags = r.next(s)?;
+                    // inbounds (bit 0); nusw and nuw (bits 1, 2) are dropped.
+                    if flags & !7 != 0 {
+                        return Err(bad());
+                    }
+                    Some((flags, table_id(s, cx, r.next(s)?)?))
+                } else {
+                    None
+                };
+                let (base, bt, base_tid) = self.pair_id(s, cx, &mut r, m)?;
+                let (flags, src_tid) = match explicit {
+                    Some(e) => e,
+                    // A vector of pointers (a vector GEP) is refused below.
+                    None => (1, Self::contained(cx, base_tid, 0)),
+                };
                 let mut idx = Vec::new();
                 m.reserve(&mut idx, r.left())?;
                 while r.left() > 0 {
@@ -1226,14 +1321,20 @@ impl FnDecoder {
                     }
                     _ => return Err(bad()),
                 };
+                let src_ty = cx
+                    .type_ids
+                    .ty(cx.bc_types, src_tid)
+                    .ok_or_else(|| s.err(BitcodeError::BadType))?;
                 let ptr = self.intern(cx, Type::Ptr { space }, m)?;
+                let elem = gep_element_id(cx, src_ty, src_tid, &idx);
+                let tid = cx.type_ids.id(cx.bc_types, ptr, &[elem], m)?;
                 let kind = InstKind::Gep {
                     src_ty,
                     base,
                     indices: idx.into_boxed_slice(),
                     inbounds: flags & 1 != 0,
                 };
-                self.push(s, cx, code, ptr, kind, m)
+                self.push(s, cx, code, (ptr, tid), kind, m)
             }
             FUNC_CALL => self.call(s, cx, &mut r, m),
             FUNC_DEBUG_LOC | FUNC_DEBUG_LOC_AGAIN | FUNC_BLOCKADDR_USERS => Ok(()),
@@ -1278,7 +1379,8 @@ impl FnDecoder {
     ) -> Result<(), Error> {
         let code = FUNC_PHI;
         let bad = || s.malformed(B, code);
-        let ty = bc_ty(s, cx, r.next(s)?)?;
+        let tid = table_id(s, cx, r.next(s)?)?;
+        let ty = bc_ty(s, cx, u64::from(tid))?;
         let n = r.left() / 2;
         let fmf = if !r.left().is_multiple_of(2) {
             let raw = r.ops.last().copied().ok_or_else(bad)?;
@@ -1314,7 +1416,7 @@ impl FnDecoder {
             incoming: incoming.into_boxed_slice(),
             fmf,
         };
-        self.push(s, cx, code, ty, kind, m)
+        self.push(s, cx, code, (ty, tid), kind, m)
     }
 
     /// `CALL: [paramattrs, cc, fmf?, fnty, callee, args...]`.
@@ -1341,19 +1443,10 @@ impl FnDecoder {
         } else {
             FastMath::NONE
         };
-        if cc_info & CALL_EXPLICIT_TYPE == 0 {
-            // The typed-pointer spelling that derives the function type from the callee.
-            return Err(s.unsupported(Feature::Instruction { code }));
-        }
-        let fn_bc = r.next(s)?;
-        let fn_ty = bc_ty(s, cx, fn_bc)?;
-        let (ret, params, vararg) = match cx.types.get(fn_ty) {
-            Some(Type::Function {
-                ret,
-                params,
-                vararg,
-            }) => (*ret, params.clone(), *vararg),
-            _ => return Err(s.err(BitcodeError::BadType)),
+        let explicit = if cc_info & CALL_EXPLICIT_TYPE != 0 {
+            Some(r.next(s)?)
+        } else {
+            None
         };
         match (cc_info & CALL_CCONV_MASK) >> CALL_CCONV_SHIFT {
             CC_C | CC_FAST => {}
@@ -1373,7 +1466,28 @@ impl FnDecoder {
             (false, false, true) => TailKind::NoTail,
             _ => return Err(bad()),
         };
-        let (callee, _) = self.pair(s, cx, r, m)?;
+        let (callee, callee_ty, callee_tid) = self.pair_id(s, cx, r, m)?;
+        let fn_bc = match explicit {
+            Some(raw) => raw,
+            // The typed-pointer spelling without the explicit-type flag (pre-3.7 writers): the
+            // callee pointer's contained type, as LLVM's reader takes it (`BitcodeReader.cpp:
+            // 6886-6930` at `llvmorg-23.1.2`).
+            None => {
+                if !matches!(cx.types.get(callee_ty), Some(Type::Ptr { .. })) {
+                    return Err(s.err(BitcodeError::BadType));
+                }
+                u64::from(Self::contained(cx, callee_tid, 0))
+            }
+        };
+        let fn_ty = bc_ty(s, cx, fn_bc)?;
+        let (ret, params, vararg) = match cx.types.get(fn_ty) {
+            Some(Type::Function {
+                ret,
+                params,
+                vararg,
+            }) => (*ret, params.clone(), *vararg),
+            _ => return Err(s.err(BitcodeError::BadType)),
+        };
         let target = self.callee(cx, callee, fn_ty);
         let dropped = matches!(target, Target::Intrinsic(_, DeclClass::Drop(_)))
             || executes_nothing(cx.consts, callee, (ret, &params, vararg), cx.types);
@@ -1494,7 +1608,10 @@ impl FnDecoder {
             grow(m, &mut self.call_enums)?;
             self.call_enums.push((id, enums));
         }
-        self.push(s, cx, code, ret, InstKind::Call(Box::new(call)), m)
+        // `ResTypeID = getContainedTypeID(FTyID)`: the function type's return.
+        let fn_tid = u32::try_from(fn_bc).map_err(|_| s.err(BitcodeError::BadType))?;
+        let tid = Self::contained(cx, fn_tid, 0);
+        self.push(s, cx, code, (ret, tid), InstKind::Call(Box::new(call)), m)
     }
 
     /// A relative metadata operand (`metadata !N` as a call argument): it must name module or
@@ -1506,8 +1623,8 @@ impl FnDecoder {
         r: &mut Ops<'_>,
     ) -> Result<(), Error> {
         let rel = r.next32(s)?;
-        let id = MdId::new(self.next.wrapping_sub(rel));
-        match self.md(cx, id) {
+        let id = cx.md_ids.arena(u64::from(self.next.wrapping_sub(rel)));
+        match id.and_then(|id| self.md(cx, id)) {
             Some(_) => Ok(()),
             None => Err(s.err(BitcodeError::BadMetadata)),
         }
@@ -1671,6 +1788,25 @@ fn lookup(
     }
 }
 
+/// What an `OLD_NODE` operand of bitcode type `idx` holds (`None`: no such type).
+pub(crate) fn operand_type(
+    bc_types: &BitcodeTypes,
+    types: &TypeTable,
+    idx: u64,
+) -> Option<OperandType> {
+    Some(match types.get(bc_types.ty(idx)?)? {
+        Type::Metadata => OperandType::Metadata,
+        Type::Void => OperandType::Void,
+        _ => OperandType::Value,
+    })
+}
+
+/// Bitcode type `idx` of the table, as a type id.
+fn table_id(s: &Stream<'_>, cx: &FnCx<'_>, idx: u64) -> Result<u32, Error> {
+    bc_ty(s, cx, idx)?;
+    u32::try_from(idx).map_err(|_| s.err(BitcodeError::BadType))
+}
+
 /// The erased IR type of bitcode type `idx`.
 fn bc_ty(s: &Stream<'_>, cx: &FnCx<'_>, idx: u64) -> Result<TypeId, Error> {
     cx.bc_types
@@ -1702,6 +1838,61 @@ fn aggregate_leaf(types: &TypeTable, agg: TypeId, indices: &[u32]) -> Option<Typ
         };
     }
     Some(cur)
+}
+
+/// The type id `extractvalue` reaches from aggregate `agg` (type id `agg_id`) by `indices`: a
+/// struct's field `i`, an array's element, as LLVM's reader walks it (`BitcodeReader.cpp:
+/// 5470-5492` at `llvmorg-23.1.2`). The indices were checked by [`aggregate_leaf`].
+fn aggregate_leaf_id(cx: &FnCx<'_>, agg: TypeId, agg_id: u32, indices: &[u32]) -> u32 {
+    let (mut cur, mut id) = (agg, agg_id);
+    for &i in indices {
+        let Some(t) = cx.types.get(cur) else {
+            return NO_TYPE_ID;
+        };
+        (cur, id) = match t {
+            Type::Struct { fields, .. } => match fields.get(i as usize) {
+                Some(&f) => (f, cx.type_ids.contained(cx.bc_types, id, i)),
+                None => return NO_TYPE_ID,
+            },
+            Type::Array { elem, .. } => (*elem, cx.type_ids.contained(cx.bc_types, id, 0)),
+            _ => return NO_TYPE_ID,
+        };
+    }
+    id
+}
+
+/// The type id of the element a `getelementptr` of source element type `src` (type id `src_id`)
+/// addresses with `indices`: after the first index, a struct's field by its constant index, an
+/// array's or vector's element, as LLVM's reader walks it (`BitcodeReader.cpp:5428-5445` at
+/// `llvmorg-23.1.2`). A struct index that is not an integer constant reaches no id; the verifier
+/// refuses such an index.
+fn gep_element_id(cx: &FnCx<'_>, src: TypeId, src_id: u32, indices: &[Value]) -> u32 {
+    let (mut cur, mut id) = (src, src_id);
+    for v in indices.iter().skip(1) {
+        let Some(t) = cx.types.get(cur) else {
+            return NO_TYPE_ID;
+        };
+        (cur, id) = match t {
+            Type::Struct { fields, .. } => {
+                let field = match v {
+                    Value::Const(c) => match cx.consts.get(*c).map(|c| &c.value) {
+                        Some(Const::Int(i)) => u32::try_from(*i).ok(),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                match field.and_then(|f| Some((f, *fields.get(f as usize)?))) {
+                    Some((f, ty)) => (ty, cx.type_ids.contained(cx.bc_types, id, f)),
+                    None => return NO_TYPE_ID,
+                }
+            }
+            Type::Array { elem, .. } | Type::Vector { elem, .. } => {
+                (*elem, cx.type_ids.contained(cx.bc_types, id, 0))
+            }
+            _ => return NO_TYPE_ID,
+        };
+    }
+    id
 }
 
 /// A shuffle mask constant of `lanes` lanes; `None` lanes are poison (an `undef` lane is poison

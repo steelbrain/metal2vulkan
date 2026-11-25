@@ -14,7 +14,8 @@ use crate::error::BitcodeError;
 use crate::error::{Error, Feature};
 use crate::ir::print::print;
 use crate::ir::{
-    BlockId, Callee, Const, FuncId, InstId, InstKind, IntFlags, IntPredicate, Type, Unroll, Value,
+    BlockId, Callee, Const, FuncId, InstId, InstKind, IntFlags, IntPredicate, Md, MdId, Type,
+    Unroll, Value,
 };
 
 const STRTAB: &[u8] = b"kair.x";
@@ -412,12 +413,7 @@ fn record_errors_are_typed() {
             code: 99
         })
     );
-    // A load without an explicit type (the typed-pointer spelling) and a calling convention
-    // other than C or fast.
-    unsupported(
-        replaced(7, (20, vec![rel(11, 4), 3, 0])),
-        Feature::Instruction { code: 20 },
-    );
+    // A calling convention other than C or fast.
     unsupported(
         replaced(
             1,
@@ -1001,4 +997,311 @@ fn body_of_named<'t>(t: &'t ModuleTables, name: &[u8]) -> &'t crate::ir::Body {
         .find(|f| t.parts.symbols.get(f.name) == Some(name))
         .and_then(|f| f.body.as_ref())
         .unwrap()
+}
+
+const TYPED_STRTAB: &[u8] = b"kair.fast_fabs.f32";
+
+/// A typed-pointer module. Types: 0 `i32`, 1 `float`, 2 `void`, 3 `float addrspace(1)*`, 4 `%S =
+/// { i32, float addrspace(1)* }`, 5 `%S addrspace(1)*`, 6 `[4 x float]`, 7 `[4 x
+/// float] addrspace(1)*`, 8 `void (%S addrspace(1)*, [4 x float] addrspace(1)*, i32)`, 9 `float
+/// (float)`, 10 `float (float)*`, 11 `ptr addrspace(1)`, 12 `i32 addrspace(1)*`. Functions: `@k`
+/// (value 0, defined, its record naming type 8) and `@air.fast_fabs.f32` (value 1, declared, its
+/// record naming the pointer type 10, the oldest spelling). Module constants: value 2 `i32 0`,
+/// value 3 `i32 1`. The body of `@k(%s, %a, %i)` (values 4 to 6, then the local `i32 3`) is
+/// `records`.
+fn typed_module(records: &[(u64, Vec<u64>)]) -> Vec<u8> {
+    stream(2, 0, TYPED_STRTAB, |w| {
+        block(
+            w,
+            codes::TYPE_BLOCK,
+            &[
+                (1, vec![13]),
+                (7, vec![32]),
+                (3, vec![]),
+                (2, vec![]),
+                (8, vec![1, 1]),
+                (18, vec![0, 0, 3]),
+                (8, vec![4, 1]),
+                (11, vec![4, 1]),
+                (8, vec![6, 1]),
+                (21, vec![0, 2, 5, 7, 0]),
+                (21, vec![0, 1, 1]),
+                (8, vec![9, 0]),
+                (25, vec![1]),
+                (8, vec![0, 1]),
+            ],
+        );
+        w.unabbrev(8, &[0, 1, 8, 0, 0, 0, 0, 0, 0]);
+        w.unabbrev(8, &[1, 17, 10, 0, 1, 0, 0, 0, 0]);
+        block(
+            w,
+            codes::CONSTANTS_BLOCK,
+            &[(1, vec![0]), (2, vec![]), (4, vec![2])],
+        );
+        function_block(w, records, |_| {});
+    })
+}
+
+/// The body of [`typed_module`]'s `@k`, with every `load`, `call` and inbounds `getelementptr`
+/// stating its type (`explicit`) or, as writers before LLVM 3.7 spell them, not:
+///
+/// ```text
+/// %8  = getelementptr inbounds %S, %S addrspace(1)* %s, i32 0, i32 1
+/// %9  = load float addrspace(1)*, float addrspace(1)* addrspace(1)* %8, align 4
+/// %10 = getelementptr inbounds [4 x float], [4 x float] addrspace(1)* %a, i32 0, i32 %i
+/// %11 = load float, float addrspace(1)* %10, align 4
+/// %12 = call float @air.fast_fabs.f32(float %11)
+/// %13 = load float, float addrspace(1)* %9, align 4
+/// %14 = bitcast float addrspace(1)* %9 to i32 addrspace(1)*
+/// %15 = load i32, i32 addrspace(1)* %14, align 4
+/// store float %12, float addrspace(1)* %9, align 4
+/// store float %13, float addrspace(1)* %10, align 4
+/// store i32 %15, i32 addrspace(1)* %14, align 4
+/// ret void
+/// ```
+fn typed_records(explicit: bool) -> Vec<(u64, Vec<u64>)> {
+    let gep = |next: u64, ty: u64, ops: &[u64]| -> (u64, Vec<u64>) {
+        let ops: Vec<u64> = ops.iter().map(|&id| rel(next, id)).collect();
+        if explicit {
+            (43, [vec![1, ty], ops].concat())
+        } else {
+            (30, ops)
+        }
+    };
+    let load = |next: u64, ptr: u64, ty: u64| -> (u64, Vec<u64>) {
+        if explicit {
+            (20, vec![rel(next, ptr), ty, 3, 0])
+        } else {
+            (20, vec![rel(next, ptr), 3, 0])
+        }
+    };
+    let call = if explicit {
+        (34, vec![0, 1 << 15, 9, rel(12, 1), rel(12, 11)])
+    } else {
+        (34, vec![0, 0, rel(12, 1), rel(12, 11)])
+    };
+    vec![
+        (1, vec![1]),
+        gep(8, 4, &[4, 2, 3]),
+        load(9, 8, 3),
+        gep(10, 6, &[5, 2, 6]),
+        load(11, 10, 1),
+        call,
+        load(13, 9, 1),
+        (3, vec![rel(14, 9), 12, 11]),
+        load(15, 14, 0),
+        (44, vec![rel(16, 9), rel(16, 12), 3, 0]),
+        (44, vec![rel(16, 10), rel(16, 13), 3, 0]),
+        (44, vec![rel(16, 14), rel(16, 15), 3, 0]),
+        (10, vec![]),
+    ]
+}
+
+/// A typed-pointer `load`, `call` or inbounds `getelementptr` that states no type reads as the
+/// one that states its pointer operand's contained type, as LLVM's reader reads it: through a
+/// struct field and an array element, a loaded pointer, a cast, an argument, and a function
+/// whose record names a pointer to its type.
+#[test]
+fn typed_pointer_records_without_their_types_read_as_with_them() {
+    let explicit = decode(&typed_module(&typed_records(true))).unwrap();
+    verify_module_level(&explicit).unwrap();
+    let body = body_of(&explicit);
+    let inst = |n: u32| body.insts.get(InstId::new(n)).unwrap();
+    let ty = |n: u32| explicit.parts.types.get(inst(n).ty).unwrap().clone();
+    assert!(matches!(ty(1), Type::Ptr { .. }));
+    assert_eq!(
+        (ty(3), ty(5), ty(7)),
+        (Type::Float, Type::Float, Type::Int(32))
+    );
+    assert!(matches!(&inst(4).kind, InstKind::Call(c) if matches!(c.callee, Callee::Air { .. })));
+    assert_eq!(
+        decode(&typed_module(&typed_records(false))).unwrap(),
+        explicit
+    );
+
+    let legacy = |i: usize, record: (u64, Vec<u64>)| {
+        let mut r = typed_records(false);
+        r[i] = record;
+        decode(&typed_module(&r))
+    };
+    let malformed = |r: Result<ModuleTables, Error>, code: u32| {
+        let e = r.unwrap_err();
+        assert_eq!(
+            bitcode_kind(&e),
+            Some(&BitcodeError::MalformedRecord { block: 12, code }),
+            "{e}"
+        );
+    };
+    let bad_type = |r: Result<ModuleTables, Error>| {
+        let e = r.unwrap_err();
+        assert_eq!(bitcode_kind(&e), Some(&BitcodeError::BadType), "{e}");
+    };
+    let unsupported = |r: Result<ModuleTables, Error>, code: u32| {
+        let e = r.unwrap_err();
+        assert_eq!(
+            unsupported_feature(&e),
+            Some(&Feature::Instruction { code }),
+            "{e}"
+        );
+    };
+    // A load, call or GEP whose operand is not a pointer (`%i`).
+    malformed(legacy(4, (20, vec![rel(11, 6), 3, 0])), 20);
+    bad_type(legacy(5, (34, vec![0, 0, rel(12, 6), rel(12, 11)])));
+    malformed(legacy(1, (30, vec![rel(8, 6), rel(8, 2)])), 30);
+    // An opaque pointer contains no type: the load has none (LLVM: "Missing load type").
+    bad_type(legacy(7, (3, vec![rel(14, 9), 11, 11])));
+    // The same spellings of `load atomic` and of a GEP that is not inbounds stay refused.
+    unsupported(legacy(4, (41, vec![rel(11, 10), 3, 0, 4, 1])), 41);
+    unsupported(legacy(1, (4, vec![rel(8, 4), rel(8, 2), rel(8, 3)])), 4);
+}
+
+/// [`prefix`]'s module with its metadata spelled as writers before LLVM 4.0 spell it: type 6
+/// `metadata`, then a first `METADATA` block with `STRING_OLD` 0 `llvm.loop.mustprogress`,
+/// `OLD_NODE` 1 `!{i32 0, i32 7}` and the `KIND` records of `range` (0) and `llvm.loop` (1), and
+/// a second with `OLD_NODE` 2 `!{!0}` and 3 `!{!3, !2}`. `first` and `second` follow each
+/// block's records.
+fn legacy_prefix(w: &mut Writer, first: &[(u64, Vec<u64>)], second: &[(u64, Vec<u64>)]) {
+    block(
+        w,
+        codes::TYPE_BLOCK,
+        &[
+            (1, vec![7]),
+            (7, vec![32]),
+            (7, vec![1]),
+            (2, vec![]),
+            (8, vec![0, 1]),
+            (21, vec![0, 2, 3, 0]),
+            (21, vec![0, 0, 0]),
+            (16, vec![]),
+        ],
+    );
+    w.unabbrev(8, &[0, 1, 4, 0, 0, 0, 0, 0, 0]);
+    w.unabbrev(8, &[1, 5, 5, 0, 1, 0, 0, 0, 0]);
+    block(
+        w,
+        codes::CONSTANTS_BLOCK,
+        &[(1, vec![0]), (2, vec![]), (4, vec![14])],
+    );
+    let kind = |id: u64, name: &str| (6, [vec![id], chars(name)].concat());
+    let mut a = vec![
+        (1, chars("llvm.loop.mustprogress")),
+        (8, vec![0, 2, 0, 3]),
+        kind(0, "range"),
+        kind(1, "llvm.loop"),
+    ];
+    a.extend_from_slice(first);
+    block(w, codes::METADATA_BLOCK, &a);
+    let mut b = vec![(8, vec![6, 0]), (8, vec![6, 3, 6, 2])];
+    b.extend_from_slice(second);
+    block(w, codes::METADATA_BLOCK, &b);
+}
+
+/// [`good_records`]' body after [`legacy_prefix`], with [`good_tail`]'s names, its own `METADATA`
+/// block defining 4 `!{!0}` and 5 `distinct !{!5, !4}` and holding `md`, the `!range` attachment
+/// naming `!1` and the `!llvm.loop` one naming `!loop_node`.
+fn legacy_module(md: &[(u64, Vec<u64>)], loop_node: u64) -> Result<ModuleTables, Error> {
+    decode(&stream(2, 0, STRTAB, |w| {
+        legacy_prefix(w, &[], &[]);
+        function_block(w, &good_records(), |w| {
+            let mut bb = vec![1];
+            bb.extend(chars("loop"));
+            block(
+                w,
+                codes::VALUE_SYMTAB_BLOCK,
+                &[(1, vec![4, u64::from(b'p')]), (2, bb)],
+            );
+            let mut own = vec![(3, vec![1]), (5, vec![6, 5])];
+            own.extend_from_slice(md);
+            block(w, codes::METADATA_BLOCK, &own);
+            block(
+                w,
+                codes::METADATA_ATTACHMENT_BLOCK,
+                &[(11, vec![0, 0, 1]), (11, vec![5, 1, loop_node])],
+            );
+        });
+    }))
+}
+
+/// `STRING_OLD`, `KIND` in the `METADATA` block and `OLD_NODE` read as LLVM's `MetadataLoader`
+/// reads them: the body is the one its modern twin decodes to, the values an old node holds are
+/// kept once each after the block's own ids, and every id LLVM numbers later, in the module and
+/// in a function, is moved past them.
+#[test]
+fn legacy_metadata_records_read_as_their_modern_twins() {
+    let modern = decode(&good()).unwrap();
+    for loop_node in [3, 5] {
+        let t = legacy_module(&[], loop_node).unwrap();
+        assert_eq!(t.parts.funcs, modern.parts.funcs, "loop node {loop_node}");
+        assert_eq!(t.md_kinds, modern.md_kinds);
+        let c = |id: u64| t.value(id).unwrap();
+        let node = |ops: &[u32]| Md::Node {
+            distinct: false,
+            ops: ops.iter().map(|&i| Some(MdId::new(i))).collect(),
+        };
+        let arena: Vec<&Md> = t.parts.metadata.values().collect();
+        let Md::String(string) = arena[0] else {
+            panic!("metadata 0 is not a string");
+        };
+        assert_eq!(
+            t.parts.symbols.get(*string),
+            Some(&b"llvm.loop.mustprogress"[..])
+        );
+        assert_eq!(
+            arena[1..],
+            [
+                &node(&[2, 3]),
+                &Md::Value(c(2)),
+                &Md::Value(c(3)),
+                &node(&[0]),
+                &node(&[5, 4]),
+            ]
+        );
+    }
+
+    let decode_err = |r: Result<ModuleTables, Error>| r.unwrap_err();
+    let malformed = |e: Error, code: u32| {
+        assert_eq!(
+            bitcode_kind(&e),
+            Some(&BitcodeError::MalformedRecord {
+                block: codes::METADATA_BLOCK,
+                code
+            }),
+            "{e}"
+        );
+    };
+    let refused = |e: Error, code: u32| {
+        assert_eq!(
+            unsupported_feature(&e),
+            Some(&Feature::BitcodeRecord {
+                block: codes::METADATA_BLOCK,
+                code
+            }),
+            "{e}"
+        );
+    };
+    let module_with = |first: &[(u64, Vec<u64>)], second: &[(u64, Vec<u64>)]| {
+        decode(&stream(2, 0, STRTAB, |w| {
+            legacy_prefix(w, first, second);
+            function_block(w, &good_records(), |_| {});
+        }))
+    };
+    // A kind stated twice (in either block), a kind with no name, an odd old node.
+    malformed(decode_err(module_with(&[(6, vec![0, 120])], &[])), 6);
+    malformed(decode_err(module_with(&[], &[(6, vec![1, 120])])), 6);
+    malformed(decode_err(module_with(&[(6, vec![2])], &[])), 6);
+    malformed(decode_err(module_with(&[(8, vec![0, 2, 0])], &[])), 8);
+    // An operand type outside the table, a value that is not one of that type, and a
+    // metadata id no record defines.
+    let e = decode_err(module_with(&[(8, vec![9, 2])], &[]));
+    assert_eq!(bitcode_kind(&e), Some(&BitcodeError::BadType), "{e}");
+    let e = decode_err(module_with(&[(8, vec![1, 2])], &[]));
+    assert_eq!(bitcode_kind(&e), Some(&BitcodeError::BadValueRef), "{e}");
+    let e = decode_err(module_with(&[], &[(8, vec![6, 9])]));
+    assert_eq!(bitcode_kind(&e), Some(&BitcodeError::BadMetadata), "{e}");
+    // A value in a module block after the one whose old nodes kept values; `KIND` and
+    // `OLD_NODE` in a function's block; `OLD_FN_NODE`.
+    refused(decode_err(module_with(&[], &[(8, vec![0, 2])])), 8);
+    refused(decode_err(legacy_module(&[(6, vec![2, 120])], 5)), 6);
+    refused(decode_err(legacy_module(&[(8, vec![6, 0])], 5)), 8);
+    refused(decode_err(module_with(&[(9, vec![0, 2])], &[])), 9);
 }

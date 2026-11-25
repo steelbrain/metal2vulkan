@@ -5,6 +5,16 @@
 //! pointee erased, in dependency order. Erasure removes the only legal source of cycles (a struct
 //! reaching itself through a pointer), so a cycle that remains is malformed input. The pointee of
 //! each typed pointer is kept here, by bitcode type index, for the decode-only `PointeeTable`.
+//!
+//! [`TypeIds`] extends the table with the type ids LLVM's reader gives values the table has no
+//! entry for (`getVirtualTypeID`, `llvm/lib/Bitcode/Reader/BitcodeReader.cpp:1532` at
+//! `llvmorg-23.1.2`): a pointer to a known element, as a global, a function, an `alloca` or a
+//! `getelementptr` yields. Each value of a function body carries such an id, so a record that
+//! states no type of its own (a typed-pointer `load`, `call` or `getelementptr` without an
+//! explicit type, pre-3.7 writers) takes it from its pointer operand's contained type, as LLVM's
+//! reader does (`getContainedTypeID`, line 1510).
+
+use std::collections::HashMap;
 
 use super::codes::*;
 use super::stream::Stream;
@@ -31,6 +41,9 @@ pub struct BitcodeTypes {
     /// The bitcode return and parameter type indices of every function type, by bitcode index
     /// (sorted).
     fn_sigs: Vec<(u32, u32, Box<[u32]>)>,
+    /// The element of every array and vector, and the fields of every struct, by bitcode index
+    /// (sorted).
+    aggregates: Vec<(u32, Box<[u32]>)>,
 }
 
 impl BitcodeTypes {
@@ -63,6 +76,27 @@ impl BitcodeTypes {
         self.sig(idx).map(|(_, r)| r)
     }
 
+    /// Contained type `i` of the entry at `idx`, as LLVM's reader records it: a typed pointer's
+    /// pointee (0), a function type's return (0) and parameters (1..), an array's or vector's
+    /// element (0), a struct's fields.
+    pub(crate) fn contained(&self, idx: u32, i: u32) -> Option<u32> {
+        let i = usize::try_from(i).ok()?;
+        if let Some(p) = self.pointee(u64::from(idx)) {
+            return (i == 0).then_some(p);
+        }
+        if let Some((params, ret)) = self.sig(u64::from(idx)) {
+            return match i.checked_sub(1) {
+                None => Some(ret),
+                Some(p) => params.get(p).copied(),
+            };
+        }
+        let at = self
+            .aggregates
+            .binary_search_by_key(&idx, |(i, _)| *i)
+            .ok()?;
+        self.aggregates.get(at)?.1.get(i).copied()
+    }
+
     fn sig(&self, idx: u64) -> Option<(&[u32], u32)> {
         let idx = u32::try_from(idx).ok()?;
         let at = self
@@ -89,11 +123,16 @@ impl BitcodeTypes {
         let BitcodeTypes {
             mut entries,
             fn_sigs,
+            aggregates,
         } = self;
         for e in entries.iter_mut() {
             e.ty = e.ty.and_then(&new);
         }
-        BitcodeTypes { entries, fn_sigs }
+        BitcodeTypes {
+            entries,
+            fn_sigs,
+            aggregates,
+        }
     }
 }
 
@@ -247,11 +286,22 @@ pub(crate) fn decode(
     let mut entries = Vec::new();
     m.reserve(&mut entries, raw.len())?;
     let mut fn_sigs = Vec::new();
+    let mut aggregates = Vec::new();
     for (i, (r, ty)) in raw.iter().zip(erased).enumerate() {
         if let Raw::Function { ret, params, .. } = r {
             grow(m, &mut fn_sigs)?;
             m.charge(std::mem::size_of_val::<[u32]>(params))?;
             fn_sigs.push((i as u32, *ret, params.clone()));
+        }
+        let children = match r {
+            Raw::Vector { elem, .. } | Raw::Array { elem, .. } => Some(Box::from([*elem])),
+            Raw::Struct { fields, .. } => Some(fields.clone()),
+            _ => None,
+        };
+        if let Some(children) = children {
+            grow(m, &mut aggregates)?;
+            m.charge(std::mem::size_of_val::<[u32]>(&children))?;
+            aggregates.push((i as u32, children));
         }
         let pointee = match r {
             Raw::Ptr {
@@ -269,7 +319,79 @@ pub(crate) fn decode(
             pointee,
         });
     }
-    Ok(BitcodeTypes { entries, fn_sigs })
+    Ok(BitcodeTypes {
+        entries,
+        fn_sigs,
+        aggregates,
+    })
+}
+
+/// No type id: what LLVM's reader calls `InvalidTypeID`.
+pub(crate) const NO_TYPE_ID: u32 = u32::MAX;
+
+/// LLVM's reader's type ids: the table's indices, then the ids it makes for types the table has
+/// no entry for (`getVirtualTypeID`), one per erased type and first contained id, numbered after
+/// the table. Only a contained id and its erased type are ever read back, so a type with nothing
+/// contained (a comparison's `i1` result) needs no id of its own: it is [`NO_TYPE_ID`], whose
+/// contained ids are none, as are those of LLVM's id for it.
+#[derive(Debug, Default)]
+pub(crate) struct TypeIds {
+    /// The erased type and the contained ids of each id past the table.
+    made: Vec<(TypeId, Box<[u32]>)>,
+    /// The id made for each `(erased type, first contained id)`.
+    by_key: HashMap<(TypeId, u32), u32>,
+}
+
+impl TypeIds {
+    /// Contained id `i` of id `id` ([`NO_TYPE_ID`] where there is none).
+    pub(crate) fn contained(&self, table: &BitcodeTypes, id: u32, i: u32) -> u32 {
+        let len = table.entries.len() as u32;
+        let found = match id.checked_sub(len) {
+            None => table.contained(id, i),
+            Some(k) => self
+                .made
+                .get(k as usize)
+                .and_then(|(_, c)| c.get(i as usize))
+                .copied(),
+        };
+        found.unwrap_or(NO_TYPE_ID)
+    }
+
+    /// The erased type of id `id`.
+    pub(crate) fn ty(&self, table: &BitcodeTypes, id: u32) -> Option<TypeId> {
+        let len = table.entries.len() as u32;
+        match id.checked_sub(len) {
+            None => table.ty(u64::from(id)),
+            Some(k) => self.made.get(k as usize).map(|(t, _)| *t),
+        }
+    }
+
+    /// The id of erased type `ty` whose contained ids are `children`, made on first use. With
+    /// nothing contained, or a first contained id that is none, it is [`NO_TYPE_ID`].
+    pub(crate) fn id(
+        &mut self,
+        table: &BitcodeTypes,
+        ty: TypeId,
+        children: &[u32],
+        m: &mut Meter,
+    ) -> Result<u32, Error> {
+        let Some(&first) = children.first().filter(|&&c| c != NO_TYPE_ID) else {
+            return Ok(NO_TYPE_ID);
+        };
+        if let Some(&id) = self.by_key.get(&(ty, first)) {
+            return Ok(id);
+        }
+        let id = u32::try_from(table.entries.len() + self.made.len())
+            .ok()
+            .filter(|&id| id != NO_TYPE_ID)
+            .ok_or(Error::LimitExceeded(Limit::TypeCount))?;
+        grow(m, &mut self.made)?;
+        m.charge(std::mem::size_of_val::<[u32]>(children))?;
+        m.charge(std::mem::size_of::<((TypeId, u32), u32)>().saturating_mul(2))?;
+        self.made.push((ty, children.into()));
+        self.by_key.insert((ty, first), id);
+        Ok(id)
+    }
 }
 
 /// Intern every raw entry in dependency order (iterative post-order; no recursion on untrusted

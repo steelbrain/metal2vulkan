@@ -126,19 +126,25 @@ pub(crate) fn cst_unsupported(code: u32) -> Option<ConstantRecord> {
 }
 
 // ---- METADATA ----
+/// `METADATA_STRING_OLD: [values]`: one string per record, as older writers spell strings.
+pub(crate) const METADATA_STRING_OLD: u32 = 1;
 pub(crate) const METADATA_VALUE: u32 = 2;
 pub(crate) const METADATA_NODE: u32 = 3;
 pub(crate) const METADATA_NAME: u32 = 4;
 pub(crate) const METADATA_DISTINCT_NODE: u32 = 5;
 pub(crate) const METADATA_KIND: u32 = 6;
+/// `METADATA_OLD_NODE: [n x (type, value)]`: a node with typed operands, as older writers spell
+/// nodes.
+pub(crate) const METADATA_OLD_NODE: u32 = 8;
 pub(crate) const METADATA_NAMED_NODE: u32 = 10;
 pub(crate) const METADATA_STRINGS: u32 = 35;
 pub(crate) const METADATA_GLOBAL_DECL_ATTACHMENT: u32 = 36;
 pub(crate) const METADATA_INDEX_OFFSET: u32 = 38;
 pub(crate) const METADATA_INDEX: u32 = 39;
-/// Legacy metadata codes LLVM defines that the typed model refuses: STRING_OLD, KIND (in the
-/// `METADATA` block rather than `METADATA_KIND`), OLD_NODE, OLD_FN_NODE.
-pub(crate) const METADATA_UNSUPPORTED: &[u32] = &[1, 6, 8, 9];
+/// The legacy metadata code LLVM defines that the typed model refuses: OLD_FN_NODE (a
+/// function-local value as metadata). STRING_OLD, KIND in the `METADATA` block and OLD_NODE are
+/// read (`metadata`).
+pub(crate) const METADATA_UNSUPPORTED: &[u32] = &[9];
 /// Debug-info records: each defines one metadata id, decoded as `Md::Debug`. LOCATION,
 /// GENERIC_DEBUG, SUBRANGE … FIXED_POINT_TYPE, excluding the non-DI codes in between.
 pub(crate) const METADATA_DEBUG: &[u32] = &[
@@ -169,6 +175,9 @@ pub(crate) const FUNC_EXTRACTVAL: u32 = 26;
 pub(crate) const FUNC_INSERTVAL: u32 = 27;
 pub(crate) const FUNC_CMP2: u32 = 28;
 pub(crate) const FUNC_VSELECT: u32 = 29;
+/// `INST_INBOUNDS_GEP_OLD: [n x operands]`: an inbounds GEP whose source element type is its
+/// base pointer's pointee (pre-3.7 writers).
+pub(crate) const FUNC_INBOUNDS_GEP_OLD: u32 = 30;
 pub(crate) const FUNC_DEBUG_LOC_AGAIN: u32 = 33;
 pub(crate) const FUNC_CALL: u32 = 34;
 pub(crate) const FUNC_DEBUG_LOC: u32 = 35;
@@ -183,11 +192,11 @@ pub(crate) const FUNC_FREEZE: u32 = 58;
 pub(crate) const FUNC_ATOMICRMW: u32 = 59;
 pub(crate) const FUNC_BLOCKADDR_USERS: u32 = 60;
 /// Instruction codes LLVM defines outside the closed instruction set: GEP_OLD, SELECT (the
-/// pre-`VSELECT` spelling), INVOKE, VAARG, STORE_OLD, INBOUNDS_GEP_OLD, INDIRECTBR, CMPXCHG_OLD,
-/// ATOMICRMW_OLD, RESUME, LANDINGPAD_OLD, STOREATOMIC_OLD, LANDINGPAD, CLEANUPRET, CATCHRET,
-/// CATCHPAD, CLEANUPPAD, CATCHSWITCH, OPERAND_BUNDLE, CALLBR.
+/// pre-`VSELECT` spelling), INVOKE, VAARG, STORE_OLD, INDIRECTBR, CMPXCHG_OLD, ATOMICRMW_OLD,
+/// RESUME, LANDINGPAD_OLD, STOREATOMIC_OLD, LANDINGPAD, CLEANUPRET, CATCHRET, CATCHPAD,
+/// CLEANUPPAD, CATCHSWITCH, OPERAND_BUNDLE, CALLBR.
 pub(crate) const FUNC_UNSUPPORTED: &[u32] = &[
-    4, 5, 13, 23, 24, 30, 31, 37, 38, 39, 40, 42, 47, 48, 49, 50, 51, 52, 55, 57,
+    4, 5, 13, 23, 24, 31, 37, 38, 39, 40, 42, 47, 48, 49, 50, 51, 52, 55, 57,
 ];
 /// Debug records (`DEBUG_RECORD_VALUE` … `DEBUG_RECORD_LABEL`, LLVM 19+): debug info, which the IR
 /// does not keep, like `DEBUG_LOC`.

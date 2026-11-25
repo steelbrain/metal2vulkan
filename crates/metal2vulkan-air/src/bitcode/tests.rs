@@ -524,13 +524,13 @@ fn unknown_and_unsupported_records_are_typed() {
         unsupported_feature(&e),
         Some(&Feature::ModuleRecord { code: 19 })
     );
-    // Legacy codes LLVM defines in other blocks: METADATA_OLD_NODE, PARAMATTR_CODE_ENTRY_OLD.
-    let e = with_body(|w| block(w, codes::METADATA_BLOCK, &[(8, vec![0, 0])])).unwrap_err();
+    // Legacy codes LLVM defines in other blocks: METADATA_OLD_FN_NODE, PARAMATTR_CODE_ENTRY_OLD.
+    let e = with_body(|w| block(w, codes::METADATA_BLOCK, &[(9, vec![0, 0])])).unwrap_err();
     assert_eq!(
         unsupported_feature(&e),
         Some(&Feature::BitcodeRecord {
             block: codes::METADATA_BLOCK,
-            code: 8
+            code: 9
         })
     );
     let e = with_body(|w| block(w, codes::PARAMATTR_BLOCK, &[(1, vec![0, 0])])).unwrap_err();
