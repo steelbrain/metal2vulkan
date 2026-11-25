@@ -103,11 +103,13 @@ fn a_fragment_cases_depth_stencil_attachment_and_state_are_the_oracles() {
             stencil: Some(vec![0xab]),
         })
     );
-    // The state is the one the Metal oracle sets, from the same derivation.
+    // The state is the one the Metal oracle sets, from the same derivation, and the function's
+    // live `[[stencil]]` output is the draw's stencil reference.
     assert_eq!(
         render.depth_stencil_state,
         DrawDepthStencil::derived(depth_stencil_test(&interface))
     );
+    assert!(render.stencil_output);
     assert_eq!(
         render.output,
         RenderOutput::Stencil {
@@ -224,6 +226,7 @@ fn graphics_cases_map_onto_a_draw_with_their_companion() {
         }
     );
     assert_eq!(render.companion, companion);
+    assert!(!render.stencil_output);
 
     // A buffer output of a fragment case is the fragment stage's.
     authored.buffers = vec![crate::case::BufferResource {
@@ -465,6 +468,7 @@ pub(crate) fn two_stage_case(
         color_targets: targets,
         depth_stencil: None,
         depth_stencil_state: DrawDepthStencil::default(),
+        stencil_output: false,
         render_target_array_length: 0,
         assembly: Assembly::Primitives(Primitive::Triangle),
         cull_mode: metal::CullMode::None,

@@ -12,8 +12,10 @@ use crate::case::{
 use crate::check::interface::AirInterface;
 use metal2vulkan::metal::state::{
     depth_stencil_state, DepthStencilDescriptor, DepthStencilState, StencilDescriptor,
+    StencilOpState,
 };
 use metal2vulkan::metal::{CompareFunction, StencilOperation, Winding};
+use metal2vulkan::vk;
 use metal2vulkan_air::abi::{DepthQualifier, OutputRole};
 
 /// The render encoder's depth/stencil state for one draw: the `MTLDepthStencilDescriptor`, the
@@ -113,6 +115,40 @@ impl DrawDepthStencil {
     /// test is the identity otherwise; Vulkan's is disabled then).
     pub fn tests_stencil(&self) -> bool {
         self.vulkan().stencil_test_enable
+    }
+
+    /// The first face, with its compare function, whose stencil test a fragment function's
+    /// `[[stencil]]` output decides under this state: the output is the test's reference on both
+    /// faces, so a face whose test compares by a function other than `Always` and `Never` takes its
+    /// answer from it. `None` where the stencil test is off ([`Self::tests_stencil`]) or both faces
+    /// compare by `Always` or `Never`.
+    ///
+    /// It is the runtime's rule for a device without `VK_EXT_shader_stencil_export`, which draws
+    /// the output by bits, every draw but its first under a reference of its own
+    /// (`metal2vulkan_runtime`'s `depth_stencil::BitDraws::of`, read on the same Vulkan state,
+    /// `metal::state::depth_stencil_state`): it refuses a draw whose test the output decides
+    /// (`Gap::Draw` of `DrawKind::StencilOutput`). It refuses one more draw: where the state
+    /// replaces a stencil bit, one inside a `Counting` visibility result's segment, whose count
+    /// each of its draws would add to. A case sets no visibility result mode, so none of its draws
+    /// is in a segment, and that clause decides none.
+    pub fn stencil_reference_face(&self) -> Option<(&'static str, CompareFunction)> {
+        let state = self.vulkan();
+        if !state.stencil_test_enable {
+            return None;
+        }
+        let fixed = |face: &StencilOpState| {
+            matches!(
+                face.compare_op,
+                vk::CompareOp::ALWAYS | vk::CompareOp::NEVER
+            )
+        };
+        [
+            ("front", &state.front, &self.descriptor.front_face_stencil),
+            ("back", &state.back, &self.descriptor.back_face_stencil),
+        ]
+        .into_iter()
+        .find(|&(_, face, _)| !fixed(face))
+        .map(|(name, _, metal)| (name, metal.stencil_compare_function))
     }
 }
 

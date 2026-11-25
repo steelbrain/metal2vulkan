@@ -44,7 +44,7 @@ use crate::companion::Companion;
 use crate::executor_contract::buffer_slots::vertex_input_slots;
 use crate::executor_contract::render_target_array::render_target_array_length;
 use crate::executor_contract::tessellation as patches;
-use crate::executor_contract::DrawDepthStencil;
+use crate::executor_contract::{depth_stencil_test, DrawDepthStencil};
 use crate::literal::{LiteralDepthStencil, LiteralResources, LiteralStageInput, LiteralTexture};
 use metal2vulkan::bind::{DrawCall, IndexBufferRef};
 use metal2vulkan::error::{DescriptorError, Error, MetalAnswer};
@@ -196,6 +196,11 @@ pub struct RenderCase {
     /// oracle's, a fragment case's authored state or the one its function's live outputs imply
     /// ([`DrawDepthStencil::of_case`]); a vertex case's is the default (no test).
     pub depth_stencil_state: DrawDepthStencil,
+    /// Whether the case's own fragment function writes a live `[[stencil]]` output
+    /// ([`depth_stencil_test`]), the reference of its draw's stencil test on both faces; `false`
+    /// for a vertex case. A device without `VK_EXT_shader_stencil_export` draws it by bits, under
+    /// a stencil test the output does not decide (`DrawDepthStencil::stencil_reference_face`).
+    pub stencil_output: bool,
     /// The render pass's `renderTargetArrayLength`: the Metal oracle's, 1 when the case's own
     /// function's stage metadata declares its render target slice and 0 otherwise
     /// ([`render_target_array_length`]).
@@ -452,6 +457,7 @@ pub fn render_case(
         ),
         _ => DrawDepthStencil::default(),
     };
+    let stencil_output = stage == ShaderStage::Fragment && depth_stencil_test(interface).stencil;
     Ok(RenderCase {
         vertex,
         fragment,
@@ -459,6 +465,7 @@ pub fn render_case(
         color_targets,
         depth_stencil: literal.depth_stencil.clone(),
         depth_stencil_state,
+        stencil_output,
         render_target_array_length: render_target_array_length(case.stage, air_ll),
         assembly,
         draw,

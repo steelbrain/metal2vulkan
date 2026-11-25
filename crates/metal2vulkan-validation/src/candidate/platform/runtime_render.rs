@@ -26,7 +26,10 @@
 //!
 //! The row records what the runtime answers, as a kernel's does: the state's precision notes on
 //! the case's own stage, and the float reductions its AIR calls. An out-of-bounds case's facts are
-//! read before the state is made (`runtime_bounds::drawn`).
+//! read before the state is made (`runtime_bounds::drawn`). On a device without
+//! `VK_EXT_shader_stencil_export`, a fragment function's `[[stencil]]` output whose stencil test it
+//! decides needs the extension, decided from the case's state once the state is made
+//! (`stencil_output_drawn`).
 
 use super::runtime::{self, runtime_error, Identity, Placed};
 use super::runtime_bounds;
@@ -46,6 +49,7 @@ use crate::executor_contract::tessellation;
 use crate::gpu::DeviceType;
 use crate::literal::LiteralDepthStencil;
 use metal2vulkan::bind::DrawCall;
+use metal2vulkan::device::DeviceProfile;
 use metal2vulkan::library::Library;
 use metal2vulkan::pipeline::{
     ColorAttachmentDescriptor, FunctionDescriptor, RenderPipelineDescriptor, Stage as ShaderStage,
@@ -110,6 +114,7 @@ fn run(
     let state = runtime::made_within(|numbered| {
         device.new_render_pipeline_state(&descriptor, |samplers| numbered(samplers))
     })?;
+    stencil_output_drawn(case, device.translator().profile())?;
     let mut indices = Indices::new();
     let stages = Stages::make(device, device_type, (case, draw), &mut indices)?;
     let vertex_buffers = case
@@ -252,6 +257,30 @@ fn run(
             containment: None,
         },
     ))
+}
+
+/// `Ok` where the runtime draws `case`'s `[[stencil]]` output, if it has one, on the device whose
+/// translator's profile is `profile`, the profile that chose the output's form. A device without
+/// `VK_EXT_shader_stencil_export` draws the output by bits and refuses a draw under a stencil test
+/// the output decides on a face (`DrawDepthStencil::stencil_reference_face`; the runtime's
+/// `Gap::Draw` of `DrawKind::StencilOutput`, at the draw): such a case needs the extension, which
+/// the device does not provide (`NotEnabled`), read from the case's own structure before anything
+/// is drawn. A device with the extension writes the output as the fragment's stencil reference,
+/// under any test.
+fn stencil_output_drawn(case: &RenderCase, profile: &DeviceProfile) -> Result<(), ExecutorError> {
+    if !case.stencil_output || profile.fragment().stencil_export {
+        return Ok(());
+    }
+    match case.depth_stencil_state.stencil_reference_face() {
+        None => Ok(()),
+        Some((face, compare)) => Err(NotSupported::NotEnabled(vec![format!(
+            "VK_EXT_shader_stencil_export: the fragment function's [[stencil]] output is the \
+             reference of the {face} face's stencil test, which compares by {compare:?}; without \
+             the extension the runtime draws the output by bits and refuses a draw whose stencil \
+             test the output decides (Gap::Draw of StencilOutput)"
+        )])
+        .into()),
+    }
 }
 
 /// The case's `MTLRenderPipelineDescriptor` as the Metal oracle makes it
@@ -1033,4 +1062,94 @@ fn drawn(
         }
     }
     .map_err(|error| runtime_error("the draw", error))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stencil_output_drawn;
+    use crate::candidate::engine::graphics::tests::two_stage_case;
+    use crate::candidate::engine::graphics::RenderCase;
+    use crate::check::admission::{ExecutorError, NotSupported};
+    use crate::executor_contract::DrawDepthStencil;
+    use metal2vulkan::metal::{CompareFunction, StencilOperation};
+    use std::collections::BTreeMap;
+
+    /// On a device without `VK_EXT_shader_stencil_export` (the profile of the RTX 5080 venue),
+    /// whose runtime draws a fragment function's `[[stencil]]` output by bits, a draw under a
+    /// stencil test that compares by a function other than `Always` and `Never` on a face needs the
+    /// extension, as the runtime refuses it at the draw, whatever the faces' operations (`Keep`,
+    /// which replaces no bit, among them); one under `Always` or `Never` on both faces, or with the
+    /// stencil test off (both `Always` and `Keep`), is drawn. A function with no such output, and a
+    /// device with the extension (lavapipe's), draw every state.
+    #[test]
+    fn a_stencil_output_needs_the_extension_where_it_decides_its_test() {
+        use CompareFunction::*;
+        let without = crate::engine::load_profile("nvidia-rtx5080-laptop").unwrap();
+        let with = crate::engine::load_profile("gate-lavapipe").unwrap();
+        assert!(!without.fragment().stencil_export && with.fragment().stencil_export);
+        let case = |front, back, operation, stencil_output| {
+            let mut state = DrawDepthStencil::default();
+            for (face, compare) in [
+                (&mut state.descriptor.front_face_stencil, front),
+                (&mut state.descriptor.back_face_stencil, back),
+            ] {
+                face.stencil_compare_function = compare;
+                face.depth_stencil_pass_operation = operation;
+                face.depth_failure_operation = operation;
+            }
+            RenderCase {
+                depth_stencil_state: state,
+                stencil_output,
+                ..two_stage_case("v", "f", Vec::new(), BTreeMap::new(), 3)
+            }
+        };
+        let fixed = |compare: CompareFunction| matches!(compare, Never | Always);
+        let compares = [
+            Never,
+            Less,
+            Equal,
+            LessEqual,
+            Greater,
+            NotEqual,
+            GreaterEqual,
+            Always,
+        ];
+        let mut needed = 0;
+        for front in compares {
+            for back in compares {
+                for operation in [StencilOperation::Keep, StencilOperation::Replace] {
+                    let drawn = case(front, back, operation, true);
+                    let decided = [("front", front), ("back", back)]
+                        .into_iter()
+                        .find(|&(_, compare)| !fixed(compare));
+                    match (stencil_output_drawn(&drawn, &without), decided) {
+                        (Ok(()), None) => {}
+                        (
+                            Err(ExecutorError::NotSupported(NotSupported::NotEnabled(gaps))),
+                            Some((face, compare)),
+                        ) => {
+                            assert_eq!(gaps.len(), 1);
+                            assert!(gaps[0].starts_with("VK_EXT_shader_stencil_export: "));
+                            let named = format!(
+                                "the {face} face's stencil test, which compares by {compare:?};"
+                            );
+                            assert!(gaps[0].contains(&named), "{}", gaps[0]);
+                            needed += 1;
+                        }
+                        (other, decided) => {
+                            panic!(
+                                "{front:?}/{back:?} {operation:?}: {other:?}, decided {decided:?}"
+                            )
+                        }
+                    }
+                    let unwritten = case(front, back, operation, false);
+                    assert!(stencil_output_drawn(&unwritten, &without).is_ok());
+                    assert!(stencil_output_drawn(&drawn, &with).is_ok());
+                }
+            }
+        }
+        // Every pair of compare functions but the four of `Always` and `Never` alone, under both
+        // operations.
+        assert_eq!(needed, (64 - 4) * 2);
+    }
 }

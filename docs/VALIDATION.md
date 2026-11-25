@@ -564,7 +564,14 @@ cargo run -p metal2vulkan-validation --release --bin corpus-vulkan -- \
   (`Refusal::IndexBufferOffset`), carries `index_buffer_past_end`, and a depth/stencil attachment
   of both aspects, the oracle's two textures, which the runtime renders into in no one pass yet
   (`Gap::RenderPass` of `DepthStencilViews`), carries `separate_depth_stencil`: each the runtime's
-  limit, run on Metal alone. Its device worker enables the
+  limit, run on Metal alone. A device without `VK_EXT_shader_stencil_export` draws a fragment
+  function's `[[stencil]]` output by bits and refuses a draw whose stencil test compares by a
+  function other than `Always` and `Never` on a face, which the output decides as its reference
+  (`Gap::Draw` of `StencilOutput`): such a case records `not_enabled` there, naming the extension
+  and the face, read from its function's live outputs and its depth-stencil state once the state is
+  made (`DrawDepthStencil::stencil_reference_face`). A case sets no visibility result mode, so the
+  runtime's other refusal of such a draw, inside a `Counting` segment, meets none. Its device
+  worker enables the
   validation layer through the loader's and the layer's variables, and any message the layer logs
   fails the row. The pipeline state's make is held to 500 MiB of peak live allocations and 20 s.
   Its row records the state's precision notes, the runtime's fingerprint and an out-of-bounds
