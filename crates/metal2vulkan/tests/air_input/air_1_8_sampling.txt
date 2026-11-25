@@ -1,0 +1,96 @@
+target triple = "air64_v18-apple-macosx10.11.0"
+source_filename = "-"
+; datalayout DataLayout { endian: Little, pointers: {0: PointerSpec { size_bits: 64, abi_bits: 64, pref_bits: 64, index_bits: 64 }}, ints: {1: AlignSpec { abi_bits: 8, pref_bits: 8 }, 8: AlignSpec { abi_bits: 8, pref_bits: 8 }, 16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }}, floats: {16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }, 128: AlignSpec { abi_bits: 128, pref_bits: 128 }}, vectors: {16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 24: AlignSpec { abi_bits: 32, pref_bits: 32 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 48: AlignSpec { abi_bits: 64, pref_bits: 64 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }, 96: AlignSpec { abi_bits: 128, pref_bits: 128 }, 128: AlignSpec { abi_bits: 128, pref_bits: 128 }, 192: AlignSpec { abi_bits: 256, pref_bits: 256 }, 256: AlignSpec { abi_bits: 256, pref_bits: 256 }, 512: AlignSpec { abi_bits: 512, pref_bits: 512 }, 1024: AlignSpec { abi_bits: 1024, pref_bits: 1024 }}, aggregate: AlignSpec { abi_bits: 0, pref_bits: 64 }, native_ints: [8, 16, 32], stack_align_bits: None, alloca_space: 0, program_space: 0, globals_space: 0, mangling: None, fn_ptr_align: None, non_integral: [] }
+%t5 = type <4 x float> (<4 x float>, ptr addrspace(2), ptr addrspace(1), ptr addrspace(2))
+%t7 = type <2 x float> (<2 x float>)
+%t11 = type <4 x float> (ptr addrspace(1), ptr addrspace(2), <2 x float>, i1, <2 x i32>, i1, float)
+%t12 = type <4 x float> (ptr addrspace(1), ptr addrspace(2), <2 x float>, <2 x float>, <2 x float>, i1, <2 x i32>)
+%t14 = type [2 x i32]
+c7 = %t14 [27, 2]
+c18 = <2 x i32> [0, 1]
+c19 = <2 x float> [0x3E800000, 0x3E800000]
+
+define %t5 @f0 "a18_sample_fs" convergent "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a1( align 16 dereferenceable(16) Ref nocapture ) %a3( Ref nocapture ) {
+bb0:
+  %i0 = shufflevector <2 x float> %a0, <4 x float> poison, <0, 1>
+  %i1 = fmul reassoc nnan ninf nsz arcp contract afn <2 x float> %i0, <2 x float> c19
+  %i2 = tail call reassoc nnan ninf nsz arcp contract afn <4 x float> @f3 [air Texture(Texture { op: Sample { compare: false, lod: Bias, offset: true }, image: ImageShape { dim: D2, array: false, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F32, lanes: 4 }, sign: None }), coord16: false, form: Current, status: false, access: None, states_access: false })](%a2, %a3, %i1, i1 1, <2 x i32> zeroinitializer, i1 0, float 0x0) convergent arg0( Ref nocapture ) arg1( Ref nocapture )
+  %i3 = tail call reassoc nnan ninf nsz arcp contract afn <2 x float> @f1 [air Derivative(Derivative { op: Dfdx, fast: false, ty: NumTy { elem: F32, lanes: 2 } })](%i1) convergent
+  %i4 = tail call reassoc nnan ninf nsz arcp contract afn <2 x float> @f2 [air Derivative(Derivative { op: Dfdy, fast: false, ty: NumTy { elem: F32, lanes: 2 } })](%i1) convergent
+  %i5 = tail call reassoc nnan ninf nsz arcp contract afn <4 x float> @f4 [air Texture(Texture { op: SampleGrad { compare: false, offset: true }, image: ImageShape { dim: D2, array: false, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F32, lanes: 4 }, sign: None }), coord16: false, form: Current, status: false, access: None, states_access: false })](%a2, %a3, %i1, %i3, %i4, i1 1, <2 x i32> zeroinitializer) arg0( Ref nocapture ) arg1( Ref nocapture )
+  %i6 = fadd reassoc nnan ninf nsz arcp contract afn <4 x float> %i5, %i2
+  %i7 = load <4 x float>, %a1, align 16
+  %i8 = fmul reassoc nnan ninf nsz arcp contract afn <4 x float> %i6, %i7
+  ret %i8
+}
+
+declare %t7 @f1 "air.dfdx.v2f32" convergent
+
+declare %t7 @f2 "air.dfdy.v2f32" convergent
+
+declare %t11 @f3 "air.sample_texture_2d.v4f32" convergent memory(Ref, NoModRef, NoModRef) %a0( Ref nocapture ) %a1( Ref nocapture )
+
+declare %t12 @f4 "air.sample_texture_2d_grad.v4f32" memory(Ref, NoModRef, NoModRef) %a0( Ref nocapture ) %a1( Ref nocapture )
+!md0 = !"SDK Version"
+!md1 = !"wchar_size"
+!md2 = !"frame-pointer"
+!md3 = !"air.render_target"
+!md4 = !"air.arg_type_name"
+!md5 = !"float4"
+!md6 = !"air.position"
+!md7 = !"air.center"
+!md8 = !"air.no_perspective"
+!md9 = !"air.arg_name"
+!md10 = !"pos"
+!md11 = !"air.buffer"
+!md12 = !"air.buffer_size"
+!md13 = !"air.location_index"
+!md14 = !"air.read"
+!md15 = !"air.arg_type_size"
+!md16 = !"air.arg_type_align_size"
+!md17 = !"tint"
+!md18 = !"air.texture"
+!md19 = !"air.sample"
+!md20 = !"texture2d<float, sample>"
+!md21 = !"t"
+!md22 = !"air.sampler"
+!md23 = !"sampler"
+!md24 = !"s"
+!md25 = !"air.compile.denorms_disable"
+!md26 = !"air.compile.fast_math_enable"
+!md27 = !"air.compile.framebuffer_fetch_disable"
+!md28 = !"Apple metal version 32023.922 (metalfe-32023.922.4)"
+!md29 = !"Metal"
+!md30 = i32 2
+!md31 = %t14 c7
+!md32 = i32 1
+!md33 = i32 4
+!md34 = i32 7
+!md35 = ptr addrspace(0) @f0
+!md36 = i32 0
+!md37 = i32 16
+!md38 = i32 3
+!md39 = i32 8
+!md40 = !{!md30, !md0, !md31}
+!md41 = !{!md32, !md1, !md33}
+!md42 = !{!md34, !md2, !md30}
+!md43 = !{!md3, !md36, !md4, !md5}
+!md44 = !{!md43}
+!md45 = !{!md36, !md6, !md7, !md8, !md4, !md5, !md9, !md10}
+!md46 = !{!md32, !md11, !md12, !md37, !md13, !md36, !md32, !md14, !md15, !md37, !md16, !md37, !md4, !md5, !md9, !md17}
+!md47 = !{!md30, !md18, !md13, !md36, !md32, !md19, !md4, !md20, !md9, !md21}
+!md48 = !{!md38, !md22, !md13, !md36, !md32, !md4, !md23, !md9, !md24}
+!md49 = !{!md45, !md46, !md47, !md48}
+!md50 = !{!md35, !md44, !md49}
+!md51 = !{!md25}
+!md52 = !{!md26}
+!md53 = !{!md27}
+!md54 = !{!md28}
+!md55 = !{!md32, !md39, !md36}
+!md56 = !{!md29, !md32, !md32, !md36}
+!"llvm.module.flags" = !{!md40, !md41, !md42}
+!"air.fragment" = !{!md50}
+!"air.compile_options" = !{!md51, !md52, !md53}
+!"llvm.ident" = !{!md54}
+!"air.version" = !{!md55}
+!"air.language_version" = !{!md56}
