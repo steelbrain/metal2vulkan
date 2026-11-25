@@ -136,11 +136,11 @@ pub enum MemoryClass {
     /// `MTLStorageModeShared`: host-visible and host-cached memory, host-coherent too where the
     /// device has such a type ([`floor::MemoryTypes::shared`]), mapped for the block's life. On a
     /// discrete GPU it is system memory the GPU reads across its bus, as on a Mac with a discrete
-    /// GPU. The runtime flushes what commands reach of it before each submission, and flushes and
-    /// invalidates what they may write before the host sees their progress, on every device (the
-    /// crate's README, "Shared memory's coherence"): a range the commands reach only through an
-    /// address, with no binding or declaration naming it, is neither, nor are the consumer's own
-    /// host reads and writes outside those points.
+    /// GPU. Where that type is not host-coherent, the runtime flushes what commands reach of it
+    /// before each submission, and flushes and invalidates what they may write before the host
+    /// sees their progress (the crate's README, "Shared memory's coherence"): a range the commands
+    /// reach only through an address, with no binding or declaration naming it, is neither, nor
+    /// are the consumer's own host reads and writes outside those points.
     Shared,
 }
 

@@ -1,15 +1,15 @@
-//! Shared memory's host coherence: the flushes and invalidates Vulkan asks of mapped memory, made
-//! on every device whatever the flags of its Shared type.
+//! Shared memory's host coherence: the flushes and invalidates Vulkan asks of mapped memory of a
+//! Shared type that is not host-coherent.
 //!
 //! Shared storage lives in the first host-visible, host-cached memory type a buffer can use, a
 //! host-coherent one first (`floor::choose`). Vulkan makes the host's writes to mapped memory of a
 //! type without `VK_MEMORY_PROPERTY_HOST_COHERENT_BIT` available to the device only through
 //! `vkFlushMappedMemoryRanges`, and the device's writes visible to the host only through
-//! `vkInvalidateMappedMemoryRanges` ("Host Access to Device Memory Objects"). The runtime makes
-//! both calls on every device, over the ranges commands reach, and never reads the type's flags:
-//! one form, whose calls a driver answers at once where the type is coherent (Mesa 26.2's Intel
-//! driver returns before it reads a range where no type of the device needs a flush, and skips a
-//! coherent type's ranges where one does).
+//! `vkInvalidateMappedMemoryRanges` ("Host Access to Device Memory Objects"). The device's make
+//! reads the chosen type's `HOST_COHERENT` flag once ([`Coherence::of`]): where the type is
+//! host-coherent, the device holds no [`Coherence`], keeps no ranges and makes neither call, as
+//! Vulkan has them "unnecessary" there; where it is not, the device makes both calls, over the
+//! ranges commands reach, as below.
 //!
 //! - **Before each submission**, the Shared memory its command buffers reach is flushed: each
 //!   buffer, texture over a buffer and heap a command buffer with a segment in it keeps, as its
@@ -19,10 +19,10 @@
 //!   device copy counts for none of its bytes: its commands reach the copy, and the block of its
 //!   bytes only its copy-ins read and its synchronize writes, each naming its own bytes there.
 //! - **Before the host can see the GPU's progress**, the Shared memory a command buffer may write
-//!   is flushed, then invalidated ([`settle`]): as it retires, before its status reads completed,
-//!   a wait for it returns or its completed handlers run; and, for every command buffer in flight,
-//!   before a shared event's value a GPU signal raised reaches a listener, `signaledValue` or a
-//!   wait for it. The flush first keeps the host's own writes to those ranges, which Vulkan leaves
+//!   is flushed, then invalidated ([`Coherence::settle`]): as it retires, before its status reads
+//!   completed, a wait for it returns or its completed handlers run; and, for every command buffer
+//!   in flight, before a shared event's value a GPU signal raised reaches a listener,
+//!   `signaledValue` or a wait for it. The flush first keeps the host's own writes to those ranges, which Vulkan leaves
 //!   undefined when a range written by the host is invalidated without a flush.
 //! - **The runtime's own host accesses** of the Shared type: the bytes `replace_region` writes into
 //!   a staging span are flushed before the copy is recorded, and so are the named bytes
@@ -152,7 +152,7 @@ impl Writes {
 
 /// What a committed command buffer's commands reach of Shared memory, merged: every range, which
 /// each submission that carries one of its segments flushes first, and those they may write,
-/// which the host's sight of their progress settles first ([`settle`]).
+/// which the host's sight of their progress settles first ([`Coherence::settle`]).
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct Ranges {
     pub(crate) reached: Vec<Range>,
@@ -196,9 +196,9 @@ impl Ranges {
     }
 }
 
-/// The device's side of coherence: the atom ranges widen to, and the written ranges of each
-/// command buffer committed and not yet retired that may write Shared memory, which a shared
-/// event's signal seen settles.
+/// The device's side of coherence, held only where its Shared type is not host-coherent: the atom
+/// ranges widen to, and the written ranges of each command buffer committed and not yet retired
+/// that may write Shared memory, which a shared event's signal seen settles.
 pub(crate) struct Coherence {
     /// The device's `nonCoherentAtomSize`.
     pub(crate) atom: u64,
@@ -206,11 +206,20 @@ pub(crate) struct Coherence {
 }
 
 impl Coherence {
-    pub(crate) fn new(atom: u64) -> Coherence {
-        Coherence {
+    /// The device's coherence, where its Shared type (`types.shared` of `memory`) lacks
+    /// `VK_MEMORY_PROPERTY_HOST_COHERENT_BIT`; `None` where it has it. `atom` is the device's
+    /// `nonCoherentAtomSize`.
+    pub(crate) fn of(
+        memory: &vk::PhysicalDeviceMemoryProperties,
+        types: crate::floor::MemoryTypes,
+        atom: u64,
+    ) -> Option<Coherence> {
+        let shared = memory.memory_types_as_slice()[types.shared as usize];
+        let coherent = (shared.property_flags).contains(vk::MemoryPropertyFlags::HOST_COHERENT);
+        (!coherent).then(|| Coherence {
             atom: atom.max(1),
             flight: Mutex::new(Vec::new()),
-        }
+        })
     }
 
     /// A command buffer committed with `ranges`: while it lives in flight, a shared event's signal
@@ -247,7 +256,42 @@ impl Coherence {
             ranges.extend_from_slice(&held.written);
         }
         merge(&mut ranges);
-        settle(core, &ranges);
+        self.settle(core, &ranges);
+    }
+
+    /// Flushes `ranges` (`vkFlushMappedMemoryRanges`), counted; nothing for none.
+    pub(crate) fn flush(&self, core: &Core, ranges: &[Range]) {
+        if ranges.is_empty() {
+            return;
+        }
+        // SAFETY: each range is of an allocation the runtime maps whole and keeps while the range
+        // is named (a block a command buffer or upload keeps, the staging region, a staging
+        // buffer, the zero source), its ends at atoms or the allocation's end.
+        let failed = with_mapped(ranges, |mapped| unsafe {
+            core.device.flush_mapped_memory_ranges(mapped).is_err()
+        });
+        core.counters.coherence(Call::Flush, bytes(ranges), failed);
+    }
+
+    /// Flushes `ranges`, then invalidates them (`vkInvalidateMappedMemoryRanges`), counted: the
+    /// GPU's writes there are visible to the host's reads after it, and the host's own writes made
+    /// before it are kept. Nothing for none.
+    pub(crate) fn settle(&self, core: &Core, ranges: &[Range]) {
+        if ranges.is_empty() {
+            return;
+        }
+        // SAFETY: as in `flush`.
+        let (flushed, invalidated) = with_mapped(ranges, |mapped| unsafe {
+            let flushed = core.device.flush_mapped_memory_ranges(mapped).is_err();
+            (
+                flushed,
+                core.device.invalidate_mapped_memory_ranges(mapped).is_err(),
+            )
+        });
+        let bytes = bytes(ranges);
+        core.counters.coherence(Call::Flush, bytes, flushed);
+        core.counters
+            .coherence(Call::Invalidate, bytes, invalidated);
     }
 }
 
@@ -263,41 +307,6 @@ fn with_mapped<R>(ranges: &[Range], call: impl FnOnce(&[vk::MappedMemoryRange]) 
     }
     let mapped: Vec<vk::MappedMemoryRange> = ranges.iter().map(|range| range.mapped()).collect();
     call(&mapped)
-}
-
-/// Flushes `ranges` (`vkFlushMappedMemoryRanges`), counted; nothing for none.
-pub(crate) fn flush(core: &Core, ranges: &[Range]) {
-    if ranges.is_empty() {
-        return;
-    }
-    // SAFETY: each range is of an allocation the runtime maps whole and keeps while the range is
-    // named (a block a command buffer or upload keeps, the staging region, a staging buffer, the
-    // zero source), its ends at atoms or the allocation's end.
-    let failed = with_mapped(ranges, |mapped| unsafe {
-        core.device.flush_mapped_memory_ranges(mapped).is_err()
-    });
-    core.counters.coherence(Call::Flush, bytes(ranges), failed);
-}
-
-/// Flushes `ranges`, then invalidates them (`vkInvalidateMappedMemoryRanges`), counted: the
-/// GPU's writes there are visible to the host's reads after it, and the host's own writes made
-/// before it are kept. Nothing for none.
-pub(crate) fn settle(core: &Core, ranges: &[Range]) {
-    if ranges.is_empty() {
-        return;
-    }
-    // SAFETY: as in `flush`.
-    let (flushed, invalidated) = with_mapped(ranges, |mapped| unsafe {
-        let flushed = core.device.flush_mapped_memory_ranges(mapped).is_err();
-        (
-            flushed,
-            core.device.invalidate_mapped_memory_ranges(mapped).is_err(),
-        )
-    });
-    let bytes = bytes(ranges);
-    core.counters.coherence(Call::Flush, bytes, flushed);
-    core.counters
-        .coherence(Call::Invalidate, bytes, invalidated);
 }
 
 /// Which call was made.

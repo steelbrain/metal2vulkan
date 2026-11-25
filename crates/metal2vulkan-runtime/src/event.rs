@@ -274,8 +274,11 @@ impl EventInner {
     /// and invalidated (`crate::coherence::Coherence::signal_seen`), then it is the value
     /// settled.
     fn seen(&self, signalled: u64) {
+        let Some(coherence) = &self.core.coherence else {
+            return;
+        };
         if signalled > self.settled.load(Ordering::Acquire) {
-            self.core.coherence.signal_seen(&self.core);
+            coherence.signal_seen(&self.core);
             self.settled.fetch_max(signalled, Ordering::AcqRel);
         }
     }

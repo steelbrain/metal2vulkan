@@ -189,6 +189,7 @@ pub(crate) fn make(core: &Core) -> Result<(), Error> {
         Filler::new(
             &core.device,
             core.memory_types.shared,
+            core.coherence.is_some(),
             &core.counters,
             core.max_allocations,
         )
@@ -212,7 +213,8 @@ pub(crate) struct Filler {
 
 impl Filler {
     /// Makes the zero source, whose allocation counts against `max_allocations`, the device's
-    /// `maxMemoryAllocationCount` ([`memory::allocate`]).
+    /// `maxMemoryAllocationCount` ([`memory::allocate`]); `flush` where `host_type` is not
+    /// host-coherent, so its zeros are flushed (`crate::coherence`).
     ///
     /// # Safety
     ///
@@ -221,12 +223,13 @@ impl Filler {
     pub(crate) unsafe fn new(
         device: &ash::Device,
         host_type: u32,
+        flush: bool,
         counters: &Counters,
         max_allocations: u32,
     ) -> Result<Filler, Error> {
         let mut filler = Filler::default();
         // SAFETY: the caller's contract.
-        match unsafe { filler.make(device, host_type, counters, max_allocations) } {
+        match unsafe { filler.make(device, host_type, flush, counters, max_allocations) } {
             Ok(()) => Ok(filler),
             Err(error) => {
                 // SAFETY: nothing made is in use.
@@ -270,6 +273,7 @@ impl Filler {
         &mut self,
         device: &ash::Device,
         host_type: u32,
+        flush: bool,
         counters: &Counters,
         max_allocations: u32,
     ) -> Result<(), Error> {
@@ -301,16 +305,19 @@ impl Filler {
             let pointer = device
                 .map_memory(self.zeros_memory, 0, ZEROS, vk::MemoryMapFlags::empty())
                 .map_err(Error::vulkan("vkMapMemory"))?;
-            // A new allocation's contents are undefined. The zeros are flushed, whatever the
-            // Shared type's flags, before the memory is unmapped (`crate::coherence`): the
-            // mapping's end is a multiple of every atom, so the whole of it is named.
+            // A new allocation's contents are undefined. Where the Shared type is not
+            // host-coherent, the zeros are flushed before the memory is unmapped
+            // (`crate::coherence`): the mapping's end is a multiple of every atom, so the whole
+            // of it is named.
             pointer.cast::<u8>().write_bytes(0, ZEROS as usize);
-            let zeros = [vk::MappedMemoryRange::default()
-                .memory(self.zeros_memory)
-                .offset(0)
-                .size(vk::WHOLE_SIZE)];
-            let flushed = device.flush_mapped_memory_ranges(&zeros);
-            counters.coherence(crate::coherence::Call::Flush, ZEROS, flushed.is_err());
+            if flush {
+                let zeros = [vk::MappedMemoryRange::default()
+                    .memory(self.zeros_memory)
+                    .offset(0)
+                    .size(vk::WHOLE_SIZE)];
+                let flushed = device.flush_mapped_memory_ranges(&zeros);
+                counters.coherence(crate::coherence::Call::Flush, ZEROS, flushed.is_err());
+            }
             device.unmap_memory(self.zeros_memory);
         }
         Ok(())

@@ -2076,9 +2076,9 @@ pub struct Metrics {
     /// command buffers or copy-ins reach Shared memory, one before each invalidate
     /// ([`shared_invalidates`](Self::shared_invalidates)), one after each `replace_region` through
     /// a staging span, one at each `upload_region` of named bytes in Shared memory, and one at the
-    /// zero source's make. Every device makes them, whatever its
-    /// Shared type's flags: a driver whose type is host-coherent answers each at once (the
-    /// runtime README, "Shared memory's coherence").
+    /// zero source's make. Only a device whose Shared type is not host-coherent makes them; on
+    /// one whose type is, this and the four after it stay 0 (the runtime README, "Shared memory's
+    /// coherence").
     pub shared_flushes: u64,
     /// The bytes those calls named, each range widened to whole multiples of the device's
     /// `nonCoherentAtomSize`.

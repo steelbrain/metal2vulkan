@@ -831,7 +831,7 @@ impl ComputeCommandEncoder {
         usage: ResourceUsage,
     ) -> Result<(), Error> {
         let building = self.building();
-        let atom = building.device.core().coherence.atom;
+        let atom = building.atom();
         let (id, shared, unstored, texture, span, place, written) = match resource {
             Resource::Buffer(buffer) => {
                 if !buffer.is_of(building.device.core()) {
@@ -845,7 +845,7 @@ impl ComputeCommandEncoder {
                     None,
                     Some(buffer.span()),
                     BufferObject::object(buffer).placement().cloned(),
-                    buffer.shared_range(atom),
+                    atom.and_then(|atom| buffer.shared_range(atom)),
                 )
             }
             Resource::Texture(texture) => {
@@ -864,7 +864,7 @@ impl ComputeCommandEncoder {
                     Some(lent),
                     None,
                     TextureObject::object(texture).placement().cloned(),
-                    texture.shared_range(atom),
+                    atom.and_then(|atom| texture.shared_range(atom)),
                 )
             }
             Resource::IndirectCommandBuffer(commands) => {
@@ -1221,9 +1221,10 @@ impl ComputeCommandEncoder {
             // same until they change, which finds the facts again (`crate::coherence`).
             if self.facts.host {
                 let building = recording(&mut self.building);
-                let atom = building.device.core().coherence.atom;
-                for range in shared_writes(&self.slots, &self.textures, interface, atom) {
-                    building.wrote_shared(Some(range));
+                if let Some(atom) = building.atom() {
+                    for range in shared_writes(&self.slots, &self.textures, interface, atom) {
+                        building.wrote_shared(Some(range));
+                    }
                 }
             }
         }

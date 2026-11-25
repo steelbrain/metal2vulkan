@@ -532,8 +532,10 @@ three: Mesa's Intel driver over the i915 kernel driver, on a GPU without a cache
 the CPU, lists a device-local, host-visible, host-coherent type and a device-local, host-visible,
 host-cached one. On a type without `VK_MEMORY_PROPERTY_HOST_COHERENT_BIT`, the host's writes
 reach the GPU only through `vkFlushMappedMemoryRanges`, and the GPU's writes reach the host only
-through `vkInvalidateMappedMemoryRanges`. The runtime makes both calls on every device, whatever
-the type's flags, at these points:
+through `vkInvalidateMappedMemoryRanges`. `Device::new` reads that flag of the Shared type once.
+Where the type has it, as on every device of ours, the device keeps no ranges and makes neither
+call, which Vulkan calls "unnecessary" there. Where the type lacks it, the device makes both calls
+at these points:
 
 - Before each submission, it flushes the Shared memory the submission's command buffers reach, as
   each commit found it: every buffer the command buffer keeps (bound, declared with
@@ -561,8 +563,7 @@ Each range is widened to whole multiples of the device's `nonCoherentAtomSize`, 
 pool's allocation, which the runtime maps whole. `Metrics::shared_flushes` and
 `shared_invalidates` count the calls, `shared_flushed_bytes` and `shared_invalidated_bytes` their
 bytes, and `shared_coherence_failures` the calls that did not return success; the work goes on
-after one. Where the type is host-coherent the calls change nothing; Mesa 26.2's Intel driver
-returns from them before it reads a range where no type of the device needs a flush.
+after one. On a device whose Shared type is host-coherent all five stay 0.
 
 On a device whose Shared type is not host-coherent, a range that a command buffer reaches only
 through an address, with no binding or `use_resource` declaration naming its buffer, is neither
@@ -1036,9 +1037,13 @@ the Direct3D 11 texture's payload until it is freed.
 - On a device whose Shared type is not host-coherent (Shared memory's coherence), the flushes
   and invalidates are that device's cost: before each submission over what its command buffers
   reach, and at each completion and each shared event's GPU-raised value seen over what they may
-  write, on the submit and completion threads and in the calls that read an event's value. No
-  device of ours has such a type, so neither that time nor the calls' effect on such a device has
-  been measured; on ours the Shared type is host-coherent.
+  write, on the submit and completion threads and in the calls that read an event's value. Every
+  device of ours has a host-visible, host-coherent, host-cached type, which Shared takes, so none
+  makes these calls, and none can show a flush the runtime missed: only a device whose Shared
+  type is cached and not coherent can. The device tests run the calls on our devices through a
+  view that reads their cached types as not coherent (`--cfg m2v_shared_view`,
+  docs/VALIDATION.md), on memory that is coherent in fact; neither the calls' time nor their
+  effect has been measured on a device whose memory is not.
 - On such a device, a host write to a range a command buffer may write, made while the command
   buffer runs, may be lost, and so may the GPU's writes to the same atoms. The runtime flushes
   each such range just before it invalidates it, and Vulkan states: "If a range of non-coherent
@@ -5465,8 +5470,8 @@ The runtime submits to the first queue family with `VK_QUEUE_GRAPHICS_BIT` and
 `VK_QUEUE_COMPUTE_BIT` (`floor::Capabilities::queue_family`). It allocates buffers from three memory
 types, each the first with its flags that a buffer of `floor::BUFFER_USAGE` can use: every buffer
 usage Vulkan 1.3 defines, and device addresses. Of the types with Shared's flags, the first that is
-also host-coherent is taken where the device has one; the runtime flushes and invalidates Shared
-memory on every device all the same (Shared memory's coherence). Vulkan guarantees such a buffer a device-local
+also host-coherent is taken where the device has one; where the type taken is not, the runtime
+flushes and invalidates Shared memory (Shared memory's coherence). Vulkan guarantees such a buffer a device-local
 type, so of the three only Shared and the ring can be missing on a conforming device. Vulkan answers which memory types a buffer can use
 only for a created device, so `PhysicalDevice::check` finds a type with each set of flags, and
 `Device::new` chooses on the device (`Device::memory_types` answers `floor::MemoryTypes`). A device

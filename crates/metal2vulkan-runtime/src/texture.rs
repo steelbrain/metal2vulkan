@@ -4636,8 +4636,10 @@ impl Texture {
             unsafe { bytes.copy_to(from, host.add(to), len) };
         }
         // The rows written are the GPU's before the copy runs (`crate::coherence`).
-        let written = stage.range(copy.len(), core.coherence.atom);
-        crate::coherence::flush(core, written.as_slice());
+        if let Some(coherence) = &core.coherence {
+            let written = stage.range(copy.len(), coherence.atom);
+            coherence.flush(core, written.as_slice());
+        }
         core.counters.copied(copy.len());
         core.work.upload(
             core,
@@ -4706,8 +4708,10 @@ impl Texture {
         let core = &inner.core;
         // The bytes the consumer wrote are the GPU's before the copy reads them
         // (`crate::coherence`).
-        let read = bytes.shared_span(start, copy.extent(), core.coherence.atom);
-        crate::coherence::flush(core, read.as_slice());
+        if let Some(coherence) = &core.coherence {
+            let read = bytes.shared_span(start, copy.extent(), coherence.atom);
+            coherence.flush(core, read.as_slice());
+        }
         core.work.upload(
             core,
             None,
@@ -4829,8 +4833,10 @@ impl Texture {
         let waited = core.done.wait(core, value);
         if waited.is_ok() {
             // What the copy wrote is the host's before it reads it (`crate::coherence`).
-            let written = stage.range(copy.len(), core.coherence.atom);
-            crate::coherence::settle(core, written.as_slice());
+            if let Some(coherence) = &core.coherence {
+                let written = stage.range(copy.len(), coherence.atom);
+                coherence.settle(core, written.as_slice());
+            }
             // SAFETY: the stage holds every row packed, the copy into it completed and its writes
             // are visible to the host, and no other call takes its span while this one reads it;
             // `copy` checked that each row lies in `bytes`.

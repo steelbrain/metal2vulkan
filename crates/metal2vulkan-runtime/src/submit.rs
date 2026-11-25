@@ -2051,9 +2051,9 @@ impl WorkState {
         let taken = self.changes.captured.take(&batch.leads);
         for (_, copy_in) in &taken {
             copy_in.backs(&mut batch.backs);
-            batch
-                .copied
-                .extend(copy_in.shared_ranges(core.coherence.atom));
+            if let Some(coherence) = &core.coherence {
+                batch.copied.extend(copy_in.shared_ranges(coherence.atom));
+            }
         }
         // The copies back owed by writes submitted before it to the Managed buffers its segments
         // reach, which its upload makes first: as it goes, the order of each write and its
@@ -2696,19 +2696,21 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
     }
     if ok.is_ok() {
         // The host's writes to the Shared memory its command buffers and copy-ins reach are the
-        // GPU's before it runs (`crate::coherence`).
+        // GPU's before it runs, where the Shared type is not host-coherent (`crate::coherence`).
         // One command buffer and no copy-in flushes its own ranges, merged at its commit.
-        match (copied.is_empty(), &shared[..]) {
-            (true, [one]) => coherence::flush(core, &one.reached),
-            _ => {
-                let mut flushed = copied;
-                flushed.extend(
-                    shared
-                        .iter()
-                        .flat_map(|ranges| ranges.reached.iter().copied()),
-                );
-                coherence::merge(&mut flushed);
-                coherence::flush(core, &flushed);
+        if let Some(coherence) = &core.coherence {
+            match (copied.is_empty(), &shared[..]) {
+                (true, [one]) => coherence.flush(core, &one.reached),
+                _ => {
+                    let mut flushed = copied;
+                    flushed.extend(
+                        shared
+                            .iter()
+                            .flat_map(|ranges| ranges.reached.iter().copied()),
+                    );
+                    coherence::merge(&mut flushed);
+                    coherence.flush(core, &flushed);
+                }
             }
         }
         drop(shared);

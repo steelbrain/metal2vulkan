@@ -659,15 +659,17 @@ impl CommandBuffer {
         // The core, not a handle: the command buffer gives its handle up before another thread
         // can complete it, so a handler that drops the consumer's last handle ends the device on
         // the reaper, never in this call.
-        // What it reaches of Shared memory, found here, off the work lock: no command is recorded
-        // after it (`crate::coherence`).
+        // What it reaches of Shared memory, found here, off the work lock, where the Shared type
+        // is not host-coherent: no command is recorded after it (`crate::coherence`).
         let core = self.building(|building| {
             let core = Arc::clone(building.device.core());
-            let gpu = &mut building.gpu;
-            let shared = Ranges::of(&gpu.kept, &gpu.blocks, &gpu.writes, core.coherence.atom);
-            gpu.shared = shared.map(Arc::new);
-            if let Some(shared) = &gpu.shared {
-                core.coherence.committed(shared);
+            if let Some(coherence) = &core.coherence {
+                let gpu = &mut building.gpu;
+                let shared = Ranges::of(&gpu.kept, &gpu.blocks, &gpu.writes, coherence.atom);
+                gpu.shared = shared.map(Arc::new);
+                if let Some(shared) = &gpu.shared {
+                    coherence.committed(shared);
+                }
             }
             Ok(core)
         })?;
@@ -911,10 +913,10 @@ impl CommandBuffer {
             // What a test records may write anything the host reads.
             building.wrote_host();
             f(&building.device.core().device, command);
-            let atom = building.device.core().coherence.atom;
+            let atom = building.atom();
             for buffer in buffers {
                 building.keep(buffer);
-                building.wrote_shared(buffer.shared_range(atom));
+                building.wrote_shared(atom.and_then(|atom| buffer.shared_range(atom)));
             }
             Ok(())
         })
@@ -1235,9 +1237,11 @@ impl Building {
         self.gpu.writes.add(range);
     }
 
-    /// The device's `nonCoherentAtomSize`, which Shared ranges are widened to.
-    pub(crate) fn atom(&self) -> u64 {
-        self.device.core().coherence.atom
+    /// The device's `nonCoherentAtomSize`, which Shared ranges are widened to, where the Shared
+    /// type is not host-coherent; `None` where it is, and no range is named
+    /// (`crate::coherence`).
+    pub(crate) fn atom(&self) -> Option<u64> {
+        (self.device.core().coherence.as_ref()).map(|coherence| coherence.atom)
     }
 
     /// A dispatch wrote: an indirect dispatch after it needs a barrier that reaches its
@@ -1798,9 +1802,9 @@ pub(crate) fn retire(
     // The GPU's writes to Shared memory are the host's before anything tells it the command buffer
     // completed: its status, a wait for it, its handlers (`crate::coherence`). Settled while it
     // still keeps every block they lie in.
-    if let Some(shared) = &gpu.shared {
-        coherence::settle(core, &shared.written);
-        core.coherence.retired(shared);
+    if let (Some(shared), Some(coherence)) = (&gpu.shared, &core.coherence) {
+        coherence.settle(core, &shared.written);
+        coherence.retired(shared);
     }
     // What was released while it was in flight may go (`crate::memory::Wait`).
     core.pool.ended();

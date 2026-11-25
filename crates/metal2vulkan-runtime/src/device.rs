@@ -251,9 +251,11 @@ pub(crate) struct Core {
     consumer_features: Vec<ConsumerFeature>,
     pub(crate) queues: Queues,
     pub(crate) memory_types: floor::MemoryTypes,
-    /// The flushes and invalidates of Shared memory: the device's atom, and the command buffers
-    /// in flight that may write Shared memory (`crate::coherence`).
-    pub(crate) coherence: crate::coherence::Coherence,
+    /// The flushes and invalidates of Shared memory where its type is not host-coherent: the
+    /// device's atom, and the command buffers in flight that may write Shared memory
+    /// (`crate::coherence`). `None` where the Shared type is host-coherent, decided at the make:
+    /// such a device keeps no ranges and makes no call.
+    pub(crate) coherence: Option<crate::coherence::Coherence>,
     /// The device-local memory types, one bit each: a texture's image takes the first its
     /// requirements allow.
     pub(crate) device_local: u32,
@@ -823,7 +825,7 @@ impl Device {
             consumer_features,
             queues: Queues { runtime, present },
             memory_types,
-            coherence: crate::coherence::Coherence::new(atom),
+            coherence: crate::coherence::Coherence::of(&capabilities.memory, memory_types, atom),
             device_local,
             unified_memory,
             counters,

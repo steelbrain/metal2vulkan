@@ -296,8 +296,8 @@ pub(crate) const PRIVATE_MEMORY: vk::MemoryPropertyFlags = vk::MemoryPropertyFla
 
 /// The flags of the memory type Shared storage lives in: memory the host maps and reads at the
 /// speed of its own memory. Of the types with them, the first that is host-coherent too, else the
-/// first ([`choose`]); the runtime flushes and invalidates what commands reach of it on every
-/// device, whatever the type's flags (`crate::coherence`).
+/// first ([`choose`]); where the type chosen is not host-coherent, the runtime flushes and
+/// invalidates what commands reach of it (`crate::coherence`).
 pub(crate) const SHARED_MEMORY: vk::MemoryPropertyFlags = vk::MemoryPropertyFlags::from_raw(
     vk::MemoryPropertyFlags::HOST_VISIBLE.as_raw() | vk::MemoryPropertyFlags::HOST_CACHED.as_raw(),
 );

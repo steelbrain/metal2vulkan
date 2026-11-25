@@ -898,9 +898,10 @@ fn begin(
         building.wrote_host();
     }
     // Every attachment over a Shared buffer is the pass's to write (`crate::coherence`).
-    let atom = building.atom();
-    for texture in (pass.targets().map(|t| &t.texture)).chain(resolves().map(|r| &r.texture)) {
-        building.wrote_shared(texture.shared_range(atom));
+    if let Some(atom) = building.atom() {
+        for texture in (pass.targets().map(|t| &t.texture)).chain(resolves().map(|r| &r.texture)) {
+            building.wrote_shared(texture.shared_range(atom));
+        }
     }
     building.overs_after(overs(), false);
     building.count(Metric::Passes);
@@ -1614,7 +1615,9 @@ impl RenderCommandEncoder {
         if buffer.is_shared() {
             building.wrote_host();
         }
-        building.wrote_shared(buffer.shared_range(building.atom()));
+        if let Some(atom) = building.atom() {
+            building.wrote_shared(buffer.shared_range(atom));
+        }
     }
 
     /// A command that would end the rendering while a visibility result's query counts the
@@ -2004,7 +2007,7 @@ impl RenderCommandEncoder {
                     None,
                     Some(buffer.span()),
                     place,
-                    buffer.shared_range(atom),
+                    atom.and_then(|atom| buffer.shared_range(atom)),
                 )
             }
             Resource::Texture(texture) => {
@@ -2022,7 +2025,7 @@ impl RenderCommandEncoder {
                     Some(lent),
                     None,
                     TextureObject::object(texture).placement().cloned(),
-                    texture.shared_range(atom),
+                    atom.and_then(|atom| texture.shared_range(atom)),
                 )
             }
             Resource::IndirectCommandBuffer(commands) => {
@@ -2462,9 +2465,10 @@ impl RenderCommandEncoder {
             if self.facts.host {
                 let building = (self.building.as_mut())
                     .expect("an encoder holds its command buffer's recording until it ends");
-                let atom = building.atom();
-                for range in shared_writes(draws, &self.tables, atom) {
-                    building.wrote_shared(Some(range));
+                if let Some(atom) = building.atom() {
+                    for range in shared_writes(draws, &self.tables, atom) {
+                        building.wrote_shared(Some(range));
+                    }
                 }
             }
         }
