@@ -38,8 +38,9 @@
 //
 //   - as-is: header 2.9, every entry NAME, TYPE, HASH, MDSZ, OFFT, VERS. Each of the four modules
 //     is a bitcode wrapper padded to a multiple of 16 bytes, the next written after it; MDSZ is
-//     the distance to the next module's start (or the section's end), 8 bytes past the wrapper's
-//     offset plus size, and HASH is the SHA-256 of those MDSZ bytes, not of the wrapper's alone.
+//     the distance to the next module's start (or the section's end), 8 or 12 bytes past the
+//     wrapper's offset plus size, and HASH is the SHA-256 of those MDSZ bytes, not of the
+//     wrapper's alone.
 //     The extended header is ENDT alone. Library, functions, both kernels' words and the texel as
 //     expected;
 //   - v2.2, no-MDSZ, no-MDSZ-shift, no-MDSZ-v2.2: the same answers as as-is: Metal makes the
