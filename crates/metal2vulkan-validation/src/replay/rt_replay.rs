@@ -14,6 +14,9 @@
 //! - `setLineWidth:` plays: at width 1 a draw of lines after it plays; at width 2 a draw of
 //!   triangles plays and one of lines is the runtime's gap, skipped and counted, and the report
 //!   says the play is no verdict past it: its gap, frame and call.
+//! - `setSamplePositions:count:` on a pass descriptor plays as the runtime treats it, nothing
+//!   refused or skipped: of two passes over a 4-sample target, the report counts the one whose
+//!   positions differ from Metal's defaults of 4 samples, and not the one at the defaults.
 //! - A pass's visibility results play as the runtime's: in a `Reset` pass, `Counting` and
 //!   `Boolean` modes before draws of the whole target write its 16 samples into their words, and
 //!   a word no mode took keeps its bytes, nothing skipped; the backend's gauges read the one
@@ -824,6 +827,88 @@ fn a_line_width_plays_and_a_line_drawn_at_another_width_is_skipped() {
     let note = report.verdict_note();
     assert_eq!(note.as_deref(), Some("not a verdict past frame 0, call 21"));
     let line = "skipped render commands Draw { kind: LineWidth } 1, the first at frame 0, call 21";
+    assert!(lines.iter().any(|l| l == line), "{lines:?}");
+}
+
+/// `setSamplePositions:count:` plays as the runtime treats it: two passes over a 4-sample target
+/// (#3), one at Metal's default positions of 4 samples (#4) and one at four others (#5), each
+/// set on the pass descriptor, play through with nothing refused or skipped, and the report
+/// counts the second pass alone, at its encoder (call 12).
+#[test]
+fn sample_positions_play_and_a_pass_at_other_positions_is_counted() {
+    let dir = ScratchDir::new("rt-replay-sample-positions").unwrap();
+    let path = written(&dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        // RGBA8Unorm, 4 by 4, 2D multisample of 4 samples, render-target, Private.
+        let target = uints(&[
+            ("textureType", 4),
+            ("pixelFormat", 70),
+            ("width", 4),
+            ("height", 4),
+            ("sampleCount", 4),
+            ("usage", 4),
+            ("storageMode", 2),
+        ]);
+        w.call("newTextureWithDescriptor:", 1, 3, &[target], &[])?;
+        // An `MTLSamplePosition` list, each `float` written as an f64, as the recorder writes it.
+        let positions = |at: &[[f32; 2]]| {
+            let position = |&[x, y]: &[f32; 2]| {
+                Value::Map(vec![
+                    ("x".into(), Value::F64(f64::from(x))),
+                    ("y".into(), Value::F64(f64::from(y))),
+                ])
+            };
+            Value::List(at.iter().map(position).collect())
+        };
+        // Metal's default positions of 4 samples, Vulkan's standard locations; then four others.
+        let defaults: [[f32; 2]; 4] = [
+            [0.375, 0.125],
+            [0.875, 0.375],
+            [0.125, 0.625],
+            [0.625, 0.875],
+        ];
+        let others: [[f32; 2]; 4] = [[0.25, 0.5]; 4];
+        for (pass, set) in [(4, &defaults), (5, &others)] {
+            w.call("MTLRenderPassDescriptor.new", 0, pass, &[], &[])?;
+            let Value::Map(mut color) = uints(&[("loadAction", 2), ("storeAction", 0)]) else {
+                unreachable!("a map");
+            };
+            color.push(("texture".into(), Value::Object(3)));
+            let args = [Value::Uint(0), Value::Map(color)];
+            w.call("m2v.setColorAttachment", pass, 0, &args, &[])?;
+            w.call(
+                "setSamplePositions:count:",
+                pass,
+                0,
+                &[positions(&set[..])],
+                &[],
+            )?;
+        }
+        w.call("commandBuffer", 2, 6, &[], &[])?;
+        for (pass, encoder) in [(4, 7), (5, 8)] {
+            let args = [Value::Object(pass)];
+            w.call(
+                "renderCommandEncoderWithDescriptor:",
+                6,
+                encoder,
+                &args,
+                &[],
+            )?;
+            w.call("endEncoding", encoder, 0, &[], &[])?;
+        }
+        w.call("commit", 6, 0, &[], &[])?;
+        w.call(WAIT_COMPLETED, 6, 0, &[], &[])
+    });
+    let (report, lines) = play("sample-positions", &path);
+    let executed = &report.total.executed;
+    for skipped in ["skipped_encoders", "skipped_calls", "skipped_objects"] {
+        assert_eq!(executed[skipped], 0, "{skipped}: {executed:?}");
+    }
+    assert!(executed["passes"] >= 2, "{executed:?}");
+    assert_eq!(report.first_skip, None);
+    let line = "passes at sample positions other than Metal's defaults 1: rasterized at the \
+                defaults, Vulkan's standard locations; the first at frame 0, call 12";
     assert!(lines.iter().any(|l| l == line), "{lines:?}");
 }
 

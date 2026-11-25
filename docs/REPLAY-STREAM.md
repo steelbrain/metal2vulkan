@@ -410,6 +410,8 @@ and the (name id, value) answer pairs.
     `depthResolveFilter`, or `clearStencil` and `stencilResolveFilter`. A nil property takes
     nothing: the descriptor keeps what it had. An object property (`visibilityResultBuffer`,
     `rasterizationRateMap`, `texture`, `resolveTexture`) set to nil is object 0, which clears it.
+    `setSamplePositions:count:` (`[list]`) sets its sample positions, the list of
+    `MTLSamplePosition`s `{x, y}`; an empty list (a count of 0) sets none, Metal's defaults.
   - `m2v.rateMapDescriptor` (`[{screenSize, mutability, minFactor}]`) makes an
     `MTLRasterizationRateMapDescriptor`; its layers are set on it afterwards.
 - **Drawables.** A `newTextureWithDescriptor:` of receiver 0 whose argument is a map
@@ -722,6 +724,14 @@ records as text, and
   Visibility results play as the runtime's: a pass's `visibilityResultBuffer` and
   `visibilityResultType`, and each `setVisibilityResultMode:offset:` (`[mode, offset]`), whose
   counts the runtime writes into the buffer at the pass's end.
+  `setSamplePositions:count:` plays as the runtime treats it, with no refusal: the runtime's
+  descriptor has no field for it, and every multisample pass rasterizes at Vulkan's standard
+  sample locations, which are Metal's default positions at 1, 2 and 4 samples. The report's
+  `passes at sample positions other than Metal's defaults N` line counts the render encoders the
+  runtime made of a pass whose positions differ from Metal's defaults for the pass's sample count
+  (its attachments'), each coordinate compared as an `f32`, with the first one's frame and call. A
+  set at a sample count whose Metal defaults the player does not hold (any but 1, 2 and 4)
+  counts as differing.
   What the runtime does not build yet it skips and counts, and never fakes:
   - objects: libraries from source, and whatever a call makes of a skipped object
     (`skipped_objects`). A call that makes an object on a skipped receiver or naming a skipped

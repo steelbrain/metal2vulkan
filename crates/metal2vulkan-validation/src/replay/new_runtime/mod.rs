@@ -566,6 +566,7 @@ pub struct NewRuntime {
     freed: faulted::Freed,
     substitutes: Substitutes,
     unrecorded_tessellation: render::UnrecordedTessellation,
+    other_positions: render::OtherPositions,
     /// Each open encoder's command buffer.
     owners: HashMap<u64, u64>,
     /// How the recording's device kept Managed buffers; `None` where the player was not told,
@@ -1013,6 +1014,7 @@ impl NewRuntime {
             freed: faulted::Freed::default(),
             substitutes: Substitutes::default(),
             unrecorded_tessellation: render::UnrecordedTessellation::default(),
+            other_positions: render::OtherPositions::default(),
             owners: HashMap::new(),
             managed: None,
             display: None,
@@ -3465,6 +3467,7 @@ impl Backend for NewRuntime {
             if first.is_empty() { " -" } else { &first },
         ));
         lines.push(self.unrecorded_tessellation.line());
+        lines.push(self.other_positions.line());
         lines.push(self.asides.line());
         lines.push(self.places.line());
         lines.push(self.unwritten.line());
