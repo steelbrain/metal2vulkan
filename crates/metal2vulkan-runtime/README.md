@@ -1034,16 +1034,18 @@ the Direct3D 11 texture's payload until it is freed.
 
 ### Known gaps of memory blocks
 
-- On a device whose Shared type is not host-coherent (Shared memory's coherence), the flushes
-  and invalidates are that device's cost: before each submission over what its command buffers
-  reach, and at each completion and each shared event's GPU-raised value seen over what they may
-  write, on the submit and completion threads and in the calls that read an event's value. Every
-  device of ours has a host-visible, host-coherent, host-cached type, which Shared takes, so none
-  makes these calls, and none can show a flush the runtime missed: only a device whose Shared
-  type is cached and not coherent can. The device tests run the calls on our devices through a
-  view that reads their cached types as not coherent (`--cfg m2v_shared_view`,
-  docs/VALIDATION.md), on memory that is coherent in fact; neither the calls' time nor their
-  effect has been measured on a device whose memory is not.
+- On a device whose Shared type is not host-coherent (Shared memory's coherence), the flushes and
+  invalidates are that device's cost: before each submission over what its command buffers reach,
+  and at each completion and each shared event's GPU-raised value seen over what they may write, on
+  the submit and completion threads and in the calls that read an event's value. A submission's
+  flush names every Shared range its command buffers reach, written or not, merged, so its cost
+  grows with the Shared bytes a submission reaches, not with what its commands wrote. Every device
+  of ours has a host-visible, host-coherent, host-cached type, which Shared takes, so none makes
+  these calls, and none can show a flush the runtime missed: only a device whose Shared type is
+  cached and not coherent can. The device tests run the calls on our devices through a view that
+  reads their cached types as not coherent (`--cfg m2v_shared_view`, docs/VALIDATION.md), on memory
+  that is coherent in fact; neither the calls' time nor their effect has been measured on a device
+  whose memory is not.
 - On such a device, a host write to a range a command buffer may write, made while the command
   buffer runs, may be lost, and so may the GPU's writes to the same atoms. The runtime flushes
   each such range just before it invalidates it, and Vulkan states: "If a range of non-coherent

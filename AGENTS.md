@@ -58,7 +58,7 @@ order, and a lower one never overrides a higher one.
    limit and memory-type queries. Product code holds no vendor, device or driver ID, and no
    runtime policy switch. A test enforces this for `metal2vulkan-runtime`. One form means one form per
    Vulkan capability: where the floor cannot require a feature, that feature's query may choose a
-   second form, for ten only: 16-bit floats, storage-image reads without a format, 64-bit
+   second form, for eleven only: 16-bit floats, storage-image reads without a format, 64-bit
    atomics, 64-bit floats, SIMD groups (the subgroup size range with its stages and operations,
    and maximal reconvergence), unified memory (decided by
    Vulkan's physical device type alone: one copy of a Managed buffer on an integrated or CPU
@@ -69,14 +69,24 @@ order, and a lower one never overrides a higher one.
    that branch's compile time is recorded as a known gap), the push window (the device's
    push-constant limit sizes it, up to 256 bytes; on a device below 256 the fields past the window
    come from the stage's parameter block, and an indirect command carries fewer vertex slots,
-   recorded as a known gap), and fragment stencil output (a device with
+   recorded as a known gap), fragment stencil output (a device with
    VK_EXT_shader_stencil_export writes a fragment function's [[stencil]] as the fragment's stencil
    reference; a device without it draws each draw of such a pipeline once with a stencil reference
    of 0, which clears the stencil bits its depth-stencil state can replace and runs its other
    stencil operations, then once for each of those bits, and, where the draw writes depth under a
    depth compare other than always or never, once more for the depth; those draws, and the note
    that fragments of one draw that overlap leave the OR of their values, are recorded as a known
-   gap). A second form chosen by anything else is not allowed.
+   gap), and Shared memory's host coherence (decided by the host-coherent flag of the memory type
+   Shared takes, the first host-visible, host-cached type a buffer can use, a host-coherent one
+   first: a device whose type has it makes no flush or invalidate call; on a device whose type is
+   the cached type without coherence, the Shared memory a submission's command buffers and Managed
+   copy-ins reach, and the runtime's own writes to Shared memory, are flushed before the GPU reads
+   them, and the Shared memory a command buffer may write, and the bytes a copy stages for the
+   host, are flushed then invalidated before the host reads them, at the command buffer's
+   completion and before a shared event's value that a GPU signal raised is seen; that no device
+   the tests run on shows a missed range, since each has a host-coherent cached type, and that the
+   flush's cost grows with the Shared bytes a submission reaches, are recorded as a known gap). A
+   second form chosen by anything else is not allowed.
 3. **Native-like speed.** Structure decides speed: driver-owned memory, optimal images in real
    layouts, direct addresses, nothing copied that Metal would not copy. Optimal images have two
    exceptions. A texture over a Shared buffer: a linear image on that buffer's memory, in the
