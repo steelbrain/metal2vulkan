@@ -456,7 +456,6 @@ surface! {
         struct PvrtcDecode N;
         enum EtcDecode N;
         enum EtcTexels N;
-        struct YCbCrPlanesSampler N;
         fn function_table_entry_offset;
         fn function_table_header;
         mod indirect_commands;

@@ -549,15 +549,9 @@ impl ModuleBuilder {
             })
         );
         let ok = ok && subpass == matches!(sym.kind, ResourceKind::InputAttachment(_));
-        // A combined image sampler is exactly one `OpTypeSampledImage`: a texture and sampler's,
-        // or a planes image's through the device's conversion.
+        // A combined image sampler is exactly one `OpTypeSampledImage`: a texture and sampler's.
         let combined = matches!(self.types.get(ty)?, Type::SampledImage { .. });
-        let ok = ok
-            && combined
-                == matches!(
-                    sym.kind,
-                    ResourceKind::CombinedTextureSampler(_) | ResourceKind::YCbCrPlanes(_)
-                );
+        let ok = ok && combined == matches!(sym.kind, ResourceKind::CombinedTextureSampler(_));
         // An acceleration structure binding is exactly one acceleration structure.
         let accel = matches!(self.types.get(ty)?, Type::AccelerationStructure);
         let ok = ok && accel == matches!(sym.kind, ResourceKind::AccelerationStructure(_));

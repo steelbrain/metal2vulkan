@@ -2755,7 +2755,6 @@ field	metal2vulkan::vk::SamplerDesc.mip_lod_bias	pub mip_lod_bias: f32
 field	metal2vulkan::vk::SamplerDesc.mipmap_mode	pub mipmap_mode: SamplerMipmapMode
 field	metal2vulkan::vk::SamplerDesc.reduction	pub reduction: SamplerReductionMode
 field	metal2vulkan::vk::SamplerDesc.unnormalized	pub unnormalized: bool
-field	metal2vulkan::vk::SamplerDesc.ycbcr	pub ycbcr: Option<crate::bind::YCbCrPlanesSampler>
 field	metal2vulkan::vk::SpecializationMapEntry.constant_id	pub constant_id: u32
 field	metal2vulkan::vk::SpecializationMapEntry.offset	pub offset: u32
 field	metal2vulkan::vk::SpecializationMapEntry.size	pub size: u32
@@ -6650,7 +6649,6 @@ method	metal2vulkan::vk::DescriptorType::from_raw	pub fn from_raw(raw: u64) -> O
 method	metal2vulkan::vk::FormatBlock::vertex_alignment	pub const fn vertex_alignment(self) -> Option<u32>
 method	metal2vulkan::vk::FormatExposure::exposed	pub fn exposed(&self, api: super::ApiVersion, has_extension: impl Fn(&str) -> bool) -> bool
 method	metal2vulkan::vk::NumericFormat::numeric_type	pub const fn numeric_type(self) -> NumericType
-method	metal2vulkan::vk::SamplerDesc::ycbcr	pub fn ycbcr(ycbcr: crate::bind::YCbCrPlanesSampler) -> SamplerDesc
 struct	metal2vulkan-air::ConstValue	#[derive(Clone, Debug, PartialEq, Eq, Hash)] pub struct ConstValue
 struct	metal2vulkan-air::Decoded	#[derive(Clone, Debug, PartialEq, Eq)] pub struct Decoded
 struct	metal2vulkan-air::DynamicLinks	#[derive(Clone, Debug, Default)] pub struct DynamicLinks
@@ -6902,7 +6900,6 @@ struct	metal2vulkan::bind::RateMapDescriptor	#[derive(Clone, Debug, PartialEq)] 
 struct	metal2vulkan::bind::RateMapLayerDescriptor	#[derive(Clone, Debug, Default, PartialEq)] #[non_exhaustive] pub struct RateMapLayerDescriptor
 struct	metal2vulkan::bind::SamplerDescriptor	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq)] #[non_exhaustive] pub struct SamplerDescriptor
 struct	metal2vulkan::bind::StageInRegion	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct StageInRegion
-struct	metal2vulkan::bind::YCbCrPlanesSampler	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)] #[non_exhaustive] pub struct YCbCrPlanesSampler
 struct	metal2vulkan::bind::indirect_commands::Bindings	#[derive(Clone, Debug, Default, PartialEq, Eq)] pub struct Bindings
 struct	metal2vulkan::bind::indirect_commands::BufferBinding	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct BufferBinding
 struct	metal2vulkan::bind::indirect_commands::CommandBuffer	pub struct CommandBuffer<'a>
@@ -9723,7 +9720,6 @@ variant	metal2vulkan::pipeline::BindingSource::Synthetic	Synthetic { stage: Stag
 variant	metal2vulkan::pipeline::BindingSource::Texture	Texture(SlotRef)
 variant	metal2vulkan::pipeline::BindingSource::TileAttachment	TileAttachment(u32)
 variant	metal2vulkan::pipeline::BindingSource::TileMap	TileMap(SlotRef)
-variant	metal2vulkan::pipeline::BindingSource::YCbCrPlanes	YCbCrPlanes(SlotRef)
 variant	metal2vulkan::pipeline::BufferForm::Descriptor	Descriptor
 variant	metal2vulkan::pipeline::BufferForm::Psb	Psb
 variant	metal2vulkan::pipeline::BufferKind::Buffer	Buffer
@@ -9927,7 +9923,6 @@ variant	metal2vulkan::pipeline::ResourceKind::Synthetic	Synthetic(SyntheticBindi
 variant	metal2vulkan::pipeline::ResourceKind::Texture	Texture
 variant	metal2vulkan::pipeline::ResourceKind::TileAttachment	TileAttachment(u32)
 variant	metal2vulkan::pipeline::ResourceKind::TileMap	TileMap
-variant	metal2vulkan::pipeline::ResourceKind::YCbCrPlanes	YCbCrPlanes(crate::bind::YCbCrPlanesSampler)
 variant	metal2vulkan::pipeline::RuntimeFact::AccelerationStructureInstanceCount	AccelerationStructureInstanceCount { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::AddressAlignment	AddressAlignment { slot: SlotRef, align: u32 }
 variant	metal2vulkan::pipeline::RuntimeFact::AliasedImageblock	AliasedImageblock { data_size: u32 }

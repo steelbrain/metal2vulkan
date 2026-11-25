@@ -21,7 +21,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use crate::bind::YCbCrPlanesSampler;
 use crate::device::profile::Independence;
 use crate::device::requirements::{
     ApiVersion, FloatControl, FloatWidth, FormatUsage, Requirements, ResolveMode, SpirvCapability,
@@ -813,10 +812,9 @@ codec_struct! {
     SamplerDesc {
         mag_filter, min_filter, mipmap_mode, address_mode_u, address_mode_v, address_mode_w,
         mip_lod_bias, max_anisotropy, compare, min_lod, max_lod, border_color, reduction,
-        border_components, ycbcr, unnormalized,
+        border_components, unnormalized,
     }
     ComponentMapping { r, g, b, a }
-    YCbCrPlanesSampler { conversion }
 }
 
 // ---- Link symbols (`pipeline::sym`) ----
@@ -852,7 +850,6 @@ codec_enum! {
         Buffer, Texture, Sampler, Heap(f0), Synthetic(f0), InputAttachment(f0),
         CombinedTextureSampler(f0), HeapSampler(f0), AccelerationStructure(f0), TileAttachment(f0),
         TileMap, SeparateTexture(f0), SeparateSampler(f0),
-        YCbCrPlanes(f0),
         SamplerArray { compare, integer },
     }
     AccelerationStructureLevel { Primitive, Instance }
@@ -1455,7 +1452,6 @@ codec_enum! {
         Synthetic { stage, binding }, Heap(f0), InputAttachment(f0), HeapSampler { stage, sampler },
         AccelerationStructure { slot, level }, TileAttachment(f0), TileMap(f0),
         SeparateTexture { texture, sampler }, SeparateSampler { stage, sampler },
-        YCbCrPlanes(f0),
         SamplerArray { stage, compare, integer },
         IdentityArray,
     }

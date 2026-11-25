@@ -332,20 +332,5 @@ pub(crate) fn ycbcr_read(
     }
 }
 
-/// The device's own sampler Y′CbCr conversion of a two-plane YCbCr texture's planes held as an
-/// image of the multi-planar 4:2:0 format over their bytes: the codes' bits, the surface's range
-/// and matrix, Metal's reconstruction (the chroma at the midpoint through a linear chroma filter)
-/// and a linear filter. A slot that samples such a texture through it is a combined image sampler
-/// whose immutable sampler is the device's conversion of this (`ResourceKind::YCbCrPlanes`,
-/// `vk::SamplerDesc::ycbcr`); the consumer makes the image's view with the same conversion.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct YCbCrPlanesSampler {
-    /// The conversion: the codes' bits in bits 0 to 7, full range in bit 8, and the matrix in bits
-    /// 9 and 10 (0 BT.601, 1 BT.709, 2 BT.2020).
-    pub(crate) conversion: u32,
-}
-
 #[cfg(test)]
 mod tests;

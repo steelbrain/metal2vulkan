@@ -210,7 +210,6 @@ fn sampler_desc_equality_is_total() {
         border_color: BorderColor::FLOAT_TRANSPARENT_BLACK,
         reduction: SamplerReductionMode::WEIGHTED_AVERAGE,
         border_components: None,
-        ycbcr: None,
         unnormalized: false,
     };
     assert_eq!(desc, desc);
@@ -224,7 +223,6 @@ fn sampler_desc_equality_is_total() {
     // A sampler made for one view mapping is another sampler.
     let mapped = SamplerDesc {
         border_components: Some(ComponentMapping::IDENTITY),
-        ycbcr: None,
         ..desc
     };
     assert_ne!(desc, mapped);

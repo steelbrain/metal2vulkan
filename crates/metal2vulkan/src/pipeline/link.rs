@@ -680,7 +680,6 @@ fn binding_source(slot: ResourceSlot) -> BindingSource {
             stage: slot.stage,
             sampler: CombinedSampler::from_heap_index(sampler, slot.index),
         },
-        ResourceKind::YCbCrPlanes(_) => BindingSource::YCbCrPlanes(metal(SlotClass::Texture)),
         ResourceKind::SamplerArray { compare, integer } => BindingSource::SamplerArray {
             stage: slot.stage,
             compare,
@@ -730,14 +729,12 @@ fn immutable_samplers(
 }
 
 /// The immutable sampler of binding `slot`: a combined image sampler's, heap sampler's, or
-/// separate sampler's constexpr sampler, made for its use; a planes image's device conversion
-/// (`ResourceKind::YCbCrPlanes`).
+/// separate sampler's constexpr sampler, made for its use.
 fn immutable_sampler(
     slot: ResourceSlot,
     p: &DeviceProfile,
 ) -> Result<Option<vk::SamplerDesc>, Error> {
     let c = match slot.kind {
-        ResourceKind::YCbCrPlanes(sampler) => return Ok(Some(vk::SamplerDesc::ycbcr(sampler))),
         ResourceKind::CombinedTextureSampler(c) => c,
         ResourceKind::HeapSampler(sampler) | ResourceKind::SeparateSampler(sampler) => {
             CombinedSampler::from_heap_index(sampler, slot.index)
@@ -852,12 +849,8 @@ fn layout(
                 )));
             }
             // A combined image sampler is exactly a `CombinedTextureSampler` symbol, which names
-            // its texture slot and its sampler, or a planes image's (`YCbCrPlanes`), which names
-            // its texture slot and the conversion its immutable sampler bakes.
-            let combined = matches!(
-                d.slot.kind,
-                ResourceKind::CombinedTextureSampler(_) | ResourceKind::YCbCrPlanes(_)
-            );
+            // its texture slot and its sampler.
+            let combined = matches!(d.slot.kind, ResourceKind::CombinedTextureSampler(_));
             if combined != (d.ty == vk::DescriptorType::COMBINED_IMAGE_SAMPLER) {
                 return Err(Error::Internal(InternalError::new(
                     InternalKind::Invariant,

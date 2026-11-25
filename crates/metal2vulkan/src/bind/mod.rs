@@ -19,8 +19,7 @@
 //! - A [`RasterizationRateMap`] is the consumer's `MTLRasterizationRateMap`: it compiles a
 //!   [`RateMapDescriptor`], answers the map's queries, and gives the parameter data a
 //!   `rasterization_rate_map_decoder` reads.
-//! - [`SamplerDescriptor`] is `MTLSamplerDescriptor`; [`YCbCrPlanesSampler`] the conversion a
-//!   two-plane YCbCr texture's immutable sampler takes.
+//! - [`SamplerDescriptor`] is `MTLSamplerDescriptor`.
 //! - [`Dispatch`], [`DrawCall`], [`IndexBufferRef`] and [`StageInRegion`] state a dispatch, a
 //!   draw, its index buffer and the compute encoder's stage-in region in Metal's terms;
 //!   [`indirect_commands`] lays out an indirect command buffer's records.
@@ -70,5 +69,4 @@ pub use state::{SamplerDescriptor, StageInRegion};
 pub(crate) use table::FunctionTableWords;
 pub use table::{function_table_entry_offset, function_table_header};
 pub(crate) use texel_parts::part_texels;
-pub use ycbcr_convert::YCbCrPlanesSampler;
 pub(crate) use ycbcr_convert::{YCbCrCodes, YCbCrOutput};

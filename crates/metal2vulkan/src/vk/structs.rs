@@ -231,13 +231,6 @@ pub struct SamplerDesc {
     /// mapping. Never set for a layout's immutable sampler.
     #[cfg_attr(feature = "serde", serde(default))]
     pub border_components: Option<ComponentMapping>,
-    /// The device's sampler Y′CbCr conversion the sampler enables
-    /// (`VkSamplerYcbcrConversionInfo`), a planes image's ([`SamplerDesc::ycbcr`],
-    /// `ResourceKind::YCbCrPlanes`): the consumer makes the conversion of this (its format, the
-    /// matrix's model, the range, midpoint chroma offsets and a linear chroma filter) and chains it,
-    /// and views the image with the same conversion. Only a layout's immutable sampler sets it.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub ycbcr: Option<crate::bind::YCbCrPlanesSampler>,
     /// `unnormalizedCoordinates`: the sampler reads a Metal pixel sampler's coordinate in texels
     /// (`metal::sampler::SamplerUse::unnormalized`). Vulkan's limits hold for such a sampler: equal
     /// filters, the nearest mip mode, the level clamp `[0, 0]`, clamp to the edge or a border on
@@ -245,34 +238,6 @@ pub struct SamplerDesc {
     /// level and one layer, of a 1D or 2D type.
     #[cfg_attr(feature = "serde", serde(default))]
     pub unnormalized: bool,
-}
-
-impl SamplerDesc {
-    /// The immutable sampler of a planes image's binding (`ResourceKind::YCbCrPlanes`): the
-    /// device's conversion `ycbcr`, through a linear filter (a conversion's linear chroma filter
-    /// asks it, `VUID-VkSamplerCreateInfo-minFilter-01645`), clamped to the edge on every axis, no
-    /// anisotropy or comparison and the weighted average (`VUID-VkSamplerCreateInfo-addressModeU-
-    /// 01646`, `VUID-VkSamplerCreateInfo-None-01647`), level 0 alone.
-    pub fn ycbcr(ycbcr: crate::bind::YCbCrPlanesSampler) -> SamplerDesc {
-        SamplerDesc {
-            mag_filter: Filter::LINEAR,
-            min_filter: Filter::LINEAR,
-            mipmap_mode: SamplerMipmapMode::NEAREST,
-            address_mode_u: SamplerAddressMode::CLAMP_TO_EDGE,
-            address_mode_v: SamplerAddressMode::CLAMP_TO_EDGE,
-            address_mode_w: SamplerAddressMode::CLAMP_TO_EDGE,
-            mip_lod_bias: 0.0,
-            max_anisotropy: None,
-            compare: None,
-            min_lod: 0.0,
-            max_lod: 0.0,
-            border_color: BorderColor::FLOAT_TRANSPARENT_BLACK,
-            reduction: SamplerReductionMode::WEIGHTED_AVERAGE,
-            border_components: None,
-            ycbcr: Some(ycbcr),
-            unnormalized: false,
-        }
-    }
 }
 
 /// A [`SamplerDesc`] with floats as bit patterns, so equality is total.
@@ -288,7 +253,6 @@ struct SamplerKey {
     border_color: BorderColor,
     reduction: SamplerReductionMode,
     border_components: Option<ComponentMapping>,
-    ycbcr: Option<crate::bind::YCbCrPlanesSampler>,
     unnormalized: bool,
 }
 
@@ -309,7 +273,6 @@ impl SamplerDesc {
             border_color: self.border_color,
             reduction: self.reduction,
             border_components: self.border_components,
-            ycbcr: self.ycbcr,
             unnormalized: self.unnormalized,
         }
     }

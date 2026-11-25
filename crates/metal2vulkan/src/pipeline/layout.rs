@@ -84,12 +84,6 @@ pub enum BindingSource {
         texture: SlotRef,
         sampler: CombinedSampler,
     },
-    /// The planes of the two-plane YCbCr texture bound at a Metal `[[texture(n)]]` slot, held as
-    /// an image the device's own sampler Y′CbCr conversion samples
-    /// (`ResourceKind::YCbCrPlanes`): one combined descriptor, its image the planes' image viewed
-    /// with the conversion, its sampler the binding's `immutable_sampler`
-    /// (`vk::SamplerDesc::ycbcr`).
-    YCbCrPlanes(SlotRef),
     /// A binding the translator adds for one stage (argument table, root or handle table,
     /// constant blob).
     Synthetic {

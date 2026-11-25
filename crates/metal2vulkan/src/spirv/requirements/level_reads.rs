@@ -125,17 +125,15 @@ pub fn level_reads(m: &TypedModule, meter: &mut Meter) -> Result<Vec<LevelReads>
             continue;
         };
         let seed = match slot.kind {
-            ResourceKind::Texture => Some((slot.index, None, false)),
-            ResourceKind::CombinedTextureSampler(cs) => Some((slot.index, Some(cs.sampler), false)),
+            ResourceKind::Texture => Some((slot.index, None)),
+            ResourceKind::CombinedTextureSampler(cs) => Some((slot.index, Some(cs.sampler))),
             ResourceKind::SeparateTexture(_) => slot
                 .separate_texture_of()
-                .map(|(texture, cs)| (texture, Some(cs.sampler), false)),
-            // Planes a conversion reads as one texel: no level of them is a view's.
-            ResourceKind::YCbCrPlanes(_) => Some((slot.index, None, true)),
+                .map(|(texture, cs)| (texture, Some(cs.sampler))),
             _ => None,
         };
-        if let Some((texture, sampler, any)) = seed {
-            found.entry(texture).or_default().any |= any;
+        if let Some((texture, sampler)) = seed {
+            found.entry(texture).or_default();
             let index = u32::try_from(seeds.len()).unwrap_or(NONE);
             seeds.push((texture, sampler));
             work.push((g.value, index));

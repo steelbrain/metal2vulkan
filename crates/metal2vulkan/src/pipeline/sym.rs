@@ -266,12 +266,6 @@ pub enum ResourceKind {
     /// constexpr sampler is the binding's immutable sampler. `ResourceSlot::index` is the use
     /// ([`ResourceSlot::separate_sampler`]), as a heap sampler's is.
     SeparateSampler(SamplerRef),
-    /// The planes of the two-plane YCbCr texture bound at the stage's texture slot
-    /// `ResourceSlot::index`, held as an image of the multi-planar format that the device's own
-    /// sampler Y′CbCr conversion samples: a combined image sampler whose immutable sampler is the
-    /// device's conversion of this (`vk::SamplerDesc::ycbcr`), whose image the consumer views
-    /// with the same conversion.
-    YCbCrPlanes(crate::bind::YCbCrPlanesSampler),
     /// The constexpr samplers one heap sampling chooses among by its sampler handle: an array of
     /// one immutable sampler per candidate, each made for this use (with comparison or without,
     /// of an integer texture or not), indexed by the handle's distance from the first
