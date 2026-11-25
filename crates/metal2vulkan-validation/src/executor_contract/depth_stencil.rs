@@ -128,8 +128,10 @@ impl DrawDepthStencil {
     /// `metal::state::depth_stencil_state`): it refuses a draw whose test the output decides
     /// (`Gap::Draw` of `DrawKind::StencilOutput`). It refuses one more draw: where the state
     /// replaces a stencil bit, one inside a `Counting` visibility result's segment, whose count
-    /// each of its draws would add to. A case sets no visibility result mode, so none of its draws
-    /// is in a segment, and that clause decides none.
+    /// each of its draws would add to. That clause has nothing to read: the case schema expresses
+    /// no visibility result mode (no field of `AuthoredCase`, its `Draw` or its
+    /// `DepthStencilResource` names one, and each refuses an unknown field), and neither executor
+    /// sets one or gives its pass a visibility result buffer, so no case's draw is in a segment.
     pub fn stencil_reference_face(&self) -> Option<(&'static str, CompareFunction)> {
         let state = self.vulkan();
         if !state.stencil_test_enable {

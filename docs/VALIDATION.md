@@ -569,8 +569,9 @@ cargo run -p metal2vulkan-validation --release --bin corpus-vulkan -- \
   function other than `Always` and `Never` on a face, which the output decides as its reference
   (`Gap::Draw` of `StencilOutput`): such a case records `not_enabled` there, naming the extension
   and the face, read from its function's live outputs and its depth-stencil state once the state is
-  made (`DrawDepthStencil::stencil_reference_face`). A case sets no visibility result mode, so the
-  runtime's other refusal of such a draw, inside a `Counting` segment, meets none. Its device
+  made (`DrawDepthStencil::stencil_reference_face`). The case schema expresses no visibility
+  result mode, and neither executor sets one, so the runtime's other refusal of such a draw,
+  inside a `Counting` segment, meets none. Its device
   worker enables the
   validation layer through the loader's and the layer's variables, and any message the layer logs
   fails the row. The pipeline state's make is held to 500 MiB of peak live allocations and 20 s.
