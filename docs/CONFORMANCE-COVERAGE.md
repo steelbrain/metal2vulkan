@@ -42,7 +42,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1335 |
 | distinct SDK items the Metal leg reaches, of any status | 812 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 7983 |
+| ledger rows (a case whose gap is recorded) | 7984 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -3412,6 +3412,7 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `pass-bytes-srgb-encode-sweep` | The device's own answer (rule 1): the device's sRGB encode lands one code from Metal's (Metal 0x20201, ours 0x20101 at the first differing element). Note `devic… |
 | `pass-bytes-srgb-encode-sweep` | The device's own answer (rule 1): the device's sRGB encode lands one code from Metal's (Metal 0x20201, ours 0x20101 at the first differing element). Note `devic… |
 | `pass-bytes-srgb-encode-sweep` | The device's own answer (rule 1): the device's sRGB encode lands one code from Metal's (Metal 0x20201, ours 0x20101 at the first differing element). Note `devic… |
+| `pass-sequence-aspect-actions` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
 | `pass-sequence-aspect-actions` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
 | `pass-sequence-aspect-actions` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
 | `pass-sequence-aspect-actions` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
