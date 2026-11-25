@@ -5112,7 +5112,11 @@ pub(crate) mod on_device {
                     // no further than the busy work here, S's round pokes, if at all, after
                     // `before` was read.
                     early = core.done.completed() > busy_last;
-                    assert_eq!(count(), AHEAD + 4, "{name}: X held behind the group and Y");
+                    // Where it has, the group may have completed and left X room: that attempt
+                    // goes again below.
+                    if !early {
+                        assert_eq!(count(), AHEAD + 4, "{name}: X held behind the group and Y");
+                    }
                     for command_buffer in [&s, &a, &l, &y, &x] {
                         finished(name, command_buffer);
                     }
