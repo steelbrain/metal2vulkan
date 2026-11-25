@@ -1,5 +1,4 @@
-//! The access and descriptor rules of the declared interface. Its field-by-field comparisons with
-//! the old engine's `inspect` were deleted with that engine (X34); these keep fixed expectations.
+//! The access and descriptor rules of the declared interface, held to fixed expectations.
 
 use super::*;
 

@@ -1,8 +1,7 @@
 //! The Metal oracle's native command-buffer guard: the source rewrite that hands every native
 //! command setter the policy table it must check before it encodes ([`native_guarded_source`]), and
-//! the table itself ([`NativeCommandPolicies`]). Copied from the product's old engine with the LLVM
-//! text front end it parses with (`llvm`), pruned to what the guard reaches; until X34 deletes the
-//! product's copy, a test holds the two to the same answers.
+//! the table itself ([`NativeCommandPolicies`]), with the LLVM text front end it parses with
+//! (`llvm`), pruned to what the guard reaches.
 
 use crate::air::calls::CommandEncoderOperation;
 use crate::air::text::{matching_paren, split_top_level, strip_comment};

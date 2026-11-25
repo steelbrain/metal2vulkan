@@ -25,11 +25,12 @@ impl StageInRegion {
 }
 
 impl TextureFacts {
-    /// The facts of an image texture that can change a plan (its view facts): the type, the pixel
-    /// format, the sample count, the usage, whether it is sparse, its level count, which decides a
-    /// storage slot's level views and pushed level count, its swizzle, its address-mode map and its
-    /// [`offset_base_axes`](Self::offset_base_axes). Its array length only changes the view's subresource range, which is every
-    /// layer.
+    /// The facts of an image texture that can change the variant, specialization or views a slot
+    /// binds it through (its view facts): the type, the pixel format, the sample count, the
+    /// usage, whether it is sparse, its level count, which decides a storage slot's level views
+    /// and pushed level count, its swizzle, its address-mode map and its
+    /// [`offset_base_axes`](Self::offset_base_axes). Its array length only changes the view's
+    /// subresource range, which is every layer.
     ///
     /// The level count is stated whatever the usage: plain Metal writes a texture made without
     /// `ShaderWrite` at every level, through every write form, as one made with it.
@@ -96,7 +97,7 @@ pub struct TextureFacts {
     /// unmapped. A function that observes the residency of its accesses of the texture
     /// (`sparse_color::resident()`, `RuntimeFact::SparseTexture`) answers a texture that is not
     /// sparse on every device, and a sparse one only where the module has its sparse form
-    /// (`shaderResourceResidency`); the plan refuses it elsewhere.
+    /// (`shaderResourceResidency`); the binder refuses it elsewhere (`Feature::SparseTexture`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub sparse: bool,
     /// `MTLTexture.swizzle`: the source of each channel the texture's reads and samples return,
@@ -270,7 +271,7 @@ pub enum TextureShape {
         #[cfg_attr(feature = "serde", serde(default = "one_level"))]
         mipmap_level_count: u32,
         /// The texture is sparse (`MTLTexture.isSparse`, [`TextureFacts::sparse`]): it selects
-        /// the sparse form of a slot whose residency the function observes, or refuses the plan
+        /// the sparse form of a slot whose residency the function observes, or the binder's refusal
         /// where the module has none.
         #[cfg_attr(feature = "serde", serde(default))]
         sparse: bool,
@@ -302,7 +303,8 @@ impl TextureShape {
 }
 
 /// The shape of a sampler: the modes that are runtime facts, and the descriptor values that decide
-/// whether Vulkan can express it (checked at plan time by `metal::sampler::check_sampler`).
+/// whether Vulkan can express it (checked by `metal::sampler::check_sampler` when
+/// `metal::sampler::vk_sampler` makes it).
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -320,12 +322,12 @@ pub struct SamplerShape {
     pub opaque_black_border: bool,
     /// Some filter (minification, magnification, or mip) is linear: whether the sampler needs
     /// the view format's filter features depends on its use and the view
-    /// (`metal::sampler::vk_filtering`), which a plan checks where the sampler meets textures
+    /// (`metal::sampler::vk_filtering`), which the binder checks where the sampler meets textures
     /// through separate descriptors.
     pub linear: bool,
     /// The min or the mag filter is `Cubic`: Metal samples through the sampler with its bicubic
-    /// filter whatever the level, which a function emulates under its plan's
-    /// cubic-sampler variant (`VariantKey::cubic_samplers`).
+    /// filter whatever the level, which a function emulates under its pipeline variant's
+    /// cubic samplers (`VariantKey::cubic_samplers`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub cubic: bool,
 }
