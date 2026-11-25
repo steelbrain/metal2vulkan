@@ -91,8 +91,9 @@ mod on_device {
             let into_private = calls(&before, &counters.metrics());
 
             let d = TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 4, 4);
-            let texture =
-                (device.new_texture(&d, None)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            // A texture with no index: only its copies reach it.
+            let texture = (device.new_texture_for_views(&d))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
             let whole = Region {
                 origin: [0; 3],
                 size: [4, 4, 1],
