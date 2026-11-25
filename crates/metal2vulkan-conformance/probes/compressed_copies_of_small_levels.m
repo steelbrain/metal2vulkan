@@ -78,7 +78,7 @@ static NSUInteger side(NSUInteger extent, NSUInteger level) {
 
 static NSUInteger blocks(NSUInteger texels) { return (texels + 3) / 4; }
 
-static NSUInteger wide(NSUInteger level) { return blocks(side(WIDTH, level)); }
+static NSUInteger across(NSUInteger level) { return blocks(side(WIDTH, level)); }
 
 static NSUInteger high(NSUInteger level) { return blocks(side(HEIGHT, level)); }
 
@@ -87,10 +87,10 @@ static uint8_t source(NSUInteger level, NSUInteger k) { return (uint8_t)(0x11 * 
 // Block (bx, by) of `level` in the source, or NO past the level.
 static BOOL source_block(NSUInteger level, NSUInteger bx, NSUInteger by, NSUInteger unit,
                          uint8_t *out) {
-    if (bx >= wide(level) || by >= high(level)) {
+    if (bx >= across(level) || by >= high(level)) {
         return NO;
     }
-    NSUInteger k0 = (by * wide(level) + bx) * unit;
+    NSUInteger k0 = (by * across(level) + bx) * unit;
     for (NSUInteger i = 0; i < unit; i++) {
         out[i] = source(level, k0 + i);
     }
@@ -164,7 +164,7 @@ static NSData *level_bytes(NSUInteger level, NSUInteger unit, int value) {
     if (value < 0) {
         return region_bytes(level, box, unit);
     }
-    NSMutableData *data = [NSMutableData dataWithLength:wide(level) * high(level) * unit];
+    NSMutableData *data = [NSMutableData dataWithLength:across(level) * high(level) * unit];
     memset(data.mutableBytes, value, data.length);
     return data;
 }
@@ -202,7 +202,7 @@ static void fill(id<MTLDevice> device, id<MTLCommandQueue> queue, id<MTLTexture>
             [t replaceRegion:whole(level)
                  mipmapLevel:level
                    withBytes:bytes.bytes
-                 bytesPerRow:wide(level) * unit];
+                 bytesPerRow:across(level) * unit];
         }
         return;
     }
@@ -215,7 +215,7 @@ static void fill(id<MTLDevice> device, id<MTLCommandQueue> queue, id<MTLTexture>
                                                    options:MTLResourceStorageModeShared];
         [blit copyFromBuffer:staging
                    sourceOffset:0
-              sourceBytesPerRow:wide(level) * unit
+              sourceBytesPerRow:across(level) * unit
             sourceBytesPerImage:0
                      sourceSize:whole(level).size
                       toTexture:t
@@ -232,7 +232,7 @@ static void report_texture(const char *name, id<MTLDevice> device, id<MTLCommand
                            id<MTLTexture> t, NSUInteger unit, const uint8_t *moved) {
     NSUInteger at[LAST + 2] = {0};
     for (NSUInteger level = FIRST; level <= LAST; level++) {
-        at[level + 1] = at[level] + wide(level) * high(level) * unit;
+        at[level + 1] = at[level] + across(level) * high(level) * unit;
     }
     id<MTLBuffer> out = [device newBufferWithLength:at[LAST + 1]
                                             options:MTLResourceStorageModeShared];
@@ -247,8 +247,8 @@ static void report_texture(const char *name, id<MTLDevice> device, id<MTLCommand
                           sourceSize:whole(level).size
                             toBuffer:out
                    destinationOffset:at[level]
-              destinationBytesPerRow:wide(level) * unit
-            destinationBytesPerImage:wide(level) * high(level) * unit];
+              destinationBytesPerRow:across(level) * unit
+            destinationBytesPerImage:across(level) * high(level) * unit];
     }
     [blit endEncoding];
     wait_for(cb, "read back");
@@ -256,8 +256,8 @@ static void report_texture(const char *name, id<MTLDevice> device, id<MTLCommand
     for (NSUInteger level = FIRST; level <= LAST; level++) {
         printf("%s: level %lu ", name, (unsigned long)level);
         for (NSUInteger by = 0; by < high(level); by++) {
-            for (NSUInteger bx = 0; bx < wide(level); bx++) {
-                const uint8_t *block = bytes + at[level] + (by * wide(level) + bx) * unit;
+            for (NSUInteger bx = 0; bx < across(level); bx++) {
+                const uint8_t *block = bytes + at[level] + (by * across(level) + bx) * unit;
                 printf("%c", name_block(block, level, bx, by, unit, 0xdd, moved));
             }
         }
