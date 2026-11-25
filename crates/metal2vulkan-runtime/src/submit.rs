@@ -2697,13 +2697,20 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
     if ok.is_ok() {
         // The host's writes to the Shared memory its command buffers and copy-ins reach are the
         // GPU's before it runs (`crate::coherence`).
-        let mut flushed = copied;
-        flushed.extend(
-            shared
-                .iter()
-                .flat_map(|ranges| ranges.reached.iter().copied()),
-        );
-        coherence::flush(core, &coherence::merged(flushed));
+        // One command buffer and no copy-in flushes its own ranges, merged at its commit.
+        match (copied.is_empty(), &shared[..]) {
+            (true, [one]) => coherence::flush(core, &one.reached),
+            _ => {
+                let mut flushed = copied;
+                flushed.extend(
+                    shared
+                        .iter()
+                        .flat_map(|ranges| ranges.reached.iter().copied()),
+                );
+                coherence::merge(&mut flushed);
+                coherence::flush(core, &flushed);
+            }
+        }
         drop(shared);
         let asked = times::host_time();
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]

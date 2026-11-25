@@ -35,6 +35,7 @@
 //! follows.
 
 use crate::buffer::{Buffer, BufferObject};
+use crate::coherence::Range;
 use crate::command::{Building, CommandBuffer};
 use crate::copy_out;
 use crate::counters::Metric;
@@ -1103,9 +1104,16 @@ impl BlitCommandEncoder {
             building.managed_reach(buffer, &mut backs);
             building.managed_backs(backs)?;
             let command = building.ordered_command()?;
-            // Marked after `ordered_command`, as a copy into a Shared buffer is.
+            // Marked after `ordered_command`, as a copy into a Shared buffer is. The copy writes
+            // the block of its bytes, which the host reads (`crate::coherence`).
             building.wrote_host();
-            building.wrote_shared(buffer.shared_range(building.atom()));
+            let atom = building.atom();
+            building.wrote_shared(Range::of_block(
+                &block.memory,
+                buffer.offset(),
+                buffer.length(),
+                atom,
+            ));
             let earlier = [memory_barrier(Reach::Commands)];
             let written = [written()];
             let device = &core.device;

@@ -538,7 +538,9 @@ the type's flags, at these points:
 - Before each submission, it flushes the Shared memory the submission's command buffers reach, as
   each commit found it: every buffer the command buffer keeps (bound, declared with
   `use_resource`, a blit's or a pass's), the buffer under every texture over a Shared buffer it
-  keeps, every heap it uses, and the bytes each Managed copy-in it carries reads.
+  keeps, every heap it uses, and the bytes each Managed copy-in it carries reads. A Managed buffer
+  with a device copy is not among them: its commands reach the copy, and only its copy-ins (which
+  flush the bytes they read) and its synchronize (a write, below) touch the block of its bytes.
 - Before the host can see the GPU's progress, it flushes the Shared memory a command buffer may
   write, then invalidates it. That happens as the command buffer completes, before its status reads
   completed, a wait for it returns or its completed handlers run. It also happens before a shared

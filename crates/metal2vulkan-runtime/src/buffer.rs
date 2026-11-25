@@ -641,10 +641,12 @@ pub(crate) trait BufferObject {
         self.object().contents.map(Mapping::get)
     }
 
-    /// Its bytes in its block where that is Shared memory the runtime maps, widened to whole
-    /// atoms of `atom` bytes: what the flushes and invalidates of Shared memory name
-    /// (`crate::coherence`). Of a Managed buffer, the block of its bytes, which the host writes;
-    /// `None` in Private memory, an import or an export.
+    /// The bytes commands reach in it where they are Shared memory the runtime maps, widened to
+    /// whole atoms of `atom` bytes: what the flushes and invalidates of Shared memory name
+    /// (`crate::coherence`). `None` in Private memory, an import or an export, and for a Managed
+    /// buffer with a device copy, whose commands reach the copy: only its copy-ins and its
+    /// synchronize touch the block of its bytes, and each flushes or invalidates its own bytes
+    /// there.
     fn shared_range(&self, atom: u64) -> Option<crate::coherence::Range> {
         self.shared_span(0, u64::MAX, atom)
     }
@@ -653,6 +655,9 @@ pub(crate) trait BufferObject {
     /// its end.
     fn shared_span(&self, offset: u64, len: u64, atom: u64) -> Option<crate::coherence::Range> {
         let inner = self.object();
+        if inner.copy.is_some() {
+            return None;
+        }
         let len = len.min(inner.length.saturating_sub(offset));
         crate::coherence::Range::of_block(&inner.block.memory, inner.offset + offset, len, atom)
     }
