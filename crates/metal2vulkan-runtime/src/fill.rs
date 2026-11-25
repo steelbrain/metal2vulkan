@@ -183,8 +183,8 @@ pub(crate) fn make(core: &Core) -> Result<(), Error> {
     if core.filler.get().is_some() {
         return Ok(());
     }
-    // SAFETY: the device is live; the Shared type is host-visible and host-coherent, and the
-    // floor chose it for buffers of every usage.
+    // SAFETY: the device is live; the Shared type is host-visible, and the floor chose it for
+    // buffers of every usage.
     let filler = unsafe {
         Filler::new(
             &core.device,
@@ -216,8 +216,8 @@ impl Filler {
     ///
     /// # Safety
     ///
-    /// `device` is live; `host_type` is a host-visible, host-coherent memory type that buffers of
-    /// every usage can use.
+    /// `device` is live; `host_type` is a host-visible memory type that buffers of every usage
+    /// can use.
     pub(crate) unsafe fn new(
         device: &ash::Device,
         host_type: u32,
@@ -301,9 +301,16 @@ impl Filler {
             let pointer = device
                 .map_memory(self.zeros_memory, 0, ZEROS, vk::MemoryMapFlags::empty())
                 .map_err(Error::vulkan("vkMapMemory"))?;
-            // A new allocation's contents are undefined; the memory is host-coherent, so the
-            // zeros need no flush.
+            // A new allocation's contents are undefined. The zeros are flushed, whatever the
+            // Shared type's flags, before the memory is unmapped (`crate::coherence`): the
+            // mapping's end is a multiple of every atom, so the whole of it is named.
             pointer.cast::<u8>().write_bytes(0, ZEROS as usize);
+            let zeros = [vk::MappedMemoryRange::default()
+                .memory(self.zeros_memory)
+                .offset(0)
+                .size(vk::WHOLE_SIZE)];
+            let flushed = device.flush_mapped_memory_ranges(&zeros);
+            counters.coherence(crate::coherence::Call::Flush, ZEROS, flushed.is_err());
             device.unmap_memory(self.zeros_memory);
         }
         Ok(())

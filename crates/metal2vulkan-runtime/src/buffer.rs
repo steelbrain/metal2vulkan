@@ -641,6 +641,15 @@ pub(crate) trait BufferObject {
         self.object().contents.map(Mapping::get)
     }
 
+    /// Its bytes in its block where that is Shared memory the runtime maps, widened to whole
+    /// atoms of `atom` bytes: what the flushes and invalidates of Shared memory name
+    /// (`crate::coherence`). Of a Managed buffer, the block of its bytes, which the host writes;
+    /// `None` in Private memory, an import or an export.
+    fn shared_range(&self, atom: u64) -> Option<crate::coherence::Range> {
+        let inner = self.object();
+        crate::coherence::Range::of_block(&inner.block.memory, inner.offset, inner.length, atom)
+    }
+
     /// Whether shaders reach the buffer in Shared memory, which the host reads.
     fn is_shared(&self) -> bool {
         let inner = self.object();

@@ -16,6 +16,7 @@ mod block;
 mod buffer;
 mod cache;
 mod capture;
+mod coherence;
 mod command;
 mod complete;
 mod copy_out;

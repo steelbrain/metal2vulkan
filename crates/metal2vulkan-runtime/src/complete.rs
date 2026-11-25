@@ -760,6 +760,12 @@ pub(crate) fn run(core: Arc<Core>) {
                     spans.push(span);
                 }
             }
+            // The GPU's writes before the signals the listeners see are the host's first: the
+            // Shared memory the command buffers in flight may write is settled
+            // (`crate::coherence`).
+            if !fire.is_empty() {
+                core.coherence.signal_seen(&core);
+            }
             for (listener, value) in fire {
                 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
                 done.enter(format!("a listener of the value {value}"));

@@ -61,6 +61,7 @@
 use crate::alias;
 use crate::buffer::{BufferInner, BufferObject, DeviceCopy};
 use crate::capture::{self, Changes, CopyIn, Modified};
+use crate::coherence::{self, Range, Ranges};
 use crate::command::{self, CbInner, CommandBufferError, DeviceLoss, Handler, Pending, Segment};
 use crate::complete;
 use crate::counters::{Counters, Gauge, Metric, Part, Site};
@@ -541,6 +542,10 @@ struct Batch {
     reached: Vec<Arc<BufferInner>>,
     /// The images of the Direct3D 11 planes its segments use (`Segment::planes`).
     planes: Vec<Arc<Image>>,
+    /// What each command buffer with a segment in it reaches of Shared memory, once each, and the
+    /// Shared ranges its copy-ins read: flushed before it is submitted (`crate::coherence`).
+    shared: Vec<Arc<Ranges>>,
+    copied: Vec<Range>,
     /// The first failed call recording a command buffer of moves that leads a segment of it
     /// (`crate::alias::stage`), which loses the device.
     lost: Option<DeviceLoss>,
@@ -1004,6 +1009,8 @@ impl Work {
                     buffer: region.buffer,
                     offset,
                     host: region.host(offset),
+                    memory: region.memory,
+                    size: region.size,
                 });
             }
             let Some(oldest) = region.ring.oldest() else {
@@ -1887,6 +1894,8 @@ impl WorkState {
             wrote: Vec::new(),
             reached: Vec::new(),
             planes: Vec::new(),
+            shared: Vec::new(),
+            copied: Vec::new(),
             lost: None,
         });
         if leads {
@@ -1900,6 +1909,11 @@ impl WorkState {
             group.unseen += 1;
         }
         group.leans.join(&segment.overs);
+        if let Some(shared) = &pending.gpu.shared {
+            if !(group.shared.iter()).any(|held| Arc::ptr_eq(held, shared)) {
+                group.shared.push(Arc::clone(shared));
+            }
+        }
         for buffer in &segment.managed_written {
             if !group.written.iter().any(|kept| kept.id() == buffer.id()) {
                 group.written.push(buffer.clone());
@@ -2037,6 +2051,9 @@ impl WorkState {
         let taken = self.changes.captured.take(&batch.leads);
         for (_, copy_in) in &taken {
             copy_in.backs(&mut batch.backs);
+            batch
+                .copied
+                .extend(copy_in.shared_ranges(core.coherence.atom));
         }
         // The copies back owed by writes submitted before it to the Managed buffers its segments
         // reach, which its upload makes first: as it goes, the order of each write and its
@@ -2449,6 +2466,8 @@ impl Batch {
             wrote: Vec::new(),
             reached: Vec::new(),
             planes: Vec::new(),
+            shared: Vec::new(),
+            copied: Vec::new(),
             lost: None,
         }
     }
@@ -2528,6 +2547,8 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
         held,
         copy_ins,
         mut planes,
+        shared,
+        copied,
         lost,
         ..
     } = batch;
@@ -2674,6 +2695,16 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
         }]),
     }
     if ok.is_ok() {
+        // The host's writes to the Shared memory its command buffers and copy-ins reach are the
+        // GPU's before it runs (`crate::coherence`).
+        let mut flushed = copied;
+        flushed.extend(
+            shared
+                .iter()
+                .flat_map(|ranges| ranges.reached.iter().copied()),
+        );
+        coherence::flush(core, &coherence::merged(flushed));
+        drop(shared);
         let asked = times::host_time();
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         (core.work.asking).store(true, Ordering::SeqCst);

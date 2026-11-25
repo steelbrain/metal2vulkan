@@ -46,6 +46,7 @@
 //! command buffer that accesses the buffer, which then holds it.
 
 use crate::buffer::{BufferInner, DeviceCopy};
+use crate::coherence::Range;
 use crate::counters::Metric;
 use crate::device::Core;
 use crate::error::Error;
@@ -243,6 +244,22 @@ impl CopyIn {
         for modified in self.modified.iter().filter(|modified| modified.overs.any()) {
             modified.overs.backs_before(&modified.ranges, backs);
         }
+    }
+
+    /// The Shared memory its copies read: each range named, in the block of the consumer's bytes,
+    /// widened to whole atoms of `atom` bytes, which the submission that takes it flushes first
+    /// (`crate::coherence`).
+    pub(crate) fn shared_ranges(&self, atom: u64) -> impl Iterator<Item = Range> + '_ {
+        (self.modified.iter()).flat_map(move |modified| {
+            (modified.ranges.iter()).filter_map(move |&(start, end)| {
+                Range::of_block(
+                    &modified.cpu.memory,
+                    modified.offset + start,
+                    end - start,
+                    atom,
+                )
+            })
+        })
     }
 
     /// Gives its recorder back and drops what it holds, and its pair of timestamp queries, read

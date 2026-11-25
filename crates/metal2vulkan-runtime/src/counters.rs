@@ -658,6 +658,11 @@ struct Atomics {
     threads: [AtomicU64; THREADS],
     submissions: AtomicU64,
     submit_infos: AtomicU64,
+    shared_flushes: AtomicU64,
+    shared_flushed_bytes: AtomicU64,
+    shared_invalidates: AtomicU64,
+    shared_invalidated_bytes: AtomicU64,
+    shared_coherence_failures: AtomicU64,
     submit_call_nanos: AtomicU64,
     submit_call_max_nanos: AtomicU64,
     pipeline_creation_nanos: AtomicU64,
@@ -1086,6 +1091,24 @@ impl Counters {
     /// A submission of `infos` submit infos ([`Metrics::submit_infos`]).
     pub(crate) fn submitted_infos(&self, infos: u64) {
         self.atomics.submit_infos.fetch_add(infos, Relaxed);
+    }
+
+    /// A `vkFlushMappedMemoryRanges` or `vkInvalidateMappedMemoryRanges` call over `bytes` bytes
+    /// of Shared memory ([`Metrics::shared_flushes`] and the three after it), `failed` where it
+    /// did not return success ([`Metrics::shared_coherence_failures`]).
+    pub(crate) fn coherence(&self, call: crate::coherence::Call, bytes: u64, failed: bool) {
+        let a = &self.atomics;
+        let (calls, total) = match call {
+            crate::coherence::Call::Flush => (&a.shared_flushes, &a.shared_flushed_bytes),
+            crate::coherence::Call::Invalidate => {
+                (&a.shared_invalidates, &a.shared_invalidated_bytes)
+            }
+        };
+        calls.fetch_add(1, Relaxed);
+        total.fetch_add(bytes, Relaxed);
+        if failed {
+            a.shared_coherence_failures.fetch_add(1, Relaxed);
+        }
     }
 
     /// A `vkQueueSubmit2` call that took `nanos` nanoseconds ([`Metrics::submit_call_nanos`]).
@@ -1728,6 +1751,11 @@ impl Counters {
         Metrics {
             submissions: a.submissions.load(Relaxed),
             submit_infos: a.submit_infos.load(Relaxed),
+            shared_flushes: a.shared_flushes.load(Relaxed),
+            shared_flushed_bytes: a.shared_flushed_bytes.load(Relaxed),
+            shared_invalidates: a.shared_invalidates.load(Relaxed),
+            shared_invalidated_bytes: a.shared_invalidated_bytes.load(Relaxed),
+            shared_coherence_failures: a.shared_coherence_failures.load(Relaxed),
             submit_call_nanos: a.submit_call_nanos.load(Relaxed),
             submit_call_max_nanos: a.submit_call_max_nanos.load(Relaxed),
             pipeline_creation_nanos: a.pipeline_creation_nanos.load(Relaxed),
@@ -2044,6 +2072,28 @@ pub struct Metrics {
     /// The `VkSubmitInfo2`s those calls passed: the command buffers of a submission that no event
     /// signal separates share one, and the upload shares the first.
     pub submit_infos: u64,
+    /// `vkFlushMappedMemoryRanges` calls over Shared memory: one before each submission whose
+    /// command buffers or copy-ins reach Shared memory, one before each invalidate
+    /// ([`shared_invalidates`](Self::shared_invalidates)), one after each `replace_region` through
+    /// a staging span, and one at the zero source's make. Every device makes them, whatever its
+    /// Shared type's flags: a driver whose type is host-coherent answers each at once (the
+    /// runtime README, "Shared memory's coherence").
+    pub shared_flushes: u64,
+    /// The bytes those calls named, each range widened to whole multiples of the device's
+    /// `nonCoherentAtomSize`.
+    pub shared_flushed_bytes: u64,
+    /// `vkInvalidateMappedMemoryRanges` calls over Shared memory, each after a flush of the same
+    /// ranges: as a command buffer that may write Shared memory retires, before its status reads
+    /// completed or its handlers run; before a shared event's value a GPU signal raised reaches
+    /// the host, over every such command buffer in flight; and before `get_bytes` reads a staging
+    /// span.
+    pub shared_invalidates: u64,
+    /// The bytes those calls named, widened as the flushes' are.
+    pub shared_invalidated_bytes: u64,
+    /// Of those calls of both kinds, the ones that did not return success
+    /// (`VK_ERROR_OUT_OF_HOST_MEMORY` or `VK_ERROR_OUT_OF_DEVICE_MEMORY`): the work went on as
+    /// it would after a success.
+    pub shared_coherence_failures: u64,
     /// The nanoseconds of [`host_time`](crate::host_time) those calls took, from each call to
     /// its return, in total: the time inside the driver, which a driver may spend holding the call
     /// while another thread is inside a memory call

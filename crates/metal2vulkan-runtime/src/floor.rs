@@ -295,11 +295,11 @@ pub const BUFFER_USAGE: vk::BufferUsageFlags = vk::BufferUsageFlags::from_raw(
 pub(crate) const PRIVATE_MEMORY: vk::MemoryPropertyFlags = vk::MemoryPropertyFlags::DEVICE_LOCAL;
 
 /// The flags of the memory type Shared storage lives in: memory the host maps and reads at the
-/// speed of its own memory.
+/// speed of its own memory. Of the types with them, the first that is host-coherent too, else the
+/// first ([`choose`]); the runtime flushes and invalidates what commands reach of it on every
+/// device, whatever the type's flags (`crate::coherence`).
 pub(crate) const SHARED_MEMORY: vk::MemoryPropertyFlags = vk::MemoryPropertyFlags::from_raw(
-    vk::MemoryPropertyFlags::HOST_VISIBLE.as_raw()
-        | vk::MemoryPropertyFlags::HOST_COHERENT.as_raw()
-        | vk::MemoryPropertyFlags::HOST_CACHED.as_raw(),
+    vk::MemoryPropertyFlags::HOST_VISIBLE.as_raw() | vk::MemoryPropertyFlags::HOST_CACHED.as_raw(),
 );
 
 /// The flags of the memory type the parameter ring lives in: memory the GPU reads at its own speed
@@ -1105,7 +1105,7 @@ impl std::fmt::Debug for Capabilities {
 }
 
 /// The memory types the runtime allocates its buffers from, each the first memory type with its
-/// flags that a buffer of [`BUFFER_USAGE`] can use.
+/// flags that a buffer of [`BUFFER_USAGE`] can use; Shared storage's a host-coherent one first.
 ///
 /// Metal's counterparts are storage modes: `MTLStorageModePrivate` and `MTLStorageModeShared`
 /// memory, and the memory `setBytes:length:atIndex:` copies into.
@@ -1113,7 +1113,8 @@ impl std::fmt::Debug for Capabilities {
 pub struct MemoryTypes {
     /// Device-local: Private storage.
     pub private: u32,
-    /// Host-visible, host-coherent and host-cached: Shared storage.
+    /// Host-visible and host-cached, the first that is host-coherent too where one is: Shared
+    /// storage.
     pub shared: u32,
     /// Device-local, host-visible and host-coherent: the parameter ring.
     pub ring: u32,
@@ -1552,7 +1553,8 @@ pub(crate) unsafe fn buffer_memory_bits(device: &ash::Device) -> u32 {
 }
 
 /// For each of [`MemoryTypes`], the first memory type with its flags whose bit is set in `usable`,
-/// or a [`Missing::MemoryType`] for each that has none.
+/// Shared storage's the first of them that is host-coherent too where one is, or a
+/// [`Missing::MemoryType`] for each that has none.
 pub(crate) fn choose(
     memory: &vk::PhysicalDeviceMemoryProperties,
     usable: u32,
@@ -1565,7 +1567,7 @@ pub(crate) fn choose(
     };
     match (
         first(PRIVATE_MEMORY),
-        first(SHARED_MEMORY),
+        first(SHARED_MEMORY | vk::MemoryPropertyFlags::HOST_COHERENT).or(first(SHARED_MEMORY)),
         first(RING_MEMORY),
     ) {
         (Some(private), Some(shared), Some(ring)) => Ok(MemoryTypes {

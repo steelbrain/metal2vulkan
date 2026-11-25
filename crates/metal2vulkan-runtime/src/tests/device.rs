@@ -123,6 +123,30 @@ fn every_device_of_the_cfgs_kind_opens_presents_and_tears_down_to_zero() {
                 flags.as_raw()
             );
         }
+        // Shared storage takes a host-coherent cached type where the device has one, as the
+        // rule before the flushes did (the first host-visible, host-coherent, host-cached type
+        // a buffer can use): every lab card has one, so its index is the one it was. Each type
+        // is printed, for the leg's log.
+        let types = memory.memory_types_as_slice();
+        for (index, kind) in types.iter().enumerate() {
+            println!(
+                "{name}: memory type {index}: {}",
+                crate::floor::flag_names(kind.property_flags)
+            );
+        }
+        let coherent = SHARED_MEMORY | vk::MemoryPropertyFlags::HOST_COHERENT;
+        if types
+            .iter()
+            .any(|kind| kind.property_flags.contains(coherent))
+        {
+            let kind = types[memory_types.shared as usize];
+            assert!(
+                kind.property_flags.contains(coherent),
+                "{name}: Shared memory type {} is not host-coherent, and the device has one that is",
+                memory_types.shared
+            );
+        }
+        println!("{name}: memory types chosen {memory_types:?}");
         assert_eq!(
             device.has_unified_memory(),
             matches!(

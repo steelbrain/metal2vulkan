@@ -15,6 +15,7 @@
 //! once their spans take half the region, so the GPU copies while the host writes the rest. A copy
 //! larger than the region has a staging buffer of its own, which the uploads' bound counts.
 
+use crate::coherence::Range;
 use crate::counters::{Gauge, Site};
 use crate::device::Core;
 use crate::error::Error;
@@ -177,7 +178,9 @@ impl Ring {
 /// mapping, and its ring: the device's staging region, of [`REGION_LEN`] bytes.
 pub(crate) struct Region {
     pub(crate) buffer: vk::Buffer,
-    memory: vk::DeviceMemory,
+    pub(crate) memory: vk::DeviceMemory,
+    /// The allocation's size, at least `len`.
+    pub(crate) size: u64,
     host: Mapping,
     len: u64,
     pub(crate) ring: Ring,
@@ -198,10 +201,11 @@ impl Region {
                 park.wait();
             }
         }
-        let (buffer, memory, host) = host_buffer(core, len, site)?;
+        let (buffer, memory, host, size) = host_buffer(core, len, site)?;
         Ok(Region {
             buffer,
             memory,
+            size,
             host,
             len,
             ring: Ring::new(len),
@@ -232,13 +236,16 @@ impl Region {
 
 /// Where a copy's bytes are staged.
 pub(crate) enum Stage {
-    /// Span `number` of the region, of `len` bytes at `offset` in its buffer.
+    /// Span `number` of the region, of `len` bytes at `offset` in its buffer, which spans its
+    /// allocation `memory` of `size` bytes.
     Region {
         number: u64,
         len: u64,
         buffer: vk::Buffer,
         offset: u64,
         host: Mapping,
+        memory: vk::DeviceMemory,
+        size: u64,
     },
     /// A staging buffer of its own, for a copy larger than the region.
     Own(Arc<Staging>),
@@ -268,6 +275,21 @@ impl Stage {
             Stage::Own(staging) => staging.mapping.get(),
         }
     }
+
+    /// The copy's `len` bytes, widened to whole atoms of `atom` bytes: what the host's writes
+    /// before the copy are flushed over, and its reads after it invalidated over
+    /// (`crate::coherence`). The memory is mapped whole, of the Shared type.
+    pub(crate) fn range(&self, len: u64, atom: u64) -> Option<Range> {
+        match self {
+            Stage::Region {
+                offset,
+                memory,
+                size,
+                ..
+            } => Range::widened(*memory, *offset, len, *size, atom),
+            Stage::Own(staging) => Range::widened(staging.memory, 0, len, staging.size, atom),
+        }
+    }
 }
 
 /// A host-visible buffer of a copy's bytes, in memory of its own of the Shared type, mapped for
@@ -278,6 +300,8 @@ pub(crate) struct Staging {
     core: Arc<Core>,
     buffer: vk::Buffer,
     memory: vk::DeviceMemory,
+    /// The allocation's size, at least `len`.
+    size: u64,
     mapping: Mapping,
     pub(crate) len: u64,
 }
@@ -288,12 +312,13 @@ impl Staging {
     /// Err: what [`memory::allocate`] returns; [`Error::Vulkan`] where the buffer cannot be made,
     /// bound or mapped.
     pub(crate) fn new(core: &Arc<Core>, len: u64) -> Result<Staging, Error> {
-        let (buffer, memory, mapping) = host_buffer(core, len, Site::StagingBuffer)?;
+        let (buffer, memory, mapping, size) = host_buffer(core, len, Site::StagingBuffer)?;
         core.counters.rise_by(Gauge::StagingBytes, len);
         Ok(Staging {
             core: Arc::clone(core),
             buffer,
             memory,
+            size,
             mapping,
             len,
         })
@@ -301,12 +326,12 @@ impl Staging {
 }
 
 /// A buffer of `len` bytes for copies to and from images, bound to an allocation of its own of the
-/// Shared type, mapped, its allocation counted at `site`.
+/// Shared type, mapped whole, its allocation counted at `site`; with the allocation's size.
 fn host_buffer(
     core: &Core,
     len: u64,
     site: Site,
-) -> Result<(vk::Buffer, vk::DeviceMemory, Mapping), Error> {
+) -> Result<(vk::Buffer, vk::DeviceMemory, Mapping, u64), Error> {
     let device = &core.device;
     let info = vk::BufferCreateInfo::default()
         .size(len)
@@ -375,7 +400,7 @@ fn host_buffer(
             result: vk::Result::ERROR_MEMORY_MAP_FAILED,
         });
     };
-    Ok((buffer, memory, Mapping::new(pointer)))
+    Ok((buffer, memory, Mapping::new(pointer), requirements.size))
 }
 
 impl Drop for Staging {

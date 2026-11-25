@@ -85,6 +85,7 @@
 
 use crate::alias;
 use crate::buffer::{Buffer, BufferInner, BufferObject};
+use crate::coherence::Range;
 use crate::command::{Building, CommandBuffer};
 use crate::counters::Metric;
 use crate::depth_stencil::{BitDraws, DepthStencilState, Face, Tests, EVERY_FRAGMENT};
@@ -405,6 +406,23 @@ impl Facts {
             });
         Ok(())
     }
+}
+
+/// The Shared memory a draw of `draws` writes through its bound slots, `tables`: each buffer slot
+/// a function writes bound to a Shared buffer, and each texture slot one writes bound to a
+/// texture over one (`crate::coherence`).
+fn shared_writes<'a>(
+    draws: &'a Draws,
+    tables: &'a [Tables; 2],
+    atom: u64,
+) -> impl Iterator<Item = Range> + 'a {
+    let buffers = (draws.buffers.iter())
+        .filter(|(_, _, access)| access.writes())
+        .filter_map(move |&(table, slot, _)| tables[table].buffer(slot)?.shared_range(atom));
+    let textures = (draws.textures.iter())
+        .filter(|(_, _, access)| access.writes())
+        .filter_map(move |&(table, slot, _)| tables[table].texture(slot)?.shared_range(atom));
+    buffers.chain(textures)
 }
 
 /// What a draw reads of its pass's attachments through textures
@@ -878,6 +896,11 @@ fn begin(
         || (pass.resolving && pass.resolves().any(|r| r.texture.host_reads()));
     if host_reads {
         building.wrote_host();
+    }
+    // Every attachment over a Shared buffer is the pass's to write (`crate::coherence`).
+    let atom = building.atom();
+    for texture in (pass.targets().map(|t| &t.texture)).chain(resolves().map(|r| &r.texture)) {
+        building.wrote_shared(texture.shared_range(atom));
     }
     building.overs_after(overs(), false);
     building.count(Metric::Passes);
@@ -1591,6 +1614,7 @@ impl RenderCommandEncoder {
         if buffer.is_shared() {
             building.wrote_host();
         }
+        building.wrote_shared(buffer.shared_range(building.atom()));
     }
 
     /// A command that would end the rendering while a visibility result's query counts the
@@ -1964,7 +1988,8 @@ impl RenderCommandEncoder {
         usage: ResourceUsage,
     ) -> Result<(), Error> {
         let building = self.building();
-        let (id, host, unstored, texture, span, place) = match resource {
+        let atom = building.atom();
+        let (id, host, unstored, texture, span, place, written) = match resource {
             Resource::Buffer(buffer) => {
                 if !buffer.is_of(building.device.core()) {
                     return Err(Error::Refused(Refusal::OtherDevice));
@@ -1979,6 +2004,7 @@ impl RenderCommandEncoder {
                     None,
                     Some(buffer.span()),
                     place,
+                    buffer.shared_range(atom),
                 )
             }
             Resource::Texture(texture) => {
@@ -1996,6 +2022,7 @@ impl RenderCommandEncoder {
                     Some(lent),
                     None,
                     TextureObject::object(texture).placement().cloned(),
+                    texture.shared_range(atom),
                 )
             }
             Resource::IndirectCommandBuffer(commands) => {
@@ -2009,6 +2036,11 @@ impl RenderCommandEncoder {
         let Some(access) = usage.access() else {
             return Ok(());
         };
+        // What it writes of Shared memory is settled before the host sees its progress
+        // (`crate::coherence`).
+        if access.writes() {
+            self.building().wrote_shared(written);
+        }
         // A read of an attachment the pass holds out of its home layout: of it, of a view of its
         // image or of the buffer it lies over in place, all of which name its hazard id.
         let held =
@@ -2425,6 +2457,16 @@ impl RenderCommandEncoder {
         if !self.facts.held {
             self.facts
                 .find(draws, &self.tables, &self.pass, &self.declared)?;
+            // The Shared memory its bound slots write, once for the facts: the bindings are the
+            // same until they change, which finds the facts again (`crate::coherence`).
+            if self.facts.host {
+                let building = (self.building.as_mut())
+                    .expect("an encoder holds its command buffer's recording until it ends");
+                let atom = building.atom();
+                for range in shared_writes(draws, &self.tables, atom) {
+                    building.wrote_shared(Some(range));
+                }
+            }
         }
         // Metal orders a colour attachment's read (`[[color(n)]]`) after every earlier fragment of
         // the pass, with no barrier from the program: after a draw of the pass, a draw that reads

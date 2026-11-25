@@ -247,6 +247,7 @@ impl BlitCommandEncoder {
         if destination.host_reads() {
             building.wrote_host();
         }
+        building.wrote_shared(destination.shared_range(building.atom()));
         building.overs_after(overs, false);
         let (read, write) = match copy.shared {
             false => (
@@ -489,6 +490,7 @@ impl BlitCommandEncoder {
         if destination.is_shared() {
             building.wrote_host();
         }
+        building.wrote_shared(destination.shared_range(building.atom()));
         let earlier = [memory_barrier(Reach::Commands)];
         let written = [written()];
         let device = &core.device;
@@ -614,6 +616,11 @@ impl BlitCommandEncoder {
         if host {
             building.wrote_host();
         }
+        let atom = building.atom();
+        building.wrote_shared(match into_image {
+            true => texture.shared_range(atom),
+            false => buffer.shared_range(atom),
+        });
         let (layout, access) = match into_image {
             true => (
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
@@ -730,6 +737,7 @@ impl BlitCommandEncoder {
         if buffer.is_shared() {
             building.wrote_host();
         }
+        building.wrote_shared(buffer.shared_range(building.atom()));
         let earlier = [memory_barrier(Reach::Commands)];
         let written = [written()];
         let device = &core.device;
@@ -884,6 +892,7 @@ impl BlitCommandEncoder {
         if texture.host_reads() {
             building.wrote_host();
         }
+        building.wrote_shared(texture.shared_range(building.atom()));
         building.overs_after(overs, false);
         use vk::AccessFlags2 as A;
         use vk::PipelineStageFlags2 as S;
@@ -1096,6 +1105,7 @@ impl BlitCommandEncoder {
             let command = building.ordered_command()?;
             // Marked after `ordered_command`, as a copy into a Shared buffer is.
             building.wrote_host();
+            building.wrote_shared(buffer.shared_range(building.atom()));
             let earlier = [memory_barrier(Reach::Commands)];
             let written = [written()];
             let device = &core.device;

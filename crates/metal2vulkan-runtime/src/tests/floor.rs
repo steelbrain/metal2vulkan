@@ -977,12 +977,12 @@ fn memory_type(flags: &str, offered: String) -> Missing {
 #[test]
 fn each_missing_memory_type_is_named() {
     let [local, visible, coherent, cached] = NAMES;
-    let shared = format!("{visible} | {coherent} | {cached}");
+    let shared = format!("{visible} | {cached}");
     let ring = format!("{local} | {visible} | {coherent}");
     let host_coherent =
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
     let mut device = at_the_floor();
-    // Host memory that is not cached is not Shared memory.
+    // Host memory that is not cached is not Shared memory, however coherent.
     device.memory = memory(&[DEVICE_LOCAL, host_coherent, RING_MEMORY]);
     assert_eq!(
         only_missing(&device),
@@ -1051,7 +1051,7 @@ fn a_missing_memory_type_names_the_types_the_device_offers() {
     assert_eq!(
         missing.to_string(),
         "a memory type with VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | \
-         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT for buffers \
+         VK_MEMORY_PROPERTY_HOST_CACHED_BIT for buffers \
          (the device offers buffers: type 0 with VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, type 1 with \
          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | \
          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, type 2 with no flags, type 3 with \
@@ -1095,15 +1095,16 @@ fn a_missing_memory_type_names_the_types_the_device_offers() {
 
 #[test]
 fn memory_types_are_the_first_with_their_flags_that_buffers_can_use() {
-    // Device-local, host-coherent, two cached, then two device-local host-visible types, as an AMD
-    // device lists them.
+    // Device-local, host-coherent, two cached coherent, then two device-local host-visible types,
+    // as an AMD device lists them.
     let host_coherent =
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+    let cached_coherent = SHARED_MEMORY | vk::MemoryPropertyFlags::HOST_COHERENT;
     let device = memory(&[
         DEVICE_LOCAL,
         host_coherent,
-        SHARED_MEMORY,
-        SHARED_MEMORY,
+        cached_coherent,
+        cached_coherent,
         RING_MEMORY,
         RING_MEMORY,
     ]);
@@ -1147,6 +1148,98 @@ fn memory_types_are_the_first_with_their_flags_that_buffers_can_use() {
         choose(&device, !0b11_1111).map_err(|missing| missing.len()),
         Err(3)
     );
+}
+
+/// Shared storage takes the first host-visible, host-cached type a buffer can use that is
+/// host-coherent too, and where none is, the first host-visible, host-cached one: one rule, of
+/// which only the index differs, on the lists Mesa 26.2.4's Intel driver gives
+/// (src/intel/vulkan/i915/anv_device.c, xe/anv_device.c).
+#[test]
+fn shared_storage_takes_a_cached_type_a_coherent_one_first() {
+    let local = DEVICE_LOCAL;
+    let visible = vk::MemoryPropertyFlags::HOST_VISIBLE;
+    let coherent = vk::MemoryPropertyFlags::HOST_COHERENT;
+    let cached = vk::MemoryPropertyFlags::HOST_CACHED;
+    let cases = [
+        // i915, a GPU without the shared last-level cache (Meteor Lake's): write-combined
+        // coherent memory, then cached memory that is not coherent.
+        (
+            "i915 without LLC",
+            vec![local | visible | coherent, local | visible | cached],
+            (0, 1, 0),
+        ),
+        // Xe, the same GPU: device-local, write-combined coherent, then cached coherent.
+        (
+            "xe without LLC",
+            vec![
+                local,
+                local | visible | coherent,
+                local | visible | coherent | cached,
+            ],
+            (0, 2, 1),
+        ),
+        // i915 with the shared last-level cache (the lab's Iris Xe).
+        (
+            "i915 with LLC",
+            vec![
+                local,
+                local | visible | coherent,
+                local | visible | coherent | cached,
+            ],
+            (0, 2, 1),
+        ),
+        // Xe with the shared last-level cache.
+        (
+            "xe with LLC",
+            vec![local, local | visible | coherent | cached],
+            (0, 1, 1),
+        ),
+        // A discrete GPU with VRAM (i915): system memory cached and coherent, then mappable VRAM.
+        (
+            "i915 with VRAM",
+            vec![
+                local,
+                visible | coherent | cached,
+                local | visible | coherent,
+            ],
+            (0, 1, 2),
+        ),
+        // A cached type that is not coherent ahead of one that is: the coherent one.
+        (
+            "cached ahead of cached coherent",
+            vec![
+                local,
+                visible | cached,
+                visible | coherent | cached,
+                local | visible | coherent,
+            ],
+            (0, 2, 3),
+        ),
+    ];
+    for (name, types, (private, shared, ring)) in cases {
+        let device = memory(&types);
+        assert_eq!(
+            choose(&device, u32::MAX),
+            Ok(MemoryTypes {
+                private,
+                shared,
+                ring
+            }),
+            "{name}"
+        );
+        // The rule as it stood (the first host-visible, host-coherent, host-cached type) chose
+        // the same index wherever the device has such a type.
+        let before = (0u32..)
+            .zip(device.memory_types_as_slice())
+            .find(|(_, kind)| kind.property_flags.contains(visible | coherent | cached))
+            .map(|(index, _)| index);
+        if let Some(before) = before {
+            assert_eq!(before, shared, "{name}");
+        }
+    }
+    // A buffer that cannot use the coherent cached type takes the cached one.
+    let device = memory(&[local, visible | cached, visible | coherent | cached]);
+    assert_eq!(choose(&device, 0b011).map(|types| types.shared), Ok(1));
 }
 
 #[test]
@@ -1231,8 +1324,7 @@ fn every_missing_item_is_named_at_once() {
          type with VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | \
          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT for buffers (the device offers buffers: type 0 \
          with VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, type 1 with \
-         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | \
-         VK_MEMORY_PROPERTY_HOST_CACHED_BIT)"
+         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT)"
     );
 }
 

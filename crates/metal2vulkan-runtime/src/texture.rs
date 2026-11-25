@@ -4627,6 +4627,9 @@ impl Texture {
             // packed; it is this call's alone until its copy is recorded.
             unsafe { bytes.copy_to(from, host.add(to), len) };
         }
+        // The rows written are the GPU's before the copy runs (`crate::coherence`).
+        let written = stage.range(copy.len(), core.coherence.atom);
+        crate::coherence::flush(core, written.as_slice());
         core.counters.copied(copy.len());
         core.work.upload(
             core,
@@ -4813,6 +4816,9 @@ impl Texture {
         let value = core.work.flush();
         let waited = core.done.wait(core, value);
         if waited.is_ok() {
+            // What the copy wrote is the host's before it reads it (`crate::coherence`).
+            let written = stage.range(copy.len(), core.coherence.atom);
+            crate::coherence::settle(core, written.as_slice());
             // SAFETY: the stage holds every row packed, the copy into it completed and its writes
             // are visible to the host, and no other call takes its span while this one reads it;
             // `copy` checked that each row lies in `bytes`.
@@ -5636,6 +5642,13 @@ pub(crate) trait TextureObject {
             base,
             len: image.bytes,
         })
+    }
+
+    /// The Shared memory of the buffer it lies over or names the bytes of, where it has one
+    /// ([`BufferObject::shared_range`]): what the flushes and invalidates of Shared memory name
+    /// (`crate::coherence`).
+    fn shared_range(&self, atom: u64) -> Option<crate::coherence::Range> {
+        (self.object().named.as_ref()).and_then(|named| named.buffer.shared_range(atom))
     }
 
     /// Whether the host reads the GPU's writes to it with no copy: a texture in place over a

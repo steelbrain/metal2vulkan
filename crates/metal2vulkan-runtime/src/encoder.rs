@@ -3,6 +3,7 @@
 use crate::alias::Placement;
 use crate::arena;
 use crate::buffer::{Buffer, BufferInner, BufferObject};
+use crate::coherence::Range;
 use crate::command::{Building, CommandBuffer};
 use crate::counters::Metric;
 use crate::device::Core;
@@ -830,7 +831,8 @@ impl ComputeCommandEncoder {
         usage: ResourceUsage,
     ) -> Result<(), Error> {
         let building = self.building();
-        let (id, shared, unstored, texture, span, place) = match resource {
+        let atom = building.device.core().coherence.atom;
+        let (id, shared, unstored, texture, span, place, written) = match resource {
             Resource::Buffer(buffer) => {
                 if !buffer.is_of(building.device.core()) {
                     return Err(Error::Refused(Refusal::OtherDevice));
@@ -843,6 +845,7 @@ impl ComputeCommandEncoder {
                     None,
                     Some(buffer.span()),
                     BufferObject::object(buffer).placement().cloned(),
+                    buffer.shared_range(atom),
                 )
             }
             Resource::Texture(texture) => {
@@ -861,6 +864,7 @@ impl ComputeCommandEncoder {
                     Some(lent),
                     None,
                     TextureObject::object(texture).placement().cloned(),
+                    texture.shared_range(atom),
                 )
             }
             Resource::IndirectCommandBuffer(commands) => {
@@ -874,6 +878,11 @@ impl ComputeCommandEncoder {
         let Some(access) = usage.access() else {
             return Ok(());
         };
+        // What it writes of Shared memory is settled before the host sees its progress
+        // (`crate::coherence`).
+        if access.writes() {
+            self.building().wrote_shared(written);
+        }
         self.declared_shared_write |= access.writes() && shared;
         if access.writes() && self.declared_unstored_write.is_none() {
             self.declared_unstored_write = unstored;
@@ -1208,6 +1217,15 @@ impl ComputeCommandEncoder {
             self.facts.managed = self.reaches_managed(interface);
             self.facts.host = self.writes_host(interface);
             self.facts.module = Some(module);
+            // The Shared memory its bound slots write, once for the facts: the bindings are the
+            // same until they change, which finds the facts again (`crate::coherence`).
+            if self.facts.host {
+                let building = recording(&mut self.building);
+                let atom = building.device.core().coherence.atom;
+                for range in shared_writes(&self.slots, &self.textures, interface, atom) {
+                    building.wrote_shared(Some(range));
+                }
+            }
         }
         let wrote = {
             let accesses = Accesses {
@@ -1410,6 +1428,27 @@ impl ComputeCommandEncoder {
                     )
             })
     }
+}
+
+/// The Shared memory a dispatch of a kernel of `interface` writes through its bound slots: each
+/// buffer slot it writes bound to a Shared buffer, and each texture slot it writes bound to a
+/// texture over one (`crate::coherence`).
+fn shared_writes<'a>(
+    slots: &'a [Slot],
+    textures: &'a [Option<Lent<Texture>>],
+    interface: &'a Interface,
+    atom: u64,
+) -> impl Iterator<Item = Range> + 'a {
+    let buffers = (interface.buffers.iter())
+        .filter(|(_, access)| access.writes())
+        .filter_map(move |&(slot, _)| match slots.get(slot as usize) {
+            Some(Slot::Buffer { buffer, .. }) => buffer.shared_range(atom),
+            _ => None,
+        });
+    let textures = (interface.textures.iter())
+        .filter(|(_, access)| access.writes())
+        .filter_map(move |&(slot, _)| textures.get(slot as usize)?.as_deref()?.shared_range(atom));
+    buffers.chain(textures)
 }
 
 /// The length `set` gives threadgroup memory index `index`, 0 where it gives none.

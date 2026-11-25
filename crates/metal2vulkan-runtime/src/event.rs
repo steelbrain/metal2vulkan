@@ -7,6 +7,7 @@ use crate::error::Error;
 use crate::reaper::{Free, Job};
 use ash::vk;
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -41,6 +42,9 @@ pub(crate) struct EventInner {
     pub(crate) state: Mutex<EventState>,
     /// Signalled whenever the value the host sees rises, and at a loss.
     changed: Condvar,
+    /// The highest value the GPU's signals raised before which the Shared memory command buffers
+    /// in flight may write was settled for the host (`crate::coherence`).
+    settled: AtomicU64,
 }
 
 pub(crate) struct EventState {
@@ -81,6 +85,7 @@ impl Device {
                     lost: false,
                 }),
                 changed: Condvar::new(),
+                settled: AtomicU64::new(0),
             }),
             device: self.clone(),
         })
@@ -132,13 +137,22 @@ impl Event {
 }
 
 impl SharedEvent {
-    /// `signaledValue`: the higher of the semaphore's value and the host's floor.
+    /// `signaledValue`: the higher of the semaphore's value and the host's floor. Where the
+    /// semaphore's value rose since the host last saw it, the Shared memory command buffers in
+    /// flight may write is flushed and invalidated first (`crate::coherence`), so the host reads
+    /// what the GPU wrote before its signal.
     pub fn signaled_value(&self) -> u64 {
         let inner = &self.event.inner;
-        let state = lock(&inner.state);
-        let floor = state.observed.max(state.floor);
+        let (observed, floor) = {
+            let state = lock(&inner.state);
+            (state.observed, state.floor)
+        };
         // A lost device answers with what was seen before the loss.
-        inner.counter().map_or(floor, |counter| counter.max(floor))
+        let signalled = inner
+            .counter()
+            .map_or(observed, |counter| counter.max(observed));
+        inner.seen(signalled);
+        signalled.max(floor)
     }
 
     /// `setSignaledValue:`: raises the host's floor to `value`; a value not above it changes
@@ -179,9 +193,15 @@ impl SharedEvent {
         let deadline = Instant::now().checked_add(timeout);
         let mut state = lock(&inner.state);
         loop {
-            if state.floor.max(state.observed) >= value
-                || inner.counter().is_ok_and(|counter| counter >= value)
-            {
+            let counter = match state.floor.max(state.observed) >= value {
+                true => None,
+                false => inner.counter().ok().filter(|&counter| counter >= value),
+            };
+            if counter.is_some() || state.floor.max(state.observed) >= value {
+                // The GPU's writes before the signals seen are the host's first.
+                let signalled = counter.unwrap_or(0).max(state.observed);
+                drop(state);
+                inner.seen(signalled);
                 return Ok(true);
             }
             if state.lost {
@@ -247,6 +267,17 @@ impl EventInner {
     /// Whether the event is `core`'s.
     pub(crate) fn is_of(&self, core: &Arc<Core>) -> bool {
         Arc::ptr_eq(&self.core, core)
+    }
+
+    /// Before the host sees `signalled`, a value the GPU's signals raised: where it is above the
+    /// last value settled, the Shared memory the command buffers in flight may write is flushed
+    /// and invalidated (`crate::coherence::Coherence::signal_seen`), then it is the value
+    /// settled.
+    fn seen(&self, signalled: u64) {
+        if signalled > self.settled.load(Ordering::Acquire) {
+            self.core.coherence.signal_seen(&self.core);
+            self.settled.fetch_max(signalled, Ordering::AcqRel);
+        }
     }
 
     /// The semaphore's value now.
