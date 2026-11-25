@@ -5058,11 +5058,12 @@ pub(crate) mod on_device {
     /// L, long, fills another. Where the device holds a coherence state, the invalidates since the
     /// group was held are A's one, over A's buffer's atoms, at A's handler and at A's status, each
     /// seen before L's GPU end, and A's and L's two, over both buffers' atoms, at L's handler; each
-    /// handler reads its own fill. Where the device holds none, it makes no flush or invalidate.
-    /// Each device runs it as it reads its types and, under `m2v_gpu`, through the refused
-    /// device's view (`crate::tests::cached_types_incoherent`), which builds the state. L's copies
-    /// are sized to about 10 ms, and doubled for another attempt where A was seen complete only
-    /// after L's GPU end.
+    /// handler reads its own fill. Where the device holds none, it makes no flush or invalidate,
+    /// and A's sight before L's end is not asked for (lavapipe retires A with L). Each device runs
+    /// it as it reads its types and, under `m2v_gpu`, through the refused device's view
+    /// (`crate::tests::cached_types_incoherent`), which builds the state. L's copies are sized to
+    /// about 10 ms and, where the device holds the state, doubled for another attempt where A was
+    /// seen complete only after L's GPU end, up to four.
     #[test]
     fn every_device_settles_an_early_members_shared_writes_at_its_own_completion() {
         let test = "command_group_apart_settles";
@@ -5152,7 +5153,9 @@ pub(crate) mod on_device {
             };
             let (status_metrics, status_seen) = at_status;
             let early = a_handled < l_end && status_seen < l_end;
-            if !early && attempt < 4 {
+            // Only a coherence state's calls follow A's own retirement; with none there is no call
+            // to place, and lavapipe, whose one memory type is coherent, retires A with L.
+            if atom.is_some() && !early && attempt < 4 {
                 println!(
                     "{name}: A seen complete {} ns after L's GPU end: again with {} copies",
                     a_handled.max(status_seen) - l_end,
@@ -5168,23 +5171,28 @@ pub(crate) mod on_device {
                 calls(&held, &at_l),
             );
             println!(
-                "{name}: attempt {attempt}, atom {atom:?}; flushes, flushed bytes, invalidates, \
-                 invalidated bytes and \
-                 failures since the group was held: at A's handler {a_calls:?}, {} ns before L's \
-                 GPU end; at A's status {status_calls:?}, {} ns before it; at L's handler \
-                 {l_calls:?}",
+                "{name}: attempt {attempt}, atom {atom:?}, A seen complete before L's GPU end: \
+                 {early}; flushes, flushed bytes, invalidates, invalidated bytes and failures \
+                 since the group was held: at A's handler {a_calls:?}, {} ns before L's GPU end; \
+                 at A's status {status_calls:?}, {} ns before it; at L's handler {l_calls:?}",
                 l_end as i64 - a_handled as i64,
                 l_end as i64 - status_seen as i64
             );
-            assert!(early, "{name}: A seen complete before L's GPU end");
             assert_eq!(
                 (a_word, l_word),
                 (0x5a5a_5a5a, 0xa5a5_a5a5),
                 "{name}: each handler reads its own fill"
             );
             if atom.is_none() {
+                for (at, calls) in [("A's handler", a_calls), ("A's status", status_calls)] {
+                    assert_eq!(calls, [0; 5], "{name}: no coherence state, no call at {at}");
+                }
                 assert_eq!(l_calls, [0; 5], "{name}: no coherence state, no call");
             } else {
+                assert!(
+                    early,
+                    "{name}: A seen complete before L's GPU end in none of {attempt} attempts"
+                );
                 // A block starts at a multiple of 64 KiB and the atom is a power of two of at most
                 // 256, so each 256-byte buffer of the arena is whole atoms of its own.
                 let one = first.length();
