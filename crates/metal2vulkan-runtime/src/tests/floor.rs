@@ -1237,9 +1237,14 @@ fn shared_storage_takes_a_cached_type_a_coherent_one_first() {
             assert_eq!(before, shared, "{name}");
         }
     }
-    // A buffer that cannot use the coherent cached type takes the cached one.
-    let device = memory(&[local, visible | cached, visible | coherent | cached]);
-    assert_eq!(choose(&device, 0b011).map(|types| types.shared), Ok(1));
+    // A buffer that cannot use the coherent cached type (type 2) takes the cached one.
+    let device = memory(&[
+        local,
+        visible | cached,
+        visible | coherent | cached,
+        local | visible | coherent,
+    ]);
+    assert_eq!(choose(&device, 0b1011).map(|types| types.shared), Ok(1));
 }
 
 #[test]
