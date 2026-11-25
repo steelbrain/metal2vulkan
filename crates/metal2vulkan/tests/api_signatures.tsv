@@ -6202,6 +6202,7 @@ method	metal2vulkan::bind::SamplerDescriptor::new	pub fn new() -> SamplerDescrip
 method	metal2vulkan::bind::SamplerDescriptor::shape	pub fn shape(&self) -> SamplerShape
 method	metal2vulkan::bind::StageInRegion::new	pub fn new(origin: [u32; 3], size: [u32; 3]) -> StageInRegion
 method	metal2vulkan::bind::indirect_commands::Action::writes	pub fn writes(&self) -> crate::pipeline::CommandWrites
+method	metal2vulkan::bind::indirect_commands::Bindings::buffers	pub fn buffers(&self, stage: BufferStage) -> &[Option<BufferBinding>; BINDING_COUNT]
 method	metal2vulkan::bind::indirect_commands::Bindings::buffers_mut	pub fn buffers_mut(&mut self, stage: BufferStage) -> &mut [Option<BufferBinding>; BINDING_COUNT]
 method	metal2vulkan::bind::indirect_commands::BufferBinding::buffer_alignment	pub fn buffer_alignment(&self) -> u64
 method	metal2vulkan::bind::indirect_commands::BufferBinding::buffer_data_size	pub fn buffer_data_size(&self) -> u64

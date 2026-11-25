@@ -173,7 +173,7 @@ impl BufferStage {
 }
 
 /// A buffer slot a setter set: the address Metal's getter answers and the attribute stride form.
-/// A slot no setter set, or one a reset cleared, is none in its [`Bindings`].
+/// A slot no setter set, or one a reset cleared, is none ([`Bindings::buffers`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BufferBinding {
     /// The buffer's address plus the low 32 bits of the offset set, or, for a nil buffer, the low
@@ -339,7 +339,7 @@ impl Bindings {
     /// cleared it. A record holds none as an address and a stride of 0 and a set slot's stride
     /// form as all ones (the pipeline's) or the stride, the answers of Metal's getters on a buffer
     /// of dynamic attribute strides.
-    fn buffers(&self, stage: BufferStage) -> &[Option<BufferBinding>; BINDING_COUNT] {
+    pub fn buffers(&self, stage: BufferStage) -> &[Option<BufferBinding>; BINDING_COUNT] {
         &self.buffers[stage.index()]
     }
 
