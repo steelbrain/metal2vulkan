@@ -2521,9 +2521,9 @@ fn a_device_with_no_cached_coherent_type_opens_where_the_floor_chooses_its_types
                     flag_names(shared.property_flags)
                 );
             }
-            (Err(missing), Err(Error::BelowFloor(below))) => {
+            // A GPU refused under the view fails below, with its refusal.
+            (Err(missing), Err(Error::BelowFloor(below))) if cfg!(m2v_cpu_icd) => {
                 assert_eq!(below, BelowFloor { missing }, "{name}");
-                assert!(cfg!(m2v_cpu_icd), "{name}: a GPU refused under the view");
                 println!("floor: {name} under the view: {}", Error::BelowFloor(below));
             }
             (chosen, Err(error)) => panic!("{name}: {error}, where the floor chose {chosen:?}"),
