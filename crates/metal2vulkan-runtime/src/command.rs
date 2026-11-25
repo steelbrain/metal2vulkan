@@ -1795,13 +1795,15 @@ pub(crate) fn retire(
     if let Some((start, end)) = gpu_times {
         inner.queue.ran(end.saturating_sub(start));
     }
-    // What was released while it was in flight may go (`crate::memory::Wait`).
-    core.pool.ended();
     // The GPU's writes to Shared memory are the host's before anything tells it the command buffer
-    // completed: its status, a wait for it, its handlers (`crate::coherence`).
+    // completed: its status, a wait for it, its handlers (`crate::coherence`). Settled while it
+    // still keeps every block they lie in.
     if let Some(shared) = &gpu.shared {
         coherence::settle(core, &shared.written);
+        core.coherence.retired(shared);
     }
+    // What was released while it was in flight may go (`crate::memory::Wait`).
+    core.pool.ended();
     let (stamps, stages) = {
         let mut state = lock(&inner.state);
         // One with nothing for the GPU, as Metal reports it: its start and end equal, at its

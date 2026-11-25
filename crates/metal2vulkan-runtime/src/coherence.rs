@@ -214,21 +214,28 @@ impl Coherence {
         flight.push(Arc::downgrade(ranges));
     }
 
-    /// Before the host sees a value a GPU signal raised: flushes, then invalidates, the written
-    /// ranges of every command buffer committed and not yet retired (`settle`).
-    pub(crate) fn signal_seen(&self, core: &Core) {
-        let held: Vec<Arc<Ranges>> = {
-            let mut flight = lock(&self.flight);
-            flight.retain(|held| held.strong_count() > 0);
-            flight.iter().filter_map(Weak::upgrade).collect()
-        };
-        if held.is_empty() {
+    /// A command buffer committed with `ranges` retires, before it lets go of the blocks they lie
+    /// in: once this returns, no shared event's signal seen settles them. A settle under way
+    /// finishes first, as it runs under the same lock ([`signal_seen`](Self::signal_seen)), so
+    /// no call names memory a retired command buffer gave back.
+    pub(crate) fn retired(&self, ranges: &Arc<Ranges>) {
+        if ranges.written.is_empty() {
             return;
         }
-        let ranges: Vec<Range> = held
-            .iter()
-            .flat_map(|r| r.written.iter().copied())
-            .collect();
+        let mut flight = lock(&self.flight);
+        flight.retain(|held| held.strong_count() > 0 && held.as_ptr() != Arc::as_ptr(ranges));
+    }
+
+    /// Before the host sees a value a GPU signal raised: flushes, then invalidates, the written
+    /// ranges of every command buffer committed and not yet retired (`settle`), under the lock
+    /// that keeps each of them from retiring meanwhile ([`retired`](Self::retired)).
+    pub(crate) fn signal_seen(&self, core: &Core) {
+        let mut flight = lock(&self.flight);
+        flight.retain(|held| held.strong_count() > 0);
+        let mut ranges = Vec::new();
+        for held in flight.iter().filter_map(Weak::upgrade) {
+            ranges.extend_from_slice(&held.written);
+        }
         settle(core, &merged(ranges));
     }
 }
