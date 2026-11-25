@@ -1,7 +1,8 @@
 //! The floor's check: each missing item is named, the optional features decide
 //! `Capabilities`, memory types are chosen by flags and by what buffers can use, the README states
 //! what the code checks, and, under a device cfg, every device the loader lists is above the floor
-//! and is refused through a memory view that leaves it no host-cached, host-coherent type.
+//! and, through a memory view that leaves it no host-cached, host-coherent type, opens where the
+//! floor's choice over the view finds its types and is refused with that choice's refusal where not.
 
 use crate::floor::{
     choose, decide, flag_names, limits, vulkan_name, BelowFloor, Features, IndirectCommandLimits,
@@ -2471,13 +2472,16 @@ fn every_device_the_loader_lists_is_above_the_floor() {
 }
 
 /// Every device of the cfg's kind, read through the memory view of the refused device's shape
-/// ([`cached_types_incoherent`](crate::tests::cached_types_incoherent)), is refused at its make.
-/// The refusal is the floor's choice over the view: it names the flags each missing type needs
-/// and the types the device offers a buffer, with the view's flags. The device made with no view
-/// first answers which types such a buffer can use.
+/// ([`cached_types_incoherent`](crate::tests::cached_types_incoherent)), answers at its make as
+/// the floor's choice over the view does, with the buffer bits a device made with no view first
+/// answers. Every GPU opens: Shared takes the first cached type, which the view left not
+/// coherent, and the device holds the coherence state (`crate::coherence`). A device the choice
+/// refuses is refused with its refusal, which names the flags each missing type needs and the
+/// types the device offers a buffer, with the view's flags: lavapipe, whose one type holds the
+/// parameter ring too and is left with no coherent type.
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 #[test]
-fn a_device_with_no_cached_coherent_type_is_refused_naming_its_types() {
+fn a_device_with_no_cached_coherent_type_opens_where_the_floor_chooses_its_types() {
     use crate::tests::cached_types_incoherent;
     use crate::{Device, DeviceOptions, Error};
 
@@ -2493,27 +2497,37 @@ fn a_device_with_no_cached_coherent_type_is_refused_naming_its_types() {
         let mut memory =
             unsafe { vk_instance.get_physical_device_memory_properties(physical.raw()) };
         cached_types_incoherent(&mut memory);
-        let Err(missing) = choose(&memory, usable) else {
-            panic!("{name}: the view leaves a type with every flag the floor asks");
-        };
-        assert!(
-            (missing.iter()).any(|missing| matches!(
-                missing,
-                Missing::MemoryType { flags, .. } if *flags == flag_names(SHARED_MEMORY)
-            )),
-            "{name}: {missing:?}"
-        );
         let options = DeviceOptions {
             memory: Some(cached_types_incoherent),
             ..DeviceOptions::default()
         };
-        match Device::new(&physical, options) {
-            Err(Error::BelowFloor(below)) => {
+        match (choose(&memory, usable), Device::new(&physical, options)) {
+            (Ok(types), Ok(device)) => {
+                assert_eq!(device.memory_types(), types, "{name}");
+                let shared = memory.memory_types_as_slice()[types.shared as usize];
+                assert!(
+                    !(shared.property_flags).contains(vk::MemoryPropertyFlags::HOST_COHERENT),
+                    "{name}: the view left Shared's type {} coherent",
+                    types.shared
+                );
+                assert!(
+                    device.core().coherence.is_some(),
+                    "{name}: the coherence state"
+                );
+                println!(
+                    "floor: {name} under the view opens: Shared memory type {} with {}, the \
+                     coherence state built",
+                    types.shared,
+                    flag_names(shared.property_flags)
+                );
+            }
+            (Err(missing), Err(Error::BelowFloor(below))) => {
                 assert_eq!(below, BelowFloor { missing }, "{name}");
+                assert!(cfg!(m2v_cpu_icd), "{name}: a GPU refused under the view");
                 println!("floor: {name} under the view: {}", Error::BelowFloor(below));
             }
-            Err(error) => panic!("{name}: not the floor's refusal: {error}"),
-            Ok(_) => panic!("{name}: made under a view with no cached coherent type"),
+            (chosen, Err(error)) => panic!("{name}: {error}, where the floor chose {chosen:?}"),
+            (chosen, Ok(_)) => panic!("{name}: made, where the floor chose {chosen:?}"),
         }
     }
 }
