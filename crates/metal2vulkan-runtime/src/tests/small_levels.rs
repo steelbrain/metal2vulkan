@@ -190,9 +190,10 @@ mod on_device {
     use crate::tests::command::on_device::{each_device, finished};
     use crate::{
         BlitCommandEncoder, Block, Buffer, BufferLayout, CommandBuffer, CommandQueue, Device,
-        Error, Gap, HostBytes, MemoryClass, PixelFormat, Region, StorageMode, Texture,
+        Error, Gap, HostBytes, IndexClass, MemoryClass, PixelFormat, Region, StorageMode, Texture,
         TextureDescriptor, TexturePlace, TextureType, TextureUsage,
     };
+    use std::cell::Cell;
 
     /// The levels each case fills and reads back: 8 (8 x 4 texels), 9 (4 x 2), 10 (2 x 1) and 11
     /// (1 x 1).
@@ -247,6 +248,8 @@ mod on_device {
         block: &'a Block,
         format: PixelFormat,
         unit: usize,
+        /// The next texture index of the run's grant.
+        next: &'a Cell<u32>,
     }
 
     impl Run<'_> {
@@ -255,7 +258,8 @@ mod on_device {
             d.mipmap_level_count = 12;
             d.usage = TextureUsage::SHADER_READ;
             d.storage_mode = storage_mode;
-            (self.device.new_texture(&d, None))
+            let index = self.next.replace(self.next.get() + 1);
+            (self.device.new_texture(&d, Some(index)))
                 .unwrap_or_else(|error| panic!("{}: {error}", self.name))
         }
 
@@ -441,13 +445,17 @@ mod on_device {
         each_device("small_levels", |name, _, device| {
             let queue = device.new_command_queue(4).expect("a queue");
             let block = (device.take_block(MemoryClass::Shared, 4096)).expect("a Shared block");
+            // The textures, 19 a format, take an index each from one grant.
+            let _grant = (device.grant_indices(IndexClass::Texture, 1, 64)).expect("indices");
+            let next = Cell::new(1);
             for (format, unit, label) in [
                 (PixelFormat::BC1RGBA, 8, "bc1"),
                 (PixelFormat::BC3RGBA, 16, "bc3"),
             ] {
                 let mut d = TextureDescriptor::new(TextureType::Type2D, format, 2048, 1024);
                 d.mipmap_level_count = 12;
-                match device.new_texture(&d, None) {
+                d.usage = TextureUsage::SHADER_READ;
+                match device.new_texture(&d, Some(next.replace(next.get() + 1))) {
                     Ok(_) => {}
                     Err(Error::Unsupported(Gap::TextureFormat { .. })) => {
                         println!("{name}: no {format:?} texture on this device");
@@ -462,6 +470,7 @@ mod on_device {
                     block: &block,
                     format,
                     unit,
+                    next: &next,
                 };
                 let size = [4, 4, 1];
                 for level in 9..=11 {

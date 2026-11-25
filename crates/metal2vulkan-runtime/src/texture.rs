@@ -3621,7 +3621,7 @@ pub(crate) fn place(
     for axis in 0..3 {
         let (origin, edge, grid) = (region.origin[axis], extent[axis], block[axis]);
         let end = origin.checked_add(size[axis]).ok_or_else(outside)?;
-        let whole = size[axis] % grid == 0;
+        let whole = size[axis].is_multiple_of(grid);
         let on_grid = origin % grid == 0 && (whole || end == edge);
         // Whole blocks may end in the level's last block past its edge, where the edge is no
         // whole blocks: the block it rounds up to.
