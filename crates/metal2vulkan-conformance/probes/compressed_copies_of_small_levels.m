@@ -25,12 +25,18 @@
 //           block    4x4 at (0,0) (level 8: 4x4 at (4,0), whole blocks)
 //           over     8x4 at (0,0), level 9 alone: past the level by more than the block's rounding
 //
+// and, for mp and pp alone, a copy between two levels, LEVEL being AtoB: 9to8, 8to9, 10to8 or
+// 8to10, level 8's place being its second block, (4,0), and the other's (0,0); SIZE block is 4x4,
+// and clamp the smaller level's extent (4x2, or 2x1), which is the source's edge in 9to8 and
+// 10to8 (Apple's form) and the destination's in 8to9 and 8to10.
+//
 // Levels 8 to 11 of a source texture hold blocks whose byte k (in the level's rows of blocks) is
 // 0x11 * level + 3 * k + 1; every destination texture's levels 8 to 11 hold 0xdd, a buffer
 // destination 64 bytes of 0xee, and a buffer source's blocks past the level 0xaa. The fills are
 // the clamped size (Apple's form). A texture destination's levels 8 to 11 are read back by a blit
-// into a Shared buffer, each block named by its source: `s` the source block at its place, `d`
-// the destination's 0xdd, `a` the buffer's 0xaa, `?` anything else; then the level's bytes, and
+// into a Shared buffer, each block named by its source: `s` the source block at its place, `m`
+// the block a copy between two levels copied, `d` the destination's 0xdd, `a` the buffer's 0xaa,
+// `?` anything else; then the level's bytes, and
 // the FNV-1a 64 of all four levels. A buffer destination's 64 bytes are named a block at a time
 // the same way (`e` its 0xee), in the copy's row order.
 //
@@ -57,6 +63,8 @@ static const char *FORMATS[] = {"bc1", "bc3"};
 static const char *KINDS[] = {"mp", "pp", "b2t", "t2b", "replace", "get"};
 static const char *SHAPES[] = {"8-clamp", "8-block",  "9-clamp",  "9-block", "9-over",
                                "10-clamp", "10-block", "11-clamp", "11-block"};
+static const char *MIXED[] = {"9to8-block",  "9to8-clamp",  "8to9-block",  "8to9-clamp",
+                              "10to8-block", "10to8-clamp", "8to10-block", "8to10-clamp"};
 #define COUNT(a) (sizeof(a) / sizeof((a)[0]))
 
 typedef struct {
@@ -98,12 +106,16 @@ static BOOL all(const uint8_t *bytes, NSUInteger length, uint8_t value) {
     return YES;
 }
 
-// The class of `block`, which lies where source block (bx, by) of `level` would.
+// The class of `block`, which lies where source block (bx, by) of `level` would; `moved` the
+// block a copy between two levels copied, or NULL.
 static char name_block(const uint8_t *block, NSUInteger level, NSUInteger bx, NSUInteger by,
-                       NSUInteger unit, uint8_t blank) {
+                       NSUInteger unit, uint8_t blank, const uint8_t *moved) {
     uint8_t want[16];
     if (source_block(level, bx, by, unit, want) && memcmp(block, want, unit) == 0) {
         return 's';
+    }
+    if (moved && memcmp(block, moved, unit) == 0) {
+        return 'm';
     }
     if (all(block, unit, blank)) {
         return blank == 0xdd ? 'd' : 'e';
@@ -217,7 +229,7 @@ static void fill(id<MTLDevice> device, id<MTLCommandQueue> queue, id<MTLTexture>
 
 // Levels 8 to 11 of `t`, read back by a blit and named a block at a time.
 static void report_texture(const char *name, id<MTLDevice> device, id<MTLCommandQueue> queue,
-                           id<MTLTexture> t, NSUInteger unit) {
+                           id<MTLTexture> t, NSUInteger unit, const uint8_t *moved) {
     NSUInteger at[LAST + 2] = {0};
     for (NSUInteger level = FIRST; level <= LAST; level++) {
         at[level + 1] = at[level] + wide(level) * high(level) * unit;
@@ -246,7 +258,7 @@ static void report_texture(const char *name, id<MTLDevice> device, id<MTLCommand
         for (NSUInteger by = 0; by < high(level); by++) {
             for (NSUInteger bx = 0; bx < wide(level); bx++) {
                 const uint8_t *block = bytes + at[level] + (by * wide(level) + bx) * unit;
-                printf("%c", name_block(block, level, bx, by, unit, 0xdd));
+                printf("%c", name_block(block, level, bx, by, unit, 0xdd, moved));
             }
         }
         printf(" ");
@@ -264,7 +276,7 @@ static void report_bytes(const char *name, const uint8_t *bytes, NSUInteger leve
     for (NSUInteger i = 0; i < OUT / unit; i++) {
         NSUInteger bx = i < rw * rh ? box.x / 4 + i % rw : ~(NSUInteger)0;
         NSUInteger by = i < rw * rh ? box.y / 4 + i / rw : ~(NSUInteger)0;
-        printf("%c", name_block(bytes + i * unit, level, bx, by, unit, 0xee));
+        printf("%c", name_block(bytes + i * unit, level, bx, by, unit, 0xee, NULL));
     }
     printf(" ");
     hex(bytes, OUT);
@@ -272,15 +284,19 @@ static void report_bytes(const char *name, const uint8_t *bytes, NSUInteger leve
 }
 
 static int run_case(const char *name) {
-    char format_name[8], kind[16], shape[16];
-    unsigned level_number;
-    if (sscanf(name, "%7[^-]-%15[^-]-%u-%15s", format_name, kind, &level_number, shape) != 4) {
+    char format_name[8], kind[16], levels[16], shape[16];
+    unsigned from_number = 0, to_number = 0;
+    if (sscanf(name, "%7[^-]-%15[^-]-%15[^-]-%15s", format_name, kind, levels, shape) != 4) {
         printf("no case %s\n", name);
         return 2;
     }
-    NSUInteger level = level_number;
+    int parsed = sscanf(levels, "%uto%u", &from_number, &to_number);
+    BOOL mixed = parsed == 2;
+    NSUInteger level = from_number, to_level = mixed ? to_number : from_number;
     BOOL bc3 = strcmp(format_name, "bc3") == 0;
-    if ((!bc3 && strcmp(format_name, "bc1") != 0) || level < FIRST || level > LAST) {
+    BOOL t2t = strcmp(kind, "mp") == 0 || strcmp(kind, "pp") == 0;
+    if ((!bc3 && strcmp(format_name, "bc1") != 0) || parsed < 1 || level < FIRST || level > LAST ||
+        to_level < FIRST || to_level > LAST || (mixed && (!t2t || strcmp(shape, "over") == 0))) {
         printf("no case %s\n", name);
         return 2;
     }
@@ -297,20 +313,33 @@ static int run_case(const char *name) {
         printf("no case %s\n", name);
         return 2;
     }
+    NSUInteger to_x = box.x;
+    if (mixed) {
+        box.x = level == FIRST ? 4 : 0;
+        to_x = to_level == FIRST ? 4 : 0;
+        if (strcmp(shape, "clamp") == 0) {
+            NSUInteger small = level == FIRST ? to_level : level;
+            box.w = side(WIDTH, small);
+            box.h = side(HEIGHT, small);
+        }
+    }
     NSUInteger row = blocks(box.w) * unit, image = row * blocks(box.h);
     MTLOrigin origin = MTLOriginMake(box.x, box.y, 0);
+    MTLOrigin to_origin = MTLOriginMake(to_x, box.y, 0);
     MTLSize size = MTLSizeMake(box.w, box.h, 1);
     MTLRegion region = MTLRegionMake2D(box.x, box.y, box.w, box.h);
 
     const char *layer = getenv("MTL_DEBUG_LAYER");
     id<MTLDevice> device = MTLCreateSystemDefaultDevice();
-    printf("%s: %s, %s, BC %s, MTL_DEBUG_LAYER %s, region (%lu,%lu) %lux%lu of %lux%lu\n", name,
-           device.name.UTF8String,
+    printf("%s: %s, %s, BC %s, MTL_DEBUG_LAYER %s, region (%lu,%lu) %lux%lu of %lux%lu, to "
+           "(%lu,%lu) of %lux%lu\n",
+           name, device.name.UTF8String,
            [NSProcessInfo processInfo].operatingSystemVersionString.UTF8String,
            device.supportsBCTextureCompression ? "yes" : "no", layer ? layer : "unset",
            (unsigned long)box.x, (unsigned long)box.y, (unsigned long)box.w,
            (unsigned long)box.h, (unsigned long)side(WIDTH, level),
-           (unsigned long)side(HEIGHT, level));
+           (unsigned long)side(HEIGHT, level), (unsigned long)to_x, (unsigned long)box.y,
+           (unsigned long)side(WIDTH, to_level), (unsigned long)side(HEIGHT, to_level));
     id<MTLCommandQueue> queue = [device newCommandQueue];
 
     if (strcmp(kind, "mp") == 0 || strcmp(kind, "pp") == 0 || strcmp(kind, "b2t") == 0 ||
@@ -366,8 +395,8 @@ static int run_case(const char *name) {
                        sourceSize:size
                         toTexture:to
                  destinationSlice:0
-                 destinationLevel:level
-                destinationOrigin:origin];
+                 destinationLevel:to_level
+                destinationOrigin:to_origin];
         }
         printf("%s: taken\n", name);
         [blit endEncoding];
@@ -375,8 +404,10 @@ static int run_case(const char *name) {
         [cb waitUntilCompleted];
         printf("%s: status %ld, error %s\n", name, (long)cb.status,
                cb.error ? cb.error.description.UTF8String : "none");
+        uint8_t moved[16];
         if (to) {
-            report_texture(name, device, queue, to, unit);
+            BOOL any = mixed && source_block(level, box.x / 4, 0, unit, moved);
+            report_texture(name, device, queue, to, unit, any ? moved : NULL);
         } else {
             report_bytes(name, bytes.contents, level, box, unit);
         }
@@ -387,7 +418,7 @@ static int run_case(const char *name) {
         printf("%s: calling\n", name);
         [to replaceRegion:region mipmapLevel:level withBytes:data.bytes bytesPerRow:row];
         printf("%s: taken\n", name);
-        report_texture(name, device, queue, to, unit);
+        report_texture(name, device, queue, to, unit, NULL);
     } else if (strcmp(kind, "get") == 0) {
         id<MTLTexture> from = texture(device, format, MTLStorageModeManaged);
         fill(device, queue, from, unit, -1);
@@ -424,11 +455,16 @@ static int run_all(const char *self) {
     posix_spawn_file_actions_t actions;
     posix_spawn_file_actions_init(&actions);
     posix_spawn_file_actions_adddup2(&actions, 1, 2);
+    NSUInteger shapes = COUNT(SHAPES) + COUNT(MIXED);
     for (size_t f = 0; f < COUNT(FORMATS); f++) {
         for (size_t k = 0; k < COUNT(KINDS); k++) {
-            for (size_t s = 0; s < COUNT(SHAPES); s++) {
+            for (size_t s = 0; s < shapes; s++) {
+                if (s >= COUNT(SHAPES) && k > 1) {
+                    break;
+                }
+                const char *shape = s < COUNT(SHAPES) ? SHAPES[s] : MIXED[s - COUNT(SHAPES)];
                 char name[64];
-                snprintf(name, sizeof name, "%s-%s-%s", FORMATS[f], KINDS[k], SHAPES[s]);
+                snprintf(name, sizeof name, "%s-%s-%s", FORMATS[f], KINDS[k], shape);
                 for (int on = 1; on >= 0; on--) {
                     char *argv[] = {(char *)self, name, NULL};
                     pid_t pid;
