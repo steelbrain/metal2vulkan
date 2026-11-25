@@ -1528,6 +1528,17 @@ pub(crate) unsafe fn memory_types(
     device: &ash::Device,
     capabilities: &Capabilities,
 ) -> Result<MemoryTypes, BelowFloor> {
+    // SAFETY: the caller's contract.
+    let usable = unsafe { buffer_memory_bits(device) };
+    choose(&capabilities.memory, usable).map_err(|missing| BelowFloor { missing })
+}
+
+/// The memory types a buffer of [`BUFFER_USAGE`] can use on `device`, as its `memoryTypeBits`.
+///
+/// # Safety
+///
+/// `device` was created with the floor's features.
+pub(crate) unsafe fn buffer_memory_bits(device: &ash::Device) -> u32 {
     let buffer = vk::BufferCreateInfo::default()
         .size(65_536)
         .usage(BUFFER_USAGE)
@@ -1535,13 +1546,9 @@ pub(crate) unsafe fn memory_types(
     let question = vk::DeviceBufferMemoryRequirements::default().create_info(&buffer);
     let mut answer = vk::MemoryRequirements2::default();
     // SAFETY: the caller's contract; `BUFFER_USAGE`'s device addresses need
-    // `bufferDeviceAddress`, which the floor requires and `capabilities.features` enables.
+    // `bufferDeviceAddress`, which the floor requires.
     unsafe { device.get_device_buffer_memory_requirements(&question, &mut answer) };
-    choose(
-        &capabilities.memory,
-        answer.memory_requirements.memory_type_bits,
-    )
-    .map_err(|missing| BelowFloor { missing })
+    answer.memory_requirements.memory_type_bits
 }
 
 /// For each of [`MemoryTypes`], the first memory type with its flags whose bit is set in `usable`,

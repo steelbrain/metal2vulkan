@@ -1,6 +1,7 @@
 //! The floor's check: each missing item is named, the optional features decide
 //! `Capabilities`, memory types are chosen by flags and by what buffers can use, the README states
-//! what the code checks, and, under a device cfg, every device the loader lists is above the floor.
+//! what the code checks, and, under a device cfg, every device the loader lists is above the floor
+//! and is refused through a memory view that leaves it no host-cached, host-coherent type.
 
 use crate::floor::{
     choose, decide, flag_names, limits, vulkan_name, BelowFloor, Features, IndirectCommandLimits,
@@ -2370,6 +2371,65 @@ fn every_device_the_loader_lists_is_above_the_floor() {
     drop(runtime);
     assert!(checked > 0, "the loader lists no device of this cfg's kind");
     assert!(below.is_empty(), "below the floor: {below:#?}");
+}
+
+/// Every device of the cfg's kind, read through a memory view that takes `HOST_COHERENT` from
+/// each type that is both host-cached and host-coherent (so the device lists its types as a
+/// Meteor Lake GPU does under Mesa's Intel driver and the i915 kernel driver), is refused at its
+/// make. The refusal is the floor's choice over the view: it names the flags each missing type
+/// needs and the types the device offers a buffer, with the view's flags. The device made with
+/// no view first answers which types such a buffer can use.
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+#[test]
+fn a_device_with_no_cached_coherent_type_is_refused_naming_its_types() {
+    use crate::{Device, DeviceOptions, Error};
+
+    /// The view: no type is both host-cached and host-coherent.
+    fn cached_types_incoherent(memory: &mut vk::PhysicalDeviceMemoryProperties) {
+        let both = vk::MemoryPropertyFlags::HOST_CACHED | vk::MemoryPropertyFlags::HOST_COHERENT;
+        let count = memory.memory_type_count as usize;
+        for kind in &mut memory.memory_types[..count] {
+            if kind.property_flags.contains(both) {
+                kind.property_flags &= !vk::MemoryPropertyFlags::HOST_COHERENT;
+            }
+        }
+    }
+
+    let runtime = crate::tests::validation::instance(&[]);
+    let (_, vk_instance) = runtime.raw();
+    for (name, physical) in crate::tests::devices_of_the_cfgs_kind(&runtime) {
+        let device = Device::new(&physical, DeviceOptions::default())
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        // SAFETY: the device is live, made with the floor's features.
+        let usable = unsafe { crate::floor::buffer_memory_bits(device.raw().device) };
+        drop(device);
+        // SAFETY: `physical` is one of the instance's.
+        let mut memory =
+            unsafe { vk_instance.get_physical_device_memory_properties(physical.raw()) };
+        cached_types_incoherent(&mut memory);
+        let Err(missing) = choose(&memory, usable) else {
+            panic!("{name}: the view leaves a type with every flag the floor asks");
+        };
+        assert!(
+            (missing.iter()).any(|missing| matches!(
+                missing,
+                Missing::MemoryType { flags, .. } if *flags == flag_names(SHARED_MEMORY)
+            )),
+            "{name}: {missing:?}"
+        );
+        let options = DeviceOptions {
+            memory: Some(cached_types_incoherent),
+            ..DeviceOptions::default()
+        };
+        match Device::new(&physical, options) {
+            Err(Error::BelowFloor(below)) => {
+                assert_eq!(below, BelowFloor { missing }, "{name}");
+                println!("floor: {name} under the view: {}", Error::BelowFloor(below));
+            }
+            Err(error) => panic!("{name}: not the floor's refusal: {error}"),
+            Ok(_) => panic!("{name}: made under a view with no cached coherent type"),
+        }
+    }
 }
 
 /// A device that does not calibrate the host clock's time domain with its own is below the floor,

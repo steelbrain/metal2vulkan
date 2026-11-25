@@ -477,6 +477,12 @@ pub struct DeviceOptions {
     /// same.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) described: Option<fn(DeviceDescription) -> DeviceDescription>,
+    /// For the device tests: the device's memory types and heaps as the runtime is to read them,
+    /// in place of the device's own answers, from the floor's memory types on; the floor's check
+    /// of the physical device reads the device's own. The Vulkan device is the same, so a view
+    /// only takes flags away from a type or leaves it.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) memory: Option<fn(&mut vk::PhysicalDeviceMemoryProperties)>,
 }
 
 /// Takes a lock. A panic while another thread held it leaves what it guards usable (a queue, the
@@ -521,6 +527,15 @@ impl Device {
         let vk_instance = instance.vk();
         let raw = physical.raw();
         let capabilities = physical.check().map_err(Error::BelowFloor)?;
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        let capabilities = match options.memory {
+            Some(view) => {
+                let mut capabilities = capabilities;
+                view(&mut capabilities.memory);
+                capabilities
+            }
+            None => capabilities,
+        };
         // SAFETY: `raw` is the instance's, which was made at the floor's version.
         let description = unsafe { description(vk_instance, raw, &capabilities) }?;
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
