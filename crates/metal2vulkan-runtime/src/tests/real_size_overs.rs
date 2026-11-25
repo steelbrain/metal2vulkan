@@ -1238,11 +1238,13 @@ declare <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float>)
         queue: &CommandQueue,
         state: &RenderPipelineState,
         texture: &Texture,
+        load_action: LoadAction,
     ) -> Result<(), String> {
         let mut pass = RenderPassDescriptor::default();
         let color = &mut pass.color_attachments[0];
         color.texture = Some(texture.clone());
-        color.load_action = LoadAction::Load;
+        color.load_action = load_action;
+        color.clear_color = ClearColor::new(0.0, 0.0, 0.0, 1.0);
         let command_buffer = queue.command_buffer().map_err(said)?;
         let mut encoder = (command_buffer.render_command_encoder(&pass)).map_err(said)?;
         encoder.set_render_pipeline_state(state).map_err(said)?;
@@ -1275,7 +1277,8 @@ declare <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float>)
     }
 
     /// An `RGBA16Float` texture at 3840x2160, written by a blit of the complement and then by a
-    /// render pass that loads it and draws the float pattern, and again by a kernel: each time
+    /// render pass that loads it and draws the float pattern, again by one that clears it to
+    /// opaque black and draws the pattern over all of it, and again by a kernel: each time
     /// copied out whole into a Shared buffer and into a buffer over host memory's import of
     /// 64,804 KiB (where the device imports host memory), every texel exact and the import's
     /// bytes past them as they were.
@@ -1314,16 +1317,20 @@ declare <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float>)
             let on = (&device, &queue);
             let download_into = under(name, &device, Memory::Host, DOWNLOAD);
             let mut cells = Cells::new(name);
-            for by_pass in [true, false] {
+            // The pass's load action, or None for the kernel.
+            for by_pass in [Some(LoadAction::Load), Some(LoadAction::Clear), None] {
                 let how = match by_pass {
-                    true => "drawn by a render pass",
-                    false => "written by a kernel",
+                    Some(LoadAction::Clear) => {
+                        "drawn by a render pass that clears it to opaque black"
+                    }
+                    Some(_) => "drawn by a render pass",
+                    None => "written by a kernel",
                 };
                 let what = format!("{} {how}", shape.what);
                 let at = (&texture, PICTURE);
                 let wrote = copy_in(name, on, at, 8, &stale).and_then(|()| match by_pass {
-                    true => render(name, &queue, &drawn, &texture),
-                    false => write(name, &queue, &written, &texture),
+                    Some(load) => render(name, &queue, &drawn, &texture, load),
+                    None => write(name, &queue, &written, &texture),
                 });
                 if let Err(why) = wrote {
                     cells.check(&what, Err(why), &[], (1, 1));
