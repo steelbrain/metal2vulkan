@@ -32,6 +32,32 @@
 //
 // Build: clang -fobjc-arc -O1 -fmodules -o metallib_without_entry_tags \
 //          metallib_without_entry_tags.m -framework Foundation -framework Metal
+//
+// WHAT IT MEASURED, Apple M3 Max, macOS 27.0.1 (Build 26A434), Apple metal 32023.922, job
+// m3-max-73748, every case below alike with MTL_DEBUG_LAYER=1 and without:
+//
+//   - as-is: header 2.9, every entry NAME, TYPE, HASH, MDSZ, OFFT, VERS. Each of the four modules
+//     is a bitcode wrapper padded to a multiple of 16 bytes, the next written after it; MDSZ is
+//     the distance to the next module's start (or the section's end), 8 bytes past the wrapper's
+//     offset plus size, and HASH is the SHA-256 of those MDSZ bytes, not of the wrapper's alone.
+//     The extended header is ENDT alone. Library, functions, both kernels' words and the texel as
+//     expected;
+//   - v2.2, no-MDSZ, no-MDSZ-shift, no-MDSZ-v2.2: the same answers as as-is: Metal makes the
+//     library and its four functions, the kernels store the expected words and the render
+//     pipeline draws the expected texel;
+//   - no-NAME (and -shift): the library is made with no function names, and no function is made;
+//   - no-TYPE (and -shift): the library is made with four function names, and the first
+//     newFunctionWithName: ends the process with the layer on and off (SIGABRT, exit 134):
+//     "validateMTLFunctionType: failed assertion `type is not a valid MTLFunctionType.'";
+//   - no-HASH (and -shift): the library and functions are made and run, with the layer on as
+//     expected, but every later run (seeds of its own) stores the first no-HASH run's words and
+//     draws its texel: a function without HASH is answered with what Metal compiled for another;
+//   - no-OFFT (and -shift): every function is made; fill_a runs as expected, fill_b's pipeline
+//     fails ("Function fill_b was not found in the module."), and the render pipeline's
+//     ("Compilation failed due to an interrupted connection: XPC_ERROR_CONNECTION_INTERRUPTED"):
+//     every function reads the first module;
+//   - no-VERS (and -shift): every function is made and every pipeline fails ("Function fill_a is
+//     using language version 0.0 which is incompatible with this OS.").
 #import <CommonCrypto/CommonDigest.h>
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
