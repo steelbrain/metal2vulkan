@@ -100,6 +100,11 @@ fn a_format_2_2_library_compiles_as_today_s_layout() {
         };
         let (a, b) = (compile(a), compile(b));
         assert_eq!(a.key(), b.key(), "{name}");
-        assert_eq!(a.artifact().spirv, b.artifact().spirv, "{name}");
+        assert_eq!(
+            a.artifact().module.words,
+            b.artifact().module.words,
+            "{name}"
+        );
+        assert!(a.artifact() == b.artifact(), "{name}");
     }
 }
