@@ -12,7 +12,6 @@ use crate::case::{
 use crate::check::interface::AirInterface;
 use metal2vulkan::metal::state::{
     depth_stencil_state, DepthStencilDescriptor, DepthStencilState, StencilDescriptor,
-    StencilOpState,
 };
 use metal2vulkan::metal::{CompareFunction, StencilOperation, Winding};
 use metal2vulkan::vk;
@@ -136,19 +135,15 @@ impl DrawDepthStencil {
         if !state.stencil_test_enable {
             return None;
         }
-        let fixed = |face: &StencilOpState| {
-            matches!(
-                face.compare_op,
-                vk::CompareOp::ALWAYS | vk::CompareOp::NEVER
-            )
-        };
-        [
-            ("front", &state.front, &self.descriptor.front_face_stencil),
-            ("back", &state.back, &self.descriptor.back_face_stencil),
-        ]
-        .into_iter()
-        .find(|&(_, face, _)| !fixed(face))
-        .map(|(name, _, metal)| (name, metal.stencil_compare_function))
+        let fixed = |op: vk::CompareOp| matches!(op, vk::CompareOp::ALWAYS | vk::CompareOp::NEVER);
+        let faces = [
+            ("front", state.front, self.descriptor.front_face_stencil),
+            ("back", state.back, self.descriptor.back_face_stencil),
+        ];
+        faces
+            .into_iter()
+            .find(|(_, face, _)| !fixed(face.compare_op))
+            .map(|(name, _, metal)| (name, metal.stencil_compare_function))
     }
 }
 
