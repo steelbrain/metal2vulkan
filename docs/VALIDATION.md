@@ -48,9 +48,17 @@ hang the host. So everything that opens a device is explicit, bounded and refusa
 | `--cfg m2v_cpu_icd` | Vulkan execution tests | a CPU ICD only (lavapipe) | Linux CI, with `LP_NUM_THREADS=1` |
 | `--cfg m2v_gpu` | Vulkan and Metal execution tests | a real GPU | explicitly, on a host with a GPU |
 | `--cfg m2v_gpu --cfg m2v_gpu_hazards` | the GPU hazards too | a real GPU | only to test that feature, by name |
+| `--cfg m2v_gpu --cfg m2v_shared_view` | `metal2vulkan-runtime`'s devices read their memory types as the refused device's | a real GPU | to test Shared memory's coherence, in its own target directory |
 
 `m2v_cpu_icd` and `m2v_gpu` are mutually exclusive; `m2v_gpu_hazards` adds to `m2v_gpu` and means
-nothing alone. Lint the gated code without running it, in its own target directory:
+nothing alone. So does `m2v_shared_view`: every device `metal2vulkan-runtime`'s tests make with
+no memory view of their own (`DeviceOptions`'s test-only `memory`) reads its memory types through
+`tests::cached_types_incoherent`, which takes `HOST_COHERENT` from every host-visible,
+host-coherent, host-cached type, as a Meteor Lake GPU under Mesa's Intel driver and i915 lists
+them. Shared storage then takes a cached type that is not coherent, so the unchanged device suite
+runs Shared memory's flushes and invalidates (the runtime README, "Shared memory's coherence") on
+a GPU whose memory is coherent in fact; Vulkan allows both calls on a coherent type. Lavapipe
+cannot run it: its one memory type also holds the parameter ring, which needs a coherent type. Lint the gated code without running it, in its own target directory:
 
 ```sh
 CARGO_TARGET_DIR=target/gpucfg RUSTFLAGS='-Dwarnings --cfg m2v_gpu' \

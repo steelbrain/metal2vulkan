@@ -11,7 +11,9 @@
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::tests::blit::on_device::settled;
-    use crate::tests::command::on_device::{finished, within};
+    #[cfg(m2v_gpu)]
+    use crate::tests::command::on_device::each_device_with;
+    use crate::tests::command::on_device::{finished, on_each_device, within};
     use crate::{
         CommandBuffer, CommandQueue, Device, HostBytes, MemoryClass, Metrics, PixelFormat, Region,
         TextureDescriptor, TextureType,
@@ -160,38 +162,40 @@ mod on_device {
     }
 
     /// Every device of the cfg's kind, made as the device tests make it: it holds a coherence
-    /// state exactly where its Shared type lacks `HOST_COHERENT`, and its work's calls follow.
+    /// state exactly where its Shared type lacks `HOST_COHERENT` as it reads it, and its work's
+    /// calls follow. Under `m2v_shared_view` the device reads its types through the suite's view,
+    /// which leaves no cached type coherent, so there every device builds the state.
     #[test]
     fn every_device_flushes_and_invalidates_only_where_its_shared_type_is_not_coherent() {
         use ash::vk::MemoryPropertyFlags as F;
         let runtime = crate::tests::validation::instance(&[]);
         let (_, vk_instance) = runtime.raw();
-        crate::tests::command::on_device::on_each_device(
-            "coherence",
-            &runtime,
-            |name, _, device| {
-                // SAFETY: the device's physical device is one of the instance's.
-                let memory = unsafe {
-                    vk_instance.get_physical_device_memory_properties(device.raw().physical_device)
-                };
-                let shared = memory.memory_types_as_slice()[device.memory_types().shared as usize];
-                let coherent = shared.property_flags.contains(F::HOST_COHERENT);
-                let atom = (device.core().coherence.as_ref()).map(|coherence| coherence.atom);
-                println!(
-                    "coherence: {name}: Shared memory type {} with {}; coherence state {}",
-                    device.memory_types().shared,
-                    crate::floor::flag_names(shared.property_flags),
-                    if atom.is_some() { "built" } else { "none" }
-                );
-                assert_eq!(
-                    atom.is_some(),
-                    !coherent,
-                    "{name}: the coherence state is built exactly where the Shared type is not \
-                 host-coherent"
-                );
-                calls_of_the_work(name, &device, atom);
-            },
-        );
+        on_each_device("coherence", &runtime, |name, _, device| {
+            let physical = device.raw().physical_device;
+            // SAFETY: the device's physical device is one of the instance's.
+            let mut memory = unsafe { vk_instance.get_physical_device_memory_properties(physical) };
+            if cfg!(m2v_shared_view) {
+                crate::tests::cached_types_incoherent(&mut memory);
+            }
+            let index = device.memory_types().shared;
+            let shared = memory.memory_types_as_slice()[index as usize].property_flags;
+            let atom = (device.core().coherence.as_ref()).map(|coherence| coherence.atom);
+            let state = if atom.is_some() { "built" } else { "none" };
+            let flags = crate::floor::flag_names(shared);
+            println!(
+                "coherence: {name}: Shared type {index} with {flags}; coherence state {state}"
+            );
+            assert_eq!(
+                atom.is_some(),
+                !shared.contains(F::HOST_COHERENT),
+                "{name}: the coherence state is built exactly where Shared's type is not coherent"
+            );
+            assert!(
+                atom.is_some() || !cfg!(m2v_shared_view),
+                "{name}: under m2v_shared_view every device builds the coherence state"
+            );
+            calls_of_the_work(name, &device, atom);
+        });
     }
 
     /// Every GPU of the cfg's kind, read through the refused device's view
@@ -207,7 +211,7 @@ mod on_device {
             memory: Some(crate::tests::cached_types_incoherent),
             ..crate::DeviceOptions::default()
         };
-        crate::tests::command::on_device::each_device_with("coherence", view, |name, _, device| {
+        each_device_with("coherence", view, |name, _, device| {
             let atom = (device.core().coherence.as_ref()).map(|coherence| coherence.atom);
             assert!(atom.is_some(), "{name}: the view built the coherence state");
             calls_of_the_work(name, &device, atom);

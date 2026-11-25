@@ -532,6 +532,13 @@ impl Device {
         let vk_instance = instance.vk();
         let raw = physical.raw();
         let capabilities = physical.check().map_err(Error::BelowFloor)?;
+        // Under `m2v_shared_view`, a device the test gives no view of its own reads its memory
+        // types through the refused device's (docs/VALIDATION.md).
+        #[cfg(all(test, m2v_shared_view))]
+        let options = DeviceOptions {
+            memory: (options.memory).or(Some(crate::tests::cached_types_incoherent)),
+            ..options
+        };
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         let capabilities = match options.memory {
             Some(view) => {
