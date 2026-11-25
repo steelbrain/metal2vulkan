@@ -1,19 +1,21 @@
 //! Shared memory's coherence (`crate::coherence`). Under a device cfg, on every device of the
 //! cfg's kind: the device holds a coherence state exactly where its Shared type, as it reads it,
 //! is not host-coherent, and makes no flush or invalidate where it holds none. Where it holds one
-//! (every GPU read through the refused device's view, `crate::tests::cached_types_incoherent`):
-//! the zero source is flushed at its make; a fill into a Shared buffer is flushed over the
-//! buffer's atoms before its submission, then flushed and invalidated there before its status
-//! reads completed, and its bytes are the fill's; a fill into a Private buffer makes no call; the
-//! bytes a texture's `replace_region` stages are flushed once, and those its `get_bytes` reads
-//! flushed and invalidated once. Each call is counted with its bytes, and none fails.
+//! (every device the floor opens through the refused device's view,
+//! `crate::tests::cached_types_incoherent`): the zero source is flushed at its make; a fill into a
+//! Shared buffer is flushed over the buffer's atoms before its submission, then flushed and
+//! invalidated there before its status reads completed, and its bytes are the fill's; a fill into
+//! a Private buffer makes no call; the bytes a texture's `replace_region` stages are flushed once,
+//! and those its `get_bytes` reads flushed and invalidated once. Each call is counted with its
+//! bytes, and none fails. A device whose one host-visible, host-cached buffer type also holds the
+//! parameter ring is refused under the view, with its refusal.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::tests::blit::on_device::settled;
-    #[cfg(m2v_gpu)]
-    use crate::tests::command::on_device::each_device_with;
-    use crate::tests::command::on_device::{finished, on_each_device, within};
+    use crate::tests::command::on_device::{
+        each_device_under_the_view, finished, on_each_device, within,
+    };
     use crate::{
         CommandBuffer, CommandQueue, Device, HostBytes, MemoryClass, Metrics, PixelFormat, Region,
         TextureDescriptor, TextureType,
@@ -206,20 +208,16 @@ mod on_device {
         });
     }
 
-    /// Every GPU of the cfg's kind, read through the refused device's view
-    /// (`crate::tests::cached_types_incoherent`): its Shared type is cached and not coherent, so
-    /// it holds the coherence state and makes the calls, on memory that is coherent in fact.
-    /// Lavapipe's one memory type holds the parameter ring too, which the view leaves with no
-    /// coherent type, so the floor refuses it there (`tests::floor`).
-    #[cfg(m2v_gpu)]
+    /// Every device of the cfg's kind, read through the refused device's view
+    /// (`crate::tests::cached_types_incoherent`), decided by the floor's choice over the view
+    /// (`each_device_under_the_view`). A device the choice opens has a Shared type that is cached
+    /// and not coherent, so it holds the coherence state and makes the calls, on memory that is
+    /// coherent in fact. A device whose one host-visible, host-cached buffer type also holds the
+    /// parameter ring is left with no coherent type for the ring, so the floor refuses it under
+    /// the view, with that choice's refusal, which is printed.
     #[test]
-    fn every_gpu_read_as_the_refused_device_flushes_and_invalidates_the_shared_memory_work_reaches()
-    {
-        let view = || crate::DeviceOptions {
-            memory: Some(crate::tests::cached_types_incoherent),
-            ..crate::DeviceOptions::default()
-        };
-        each_device_with("coherence", view, |name, _, device| {
+    fn every_device_opened_under_the_view_flushes_and_invalidates_the_shared_memory_work_reaches() {
+        each_device_under_the_view("coherence", |name, _, device, _| {
             let atom = (device.core().coherence.as_ref()).map(|coherence| coherence.atom);
             assert!(atom.is_some(), "{name}: the view built the coherence state");
             calls_of_the_work(name, &device, atom);

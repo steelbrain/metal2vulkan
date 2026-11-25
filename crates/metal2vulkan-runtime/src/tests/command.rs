@@ -141,8 +141,9 @@ fn a_push_of_the_bytes_a_command_buffer_holds_records_nothing() {
 pub(crate) mod on_device {
     use crate::buffer::BufferObject;
     use crate::device::lock;
+    use crate::floor::{buffer_memory_bits, choose, BelowFloor};
     use crate::submit::{GROUP_RUN, IN_FLIGHT, UNSEEN_JOINS};
-    use crate::tests::devices_of_the_cfgs_kind;
+    use crate::tests::{cached_types_incoherent, devices_of_the_cfgs_kind};
     use crate::{
         host_time, AllocationId, AllocationInfo, Block, BlockMappings, Buffer, CommandBuffer,
         CommandBufferError, CommandBufferStatus, CommandQueue, Device, DeviceLoss, DeviceOptions,
@@ -261,24 +262,87 @@ pub(crate) mod on_device {
         for (name, physical) in &devices {
             let device =
                 Device::new(physical, options()).unwrap_or_else(|error| panic!("{name}: {error}"));
-            // The block-maker thread's first work done, so a body's counts start from a device
-            // that holds its fixed-size internals.
-            device.core().pool.await_internals();
-            // And the reaper's first work: the seed makes the pipeline cache and sets
-            // `pipeline_cache_bytes` (`Caches::seed`), after `Device::new` returns, so a body that
-            // compares the gauges across its work starts from settled ones.
-            within("the seed", || device.core().caches.is_seeded());
-            let counters = device.counters();
-            body(name, instance, device);
-            within("the teardown", || counters.gauges() == Gauges::default());
-            print_gauges_at_drop(test, counters.gauges());
-            // The matrix holds these at 0 (`readback::timestamps`, the completion thread's wait).
-            let metrics = counters.metrics();
-            let unavailable = metrics.stamps_not_available;
-            println!("M2V-MATRIX metric {test}/stamps_not_available {unavailable}");
-            let behind = metrics.waits_behind_counter;
-            println!("M2V-MATRIX metric {test}/waits_behind_counter {behind}");
+            run_settled(test, instance, name, device, &mut body);
         }
+    }
+
+    /// Each device of the cfg's kind, read through the memory view of the refused device's shape
+    /// ([`cached_types_incoherent`]), decided by the floor's choice over the view
+    /// (`floor::choose`), with the buffer bits a device made with no view answers. Where the
+    /// choice refuses, as it does a device whose one host-visible, host-cached buffer type also
+    /// holds the parameter ring, the device's make through the view is refused with exactly that
+    /// choice's refusal, which is printed. Where it chooses, the device opens through the view
+    /// with the chosen types and `body` runs on it as in [`each_device_with`], given the viewed
+    /// memory properties.
+    pub(crate) fn each_device_under_the_view(
+        test: &str,
+        mut body: impl FnMut(&str, &Instance, Device, &vk::PhysicalDeviceMemoryProperties),
+    ) {
+        let instance = crate::tests::validation::instance(&[]);
+        let (_, vk_instance) = instance.raw();
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let device = Device::new(physical, DeviceOptions::default())
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            // SAFETY: the device is live, made with the floor's features.
+            let usable = unsafe { buffer_memory_bits(device.raw().device) };
+            drop(device);
+            // SAFETY: `physical` is one of the instance's.
+            let mut memory =
+                unsafe { vk_instance.get_physical_device_memory_properties(physical.raw()) };
+            cached_types_incoherent(&mut memory);
+            let view = DeviceOptions {
+                memory: Some(cached_types_incoherent),
+                ..DeviceOptions::default()
+            };
+            match (choose(&memory, usable), Device::new(physical, view)) {
+                (Ok(types), Ok(device)) => {
+                    assert_eq!(device.memory_types(), types, "{name}");
+                    run_settled(test, &instance, name, device, |name, instance, device| {
+                        body(name, instance, device, &memory)
+                    });
+                }
+                (Err(missing), Err(Error::BelowFloor(below))) => {
+                    assert_eq!(below, BelowFloor { missing }, "{name}");
+                    println!(
+                        "{test}: {name} under the view: {}",
+                        Error::BelowFloor(below)
+                    );
+                }
+                (chosen, Err(error)) => panic!("{name}: {error}, where the floor chose {chosen:?}"),
+                (chosen, Ok(_)) => panic!("{name}: made, where the floor chose {chosen:?}"),
+            }
+        }
+    }
+
+    /// Runs `body` on `device` of `instance`, just made, once the block-maker thread's first work
+    /// and the reaper's are done, then checks that every gauge reaches zero once `body` has
+    /// dropped it, and prints the matrix's records.
+    fn run_settled(
+        test: &str,
+        instance: &Instance,
+        name: &str,
+        device: Device,
+        body: impl FnOnce(&str, &Instance, Device),
+    ) {
+        // The block-maker thread's first work done, so a body's counts start from a device that
+        // holds its fixed-size internals.
+        device.core().pool.await_internals();
+        // And the reaper's first work: the seed makes the pipeline cache and sets
+        // `pipeline_cache_bytes` (`Caches::seed`), after `Device::new` returns, so a body that
+        // compares the gauges across its work starts from settled ones.
+        within("the seed", || device.core().caches.is_seeded());
+        let counters = device.counters();
+        body(name, instance, device);
+        within("the teardown", || counters.gauges() == Gauges::default());
+        print_gauges_at_drop(test, counters.gauges());
+        // The matrix holds these at 0 (`readback::timestamps`, the completion thread's wait).
+        let metrics = counters.metrics();
+        let unavailable = metrics.stamps_not_available;
+        println!("M2V-MATRIX metric {test}/stamps_not_available {unavailable}");
+        let behind = metrics.waits_behind_counter;
+        println!("M2V-MATRIX metric {test}/waits_behind_counter {behind}");
     }
 
     /// Buffers of 256 bytes in one Shared block, each zeroed.

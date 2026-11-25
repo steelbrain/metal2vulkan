@@ -2474,62 +2474,36 @@ fn every_device_the_loader_lists_is_above_the_floor() {
 /// Every device of the cfg's kind, read through the memory view of the refused device's shape
 /// ([`cached_types_incoherent`](crate::tests::cached_types_incoherent)), answers at its make as
 /// the floor's choice over the view does, with the buffer bits a device made with no view first
-/// answers. Every GPU opens: Shared takes the first cached type, which the view left not
-/// coherent, and the device holds the coherence state (`crate::coherence`). A device the choice
-/// refuses is refused with its refusal, which names the flags each missing type needs and the
-/// types the device offers a buffer, with the view's flags: lavapipe, whose one type holds the
-/// parameter ring too and is left with no coherent type.
+/// answers (`each_device_under_the_view`). A device the choice opens has the chosen types: Shared
+/// takes the first cached type, which the view left not coherent, and the device holds the
+/// coherence state (`crate::coherence`). A device whose one host-visible, host-cached buffer type
+/// also holds the parameter ring is left with no coherent type for the ring, so the choice refuses
+/// it, and its make is refused with exactly that refusal, which names the flags each missing type
+/// needs and the types the device offers a buffer, with the view's flags.
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 #[test]
 fn a_device_with_no_cached_coherent_type_opens_where_the_floor_chooses_its_types() {
-    use crate::tests::cached_types_incoherent;
-    use crate::{Device, DeviceOptions, Error};
+    use crate::tests::command::on_device::each_device_under_the_view;
 
-    let runtime = crate::tests::validation::instance(&[]);
-    let (_, vk_instance) = runtime.raw();
-    for (name, physical) in crate::tests::devices_of_the_cfgs_kind(&runtime) {
-        let device = Device::new(&physical, DeviceOptions::default())
-            .unwrap_or_else(|error| panic!("{name}: {error}"));
-        // SAFETY: the device is live, made with the floor's features.
-        let usable = unsafe { crate::floor::buffer_memory_bits(device.raw().device) };
-        drop(device);
-        // SAFETY: `physical` is one of the instance's.
-        let mut memory =
-            unsafe { vk_instance.get_physical_device_memory_properties(physical.raw()) };
-        cached_types_incoherent(&mut memory);
-        let options = DeviceOptions {
-            memory: Some(cached_types_incoherent),
-            ..DeviceOptions::default()
-        };
-        match (choose(&memory, usable), Device::new(&physical, options)) {
-            (Ok(types), Ok(device)) => {
-                assert_eq!(device.memory_types(), types, "{name}");
-                let shared = memory.memory_types_as_slice()[types.shared as usize];
-                assert!(
-                    !(shared.property_flags).contains(vk::MemoryPropertyFlags::HOST_COHERENT),
-                    "{name}: the view left Shared's type {} coherent",
-                    types.shared
-                );
-                assert!(
-                    device.core().coherence.is_some(),
-                    "{name}: the coherence state"
-                );
-                println!(
-                    "floor: {name} under the view opens: Shared memory type {} with {}, the \
-                     coherence state built",
-                    types.shared,
-                    flag_names(shared.property_flags)
-                );
-            }
-            // A GPU refused under the view fails below, with its refusal.
-            (Err(missing), Err(Error::BelowFloor(below))) if cfg!(m2v_cpu_icd) => {
-                assert_eq!(below, BelowFloor { missing }, "{name}");
-                println!("floor: {name} under the view: {}", Error::BelowFloor(below));
-            }
-            (chosen, Err(error)) => panic!("{name}: {error}, where the floor chose {chosen:?}"),
-            (chosen, Ok(_)) => panic!("{name}: made, where the floor chose {chosen:?}"),
-        }
-    }
+    each_device_under_the_view("floor", |name, _, device, memory| {
+        let types = device.memory_types();
+        let shared = memory.memory_types_as_slice()[types.shared as usize];
+        assert!(
+            !(shared.property_flags).contains(vk::MemoryPropertyFlags::HOST_COHERENT),
+            "{name}: the view left Shared's type {} coherent",
+            types.shared
+        );
+        assert!(
+            device.core().coherence.is_some(),
+            "{name}: the coherence state"
+        );
+        println!(
+            "floor: {name} under the view opens: Shared memory type {} with {}, the coherence \
+             state built",
+            types.shared,
+            flag_names(shared.property_flags)
+        );
+    });
 }
 
 /// A device that does not calibrate the host clock's time domain with its own is below the floor,
