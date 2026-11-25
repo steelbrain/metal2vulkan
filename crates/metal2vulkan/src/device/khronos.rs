@@ -21,10 +21,9 @@
 //! and flag sets (`independentResolve`, the sample-location properties) state nothing.
 //!
 //! Where a profile's device departs from the specifications, which no Vulkan query reports,
-//! is not the document's to state: its `driverID`, `vendorID` and `driverVersion` name the
-//! driver and release whose measured deviations translation takes (`device::driver_facts`). A
-//! document that still holds the former top-level `m2v_deviations` object is refused, so a
-//! statement it makes is never silently dropped.
+//! is not the document's to state, and translation takes no deviation: it reads no driver
+//! identity (`Device::from_queries`). A document that still holds the former top-level
+//! `m2v_deviations` object is refused, so a statement it makes is never silently dropped.
 //!
 //! A venue profile's document also states each color attachment format's sample counts, which no
 //! profiles-schema structure holds, in a top-level `m2v_color_attachment_sample_counts` object

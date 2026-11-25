@@ -301,8 +301,8 @@ fn color_attachment_sample_counts_are_read_from_their_block() {
 }
 
 /// A document that still holds the former top-level `m2v_deviations` object is refused, whatever
-/// it states, so a statement is never silently dropped: a driver's deviations are measured facts
-/// of its release (`device::driver_facts`).
+/// it states, so a statement is never silently dropped: translation takes no deviation, and reads
+/// no driver identity (`Device::from_queries`).
 #[test]
 fn a_stated_deviation_is_refused() {
     let base = doc("1.2.0", r#""a""#, r#""a": {}"#);

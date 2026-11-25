@@ -41,12 +41,11 @@ pub(crate) mod spv;
 pub(crate) mod structurize;
 pub mod vk;
 
-// Kept from before the re-architecture (X34): the host command-record format (`indirect_commands`,
-// which lowering and the binder's replay share, and which consumers and validation's oracle and
-// case model reach as `bind::indirect_commands`), the half-precision conversions, the
-// `METAL2VULKAN_*` registry (which the `metal2vulkan` binary reads, so it is `pub` and hidden in
-// every build), and, for the crate's tests and test support only, the SPIR-V binary parser. The
-// external-tool runner is the dev-tools crate's (`devtools/`).
+// Beside the API modules: the host command-record format (`indirect_commands`, which no lowering
+// reads; validation's case model and Metal executor reach it as `bind::indirect_commands`), the
+// half-precision conversions, the `METAL2VULKAN_*` registry (which the `metal2vulkan` binary reads,
+// so it is `pub` and hidden in every build), and, for the crate's tests and test support only, the
+// SPIR-V binary parser. The external-tool runner is the dev-tools crate's (`devtools/`).
 #[doc(hidden)]
 pub mod env_vars;
 pub(crate) mod float16;

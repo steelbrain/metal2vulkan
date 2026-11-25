@@ -21,7 +21,8 @@
 //             hold after.
 //
 // WHAT IT MEASURED, Apple M3 Max, macOS 27.0.1: see the module docs of the translator's
-// `bind::astc_decode` and the runtime's `astc.rs`, which state Metal's answers.
+// `bind::astc_decode`, which state Metal's answers, and the conformance suite's `astc-*-hdr`
+// recordings.
 //
 // Build it, then run each case WITHOUT MTL_DEBUG_LAYER, with the Mac's GPU to itself:
 //

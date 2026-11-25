@@ -33,9 +33,8 @@ Source kinds:
 
 Whatever the kind, the last step withholds the members that identify the reporting host or
 driver build (`HOST_IDENTITY`: UUIDs, LUIDs, PCI address, DRM nodes) and names them in
-`provenance.withheld`. A document states no deviation from the specifications: the product
-takes a driver's measured deviations from its release
-(`crates/metal2vulkan/src/device/driver_facts.rs`).
+`provenance.withheld`. A document states no deviation from the specifications, and the product
+takes none: it reads no driver identity (`Device::from_queries`).
 
 Downloads are cached under `.cache/device-profiles/` (gitignored) and verified before use.
 """

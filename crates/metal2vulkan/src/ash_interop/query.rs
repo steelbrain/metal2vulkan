@@ -1049,10 +1049,10 @@ impl DeviceDescription {
                     vk::ShaderStageFlags::from_raw(g.supported_stages_pipeline_binding.as_raw()),
                 )
             });
-        // No query reports where the driver departs from the specifications; the driver and
-        // its release decide it, measured (`device::driver_facts`). `VkFormatProperties3` where the
-        // effective version or an available extension has it, whose storage-without-format bits
-        // decide per format.
+        // No query reports where a driver departs from the specifications, and translation reads
+        // no driver identity (`Device::from_queries`). `VkFormatProperties3` where the effective
+        // version or an available extension has it, whose storage-without-format bits decide per
+        // format.
         desc.khr_format_feature_flags2 =
             exposure.extensions.contains("VK_KHR_format_feature_flags2");
         for format in FormatSupport::queries_for(api, &desc.extensions) {

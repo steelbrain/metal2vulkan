@@ -94,10 +94,8 @@ over unchanged sources is byte-identical; bump `GENERATED` when regenerated cont
 
 ### Deviations
 
-A document states no deviation from the specifications. Where a driver's answer to what the
-specifications leave open is Metal's, the product takes it from the release-keyed table of what
-each driver release is measured with (`crates/metal2vulkan/src/device/driver_facts.rs`), keyed on the document's
-`driverID`, `vendorID` and `driverVersion`, and refuses a document that still holds the former
+A document states no deviation from the specifications, and the product takes none: it reads no
+driver identity (`Device::from_queries`). It refuses a document that still holds the former
 top-level `m2v_deviations` object.
 
 ### Host identity
