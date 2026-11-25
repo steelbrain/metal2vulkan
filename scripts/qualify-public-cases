@@ -34,6 +34,9 @@ cases=(
     # and one that calls through a table of four entries, one of them null.
     3a8f75e182b71ba42a94dd39d178cf6789010fbe1355b56944adf0a1c75ba807
     af884d65cb584518fcb8b7319dfe9deff15b20604cfc68f6d72dd97ca3113536
+    # An AIR 1.8 fragment (engine/air_1_8_sampling) that samples plainly and by gradient through
+    # an argument sampler: the forms an AIR library declares before AIR 2.0.
+    884ad7d75a221a11480581ae8d55ef5773defdd021c4fc56c6bde51445e87d37
 )
 
 for case_id in "${cases[@]}"; do
