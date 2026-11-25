@@ -72,7 +72,7 @@ fn a_format_2_2_library_compiles_as_today_s_layout() {
         .iter()
         .zip(&modules)
         .map(|((name, type_code, _), m)| MtlbFunction {
-            name: *name,
+            name,
             type_code: *type_code,
             bitcode: m.clone(),
             constants: Vec::new(),
