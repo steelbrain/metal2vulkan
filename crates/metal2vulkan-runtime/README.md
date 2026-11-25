@@ -4569,10 +4569,7 @@ cache is answered compile-required on both.
   stepped draws (a WebGL stream's, at rates 2 and 3) are all at base instance 0. A draw that reads
   its own target over a buffer in place, a linear image on the buffer's memory that never leaves the
   general layout, is refused on every device (`AttachmentRead`): no play of the replay streams met
-  it. The forms ruled for it, should a stream meet it, are the read through the image's shadow, the
-  counted copy a device without the feedback loop takes, first, and then, where the device has the
-  feedback loop, unified image layouts and a `LINEAR` image with the feedback usage, the loop on the
-  attachment in the general layout.
+  it.
 - A fetch (`[[color(n)]]`) orders the fragments of earlier draws before it, not the fragments of its
   own draw that cover the same pixel, which Metal orders in primitive order: a fragment may read the
   texel from before an earlier fragment of its draw wrote it
