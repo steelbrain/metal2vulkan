@@ -2373,27 +2373,16 @@ fn every_device_the_loader_lists_is_above_the_floor() {
     assert!(below.is_empty(), "below the floor: {below:#?}");
 }
 
-/// Every device of the cfg's kind, read through a memory view that takes `HOST_COHERENT` from
-/// each type that is both host-cached and host-coherent (so the device lists its types as a
-/// Meteor Lake GPU does under Mesa's Intel driver and the i915 kernel driver), is refused at its
-/// make. The refusal is the floor's choice over the view: it names the flags each missing type
-/// needs and the types the device offers a buffer, with the view's flags. The device made with
-/// no view first answers which types such a buffer can use.
+/// Every device of the cfg's kind, read through the memory view of the refused device's shape
+/// ([`cached_types_incoherent`](crate::tests::cached_types_incoherent)), is refused at its make.
+/// The refusal is the floor's choice over the view: it names the flags each missing type needs
+/// and the types the device offers a buffer, with the view's flags. The device made with no view
+/// first answers which types such a buffer can use.
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 #[test]
 fn a_device_with_no_cached_coherent_type_is_refused_naming_its_types() {
+    use crate::tests::cached_types_incoherent;
     use crate::{Device, DeviceOptions, Error};
-
-    /// The view: no type is both host-cached and host-coherent.
-    fn cached_types_incoherent(memory: &mut vk::PhysicalDeviceMemoryProperties) {
-        let both = vk::MemoryPropertyFlags::HOST_CACHED | vk::MemoryPropertyFlags::HOST_COHERENT;
-        let count = memory.memory_type_count as usize;
-        for kind in &mut memory.memory_types[..count] {
-            if kind.property_flags.contains(both) {
-                kind.property_flags &= !vk::MemoryPropertyFlags::HOST_COHERENT;
-            }
-        }
-    }
 
     let runtime = crate::tests::validation::instance(&[]);
     let (_, vk_instance) = runtime.raw();
