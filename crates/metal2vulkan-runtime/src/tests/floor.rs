@@ -957,62 +957,138 @@ fn the_first_graphics_and_compute_family_is_the_queue_family() {
     );
 }
 
+/// The Vulkan names of the four flags the floor asks for: device-local, host-visible,
+/// host-coherent and host-cached.
+const NAMES: [&str; 4] = [
+    "VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT",
+    "VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT",
+    "VK_MEMORY_PROPERTY_HOST_COHERENT_BIT",
+    "VK_MEMORY_PROPERTY_HOST_CACHED_BIT",
+];
+
+fn memory_type(flags: &str, offered: String) -> Missing {
+    Missing::MemoryType {
+        flags: flags.to_string(),
+        offered,
+    }
+}
+
 #[test]
 fn each_missing_memory_type_is_named() {
-    let shared = Missing::MemoryType {
-        flags: "VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | \
-                VK_MEMORY_PROPERTY_HOST_CACHED_BIT"
-            .to_string(),
-    };
-    let ring = Missing::MemoryType {
-        flags: "VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | \
-                VK_MEMORY_PROPERTY_HOST_COHERENT_BIT"
-            .to_string(),
-    };
+    let [local, visible, coherent, cached] = NAMES;
+    let shared = format!("{visible} | {coherent} | {cached}");
+    let ring = format!("{local} | {visible} | {coherent}");
     let host_coherent =
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
-    let cases = [
-        // Host memory that is not cached is not Shared memory.
-        (vec![DEVICE_LOCAL, host_coherent, RING_MEMORY], &shared),
-        // Device-local host-visible memory that is not coherent is not the ring's.
-        (
-            vec![
-                DEVICE_LOCAL,
-                SHARED_MEMORY,
-                DEVICE_LOCAL | vk::MemoryPropertyFlags::HOST_VISIBLE,
-            ],
-            &ring,
-        ),
-    ];
-    for (types, expected) in cases {
-        let mut device = at_the_floor();
-        device.memory = memory(&types);
-        assert_eq!(&only_missing(&device), expected);
-    }
     let mut device = at_the_floor();
+    // Host memory that is not cached is not Shared memory.
+    device.memory = memory(&[DEVICE_LOCAL, host_coherent, RING_MEMORY]);
+    assert_eq!(
+        only_missing(&device),
+        memory_type(
+            &shared,
+            format!("type 0 with {local}, type 1 with {visible} | {coherent}, type 2 with {ring}")
+        )
+    );
+    // Device-local host-visible memory that is not coherent is not the ring's.
+    device.memory = memory(&[
+        DEVICE_LOCAL,
+        SHARED_MEMORY,
+        DEVICE_LOCAL | vk::MemoryPropertyFlags::HOST_VISIBLE,
+    ]);
+    assert_eq!(
+        only_missing(&device),
+        memory_type(
+            &ring,
+            format!("type 0 with {local}, type 1 with {shared}, type 2 with {local} | {visible}")
+        )
+    );
     device.memory = memory(&[DEVICE_LOCAL]);
     let Err(below) = decide(&device) else {
         panic!("the device is above the floor");
     };
-    assert_eq!(below.missing, [shared.clone(), ring.clone()]);
+    let offered = format!("type 0 with {local}");
+    assert_eq!(
+        below.missing,
+        [
+            memory_type(&shared, offered.clone()),
+            memory_type(&ring, offered)
+        ]
+    );
     // Vulkan guarantees a device-local type; a device without one is named for it too.
     device.memory = memory(&[SHARED_MEMORY]);
     let Err(below) = decide(&device) else {
         panic!("the device is above the floor");
     };
+    let offered = format!("type 0 with {shared}");
     assert_eq!(
         below.missing,
         [
-            Missing::MemoryType {
-                flags: "VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT".to_string(),
-            },
-            ring,
+            memory_type(local, offered.clone()),
+            memory_type(&ring, offered)
         ]
     );
+}
+
+/// A refusal for a missing memory type names every type the device offers buffers, so a report
+/// of it says what the device has: here a device whose host-visible memory is all uncached, a
+/// type with a flag Vulkan does not name and a type with no flags.
+#[test]
+fn a_missing_memory_type_names_the_types_the_device_offers() {
+    let host_coherent = DEVICE_LOCAL
+        | vk::MemoryPropertyFlags::HOST_VISIBLE
+        | vk::MemoryPropertyFlags::HOST_COHERENT;
+    let unnamed = vk::MemoryPropertyFlags::from_raw(1 << 12);
+    let mut device = at_the_floor();
+    device.memory = memory(&[
+        DEVICE_LOCAL,
+        host_coherent,
+        vk::MemoryPropertyFlags::empty(),
+        DEVICE_LOCAL | unnamed,
+    ]);
+    let missing = only_missing(&device);
     assert_eq!(
-        shared.to_string(),
+        missing.to_string(),
         "a memory type with VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | \
-         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT for buffers"
+         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT for buffers \
+         (the device offers buffers: type 0 with VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, type 1 with \
+         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | \
+         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, type 2 with no flags, type 3 with \
+         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | 0x1000)"
+    );
+    // On the created device, only the types a buffer can use are named.
+    let [local, visible, coherent, _] = NAMES;
+    let Err(lacking) = choose(&device.memory, 0b0011) else {
+        panic!("the device has every memory type");
+    };
+    assert_eq!(
+        lacking,
+        [memory_type(
+            &flag_names(SHARED_MEMORY),
+            format!("type 0 with {local}, type 1 with {local} | {visible} | {coherent}")
+        )]
+    );
+    let Err(lacking) = choose(&device.memory, 0b0100) else {
+        panic!("the device has every memory type");
+    };
+    assert_eq!(
+        (lacking.len(), lacking[0].to_string()),
+        (
+            3,
+            "a memory type with VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT for buffers (the device \
+             offers buffers: type 2 with no flags)"
+                .to_string()
+        )
+    );
+    let Err(lacking) = choose(&device.memory, 1 << 4) else {
+        panic!("the device has every memory type");
+    };
+    assert!(
+        (lacking.iter()).all(|missing| matches!(
+            missing,
+            Missing::MemoryType { offered, .. } if offered == "no type"
+        )),
+        "{lacking:?}"
     );
 }
 
@@ -1088,6 +1164,12 @@ fn memory_flags_are_named_as_vulkan_names_them() {
         "VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | \
          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT"
     );
+    // Every flag Vulkan defines has its name; bits past them are one hexadecimal value.
+    assert_eq!(named.as_raw(), 0x1ff);
+    assert_eq!(
+        flag_names(vk::MemoryPropertyFlags::from_raw(0x2 | 0x40 | 0x600)),
+        "VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_DEVICE_COHERENT_BIT_AMD | 0x600"
+    );
 }
 
 #[test]
@@ -1132,6 +1214,11 @@ fn every_missing_item_is_named_at_once() {
             Missing::QueueFamily,
             Missing::MemoryType {
                 flags: flag_names(RING_MEMORY),
+                offered: format!(
+                    "type 0 with {}, type 1 with {}",
+                    flag_names(DEVICE_LOCAL),
+                    flag_names(SHARED_MEMORY)
+                ),
             },
         ]
     );
@@ -1141,7 +1228,10 @@ fn every_missing_item_is_named_at_once() {
          VK_EXT_robustness2; VK_EXT_calibrated_timestamps; VK_EXT_line_rasterization; VkPhysicalDeviceFeatures.shaderInt64; VkPhysicalDeviceVulkan13Features.dynamicRendering; \
          maxColorAttachments 4, below 8; a queue family with graphics and compute; a memory \
          type with VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | \
-         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT for buffers"
+         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT for buffers (the device offers buffers: type 0 \
+         with VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, type 1 with \
+         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | \
+         VK_MEMORY_PROPERTY_HOST_CACHED_BIT)"
     );
 }
 

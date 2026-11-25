@@ -5378,7 +5378,10 @@ types, each the first with its flags that a buffer of `floor::BUFFER_USAGE` can 
 usage Vulkan 1.3 defines, and device addresses. Vulkan guarantees such a buffer a device-local
 type, so of the three only Shared and the ring can be missing on a conforming device. Vulkan answers which memory types a buffer can use
 only for a created device, so `PhysicalDevice::check` finds a type with each set of flags, and
-`Device::new` chooses on the device (`Device::memory_types` answers `floor::MemoryTypes`).
+`Device::new` chooses on the device (`Device::memory_types` answers `floor::MemoryTypes`). A device
+without one is refused with `floor::Missing::MemoryType`, which names the flags it lacks and every
+memory type the device offers buffers, by index and flags: from `PhysicalDevice::check`, every type
+the device lists.
 
 | Memory type | Flags | Used for |
 |---|---|---|

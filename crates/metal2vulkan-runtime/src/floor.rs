@@ -310,8 +310,9 @@ pub(crate) const RING_MEMORY: vk::MemoryPropertyFlags = vk::MemoryPropertyFlags:
         | vk::MemoryPropertyFlags::HOST_COHERENT.as_raw(),
 );
 
-/// The Vulkan names of the memory property flags the floor asks for.
-pub(crate) const MEMORY_FLAG_NAMES: [(vk::MemoryPropertyFlags, &str); 4] = [
+/// The Vulkan names of the memory property flags: those the floor asks for, then the rest Vulkan
+/// 1.3 and its extensions define, which a device's own types may carry.
+pub(crate) const MEMORY_FLAG_NAMES: [(vk::MemoryPropertyFlags, &str); 9] = [
     (
         vk::MemoryPropertyFlags::DEVICE_LOCAL,
         "VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT",
@@ -327,6 +328,26 @@ pub(crate) const MEMORY_FLAG_NAMES: [(vk::MemoryPropertyFlags, &str); 4] = [
     (
         vk::MemoryPropertyFlags::HOST_CACHED,
         "VK_MEMORY_PROPERTY_HOST_CACHED_BIT",
+    ),
+    (
+        vk::MemoryPropertyFlags::LAZILY_ALLOCATED,
+        "VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT",
+    ),
+    (
+        vk::MemoryPropertyFlags::PROTECTED,
+        "VK_MEMORY_PROPERTY_PROTECTED_BIT",
+    ),
+    (
+        vk::MemoryPropertyFlags::DEVICE_COHERENT_AMD,
+        "VK_MEMORY_PROPERTY_DEVICE_COHERENT_BIT_AMD",
+    ),
+    (
+        vk::MemoryPropertyFlags::DEVICE_UNCACHED_AMD,
+        "VK_MEMORY_PROPERTY_DEVICE_UNCACHED_BIT_AMD",
+    ),
+    (
+        vk::MemoryPropertyFlags::RDMA_CAPABLE_NV,
+        "VK_MEMORY_PROPERTY_RDMA_CAPABLE_BIT_NV",
     ),
 ];
 
@@ -913,10 +934,16 @@ pub enum Missing {
     /// A queue family with both `VK_QUEUE_GRAPHICS_BIT` and `VK_QUEUE_COMPUTE_BIT`.
     QueueFamily,
     /// A memory type with these property flags, as Vulkan names them, for buffers of every usage
-    /// the runtime gives them. [`BUFFER_USAGE`] is that usage.
+    /// the runtime gives them. [`BUFFER_USAGE`] is that usage. It names the types the device
+    /// offers such buffers too.
     MemoryType {
         /// The flags, joined by ` | `.
         flags: String,
+        /// The memory types the device offers such a buffer, each as `type <index> with <flags>`
+        /// (a bit Vulkan does not name as its hexadecimal value, a type of none as `no flags`),
+        /// joined by `, `, or `no type`. From `PhysicalDevice::check`, every type the device
+        /// lists: Vulkan answers which types a buffer can use only for a created device.
+        offered: String,
     },
     /// A time domain of [`TIME_DOMAINS`] the device does not calibrate
     /// (`vkGetPhysicalDeviceCalibrateableTimeDomainsEXT`), as Vulkan names it.
@@ -949,7 +976,10 @@ impl fmt::Display for Missing {
                 needed,
             } => write!(f, "{name} {device}, below {needed}"),
             Missing::QueueFamily => f.write_str("a queue family with graphics and compute"),
-            Missing::MemoryType { flags } => write!(f, "a memory type with {flags} for buffers"),
+            Missing::MemoryType { flags, offered } => write!(
+                f,
+                "a memory type with {flags} for buffers (the device offers buffers: {offered})"
+            ),
             Missing::TimeDomain(name) => write!(f, "the calibrateable time domain {name}"),
             Missing::SetLayout { set } => write!(
                 f,
@@ -1547,17 +1577,39 @@ pub(crate) fn choose(
         .filter(|(index, _)| index.is_none())
         .map(|(_, flags)| Missing::MemoryType {
             flags: flag_names(flags),
+            offered: offered(memory, usable),
         })
         .collect()),
     }
 }
 
-/// The Vulkan names of `flags`, joined by ` | `.
+/// The memory types of `memory` whose bit is set in `usable`, as [`Missing::MemoryType`]'s
+/// `offered` gives them.
+fn offered(memory: &vk::PhysicalDeviceMemoryProperties, usable: u32) -> String {
+    let types: Vec<String> = (0u32..)
+        .zip(memory.memory_types_as_slice())
+        .filter(|(index, _)| usable & (1 << index) != 0)
+        .map(|(index, kind)| match kind.property_flags.is_empty() {
+            true => format!("type {index} with no flags"),
+            false => format!("type {index} with {}", flag_names(kind.property_flags)),
+        })
+        .collect();
+    match types.is_empty() {
+        true => "no type".to_owned(),
+        false => types.join(", "),
+    }
+}
+
+/// The Vulkan names of `flags`, joined by ` | `, and the bits Vulkan does not name after them as
+/// one hexadecimal value.
 pub(crate) fn flag_names(flags: vk::MemoryPropertyFlags) -> String {
+    let named = (MEMORY_FLAG_NAMES.iter()).fold(0, |named, (flag, _)| named | flag.as_raw());
+    let unnamed = flags.as_raw() & !named;
     MEMORY_FLAG_NAMES
         .iter()
         .filter(|(flag, _)| flags.contains(*flag))
-        .map(|(_, name)| *name)
+        .map(|(_, name)| (*name).to_owned())
+        .chain((unnamed != 0).then(|| format!("{unnamed:#x}")))
         .collect::<Vec<_>>()
         .join(" | ")
 }

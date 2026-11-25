@@ -8780,7 +8780,7 @@ variant	metal2vulkan-runtime::VisibilityResultType::Reset	Reset
 variant	metal2vulkan-runtime::floor::Missing::Extension	Extension(&'static CStr)
 variant	metal2vulkan-runtime::floor::Missing::Feature	Feature { structure: &'static str, member: String }
 variant	metal2vulkan-runtime::floor::Missing::Limit	Limit { name: &'static str, device: u32, needed: u32 }
-variant	metal2vulkan-runtime::floor::Missing::MemoryType	MemoryType { flags: String }
+variant	metal2vulkan-runtime::floor::Missing::MemoryType	MemoryType { flags: String, offered: String }
 variant	metal2vulkan-runtime::floor::Missing::QueueFamily	QueueFamily
 variant	metal2vulkan-runtime::floor::Missing::SetLayout	SetLayout { set: u32 }
 variant	metal2vulkan-runtime::floor::Missing::TimeDomain	TimeDomain(&'static str)
