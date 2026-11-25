@@ -822,11 +822,12 @@ impl<'a> ModuleDecoder<'a> {
         // Each module value's type id, as LLVM's reader numbers it: a constant's own type, and
         // a global's or function's pointer to the object it addresses (`getVirtualTypeID`), which
         // is the record's own typed pointer where the record names one.
+        let known = self.value_type_ids.len();
         m.reserve(
             &mut self.value_type_ids,
-            self.values.len().saturating_sub(self.value_type_ids.len()),
+            self.values.len().saturating_sub(known),
         )?;
-        for v in self.values.iter().skip(self.value_type_ids.len()) {
+        for v in self.values.iter().skip(known) {
             let ptr = v.id.and_then(|c| self.parts.consts.ty(c));
             let tid = match (v.bc_type, v.object_bc_type, ptr) {
                 (Some(own), _, _) => own,
