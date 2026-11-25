@@ -1507,8 +1507,10 @@ made, with no lock, and never rewritten for layouts.
   as Metal's nil texture; nothing refuses it there.
 - `Texture::replace_region` and `Texture::get_bytes` take a Shared or Managed texture
   (`Refusal::TextureBytesPrivate` otherwise), a region inside a level and slice on the format's
-  block grid (`Refusal::TextureRegion`), and rows and images apart as Metal's calls take them,
-  a compressed format's rows being rows of blocks (`Refusal::TextureBytesLayout` where they
+  block grid (`Refusal::TextureRegion`), whole blocks ending inside the level's last block past
+  its edge too (the one 4 x 4 block of a level of 4 x 2 texels, which Metal copies whole, where
+  Apple's pages ask for a size clamped to the edge), and rows and images apart as Metal's calls
+  take them, a compressed format's rows being rows of blocks (`Refusal::TextureBytesLayout` where they
   overlap or the bytes are too few). `replace_region` copies the bytes into the staging region
   before it returns, and the upload copies them into the image, leaving home for the transfer
   layout and coming back, ahead of every command buffer committed after the call. It takes the
@@ -1786,6 +1788,14 @@ made, with no lock, and never rewritten for layouts.
   `Gap::TextureFormat` (`BGRA8Unorm` on KosmicKrisp, whose storage texel buffers lack it).
 - `replace_region` and `get_bytes` of a texture without named bytes go through the staging region:
   a copy Metal does not make, counted in `Metrics::bytes_copied`.
+- A blit copy between textures of a compressed region of whole blocks that ends inside one
+  level's last block past its edge and not inside the other's (the one 4 x 4 block of a level of
+  4 x 2 texels into the second block of a level of 8 x 4, or the reverse) is `Gap::TextureCopy`.
+  Metal takes it, with its validation layer and without, and copies the block whole (probe
+  `compressed_copies_of_small_levels.m` in the conformance crate, an Apple M3 Max, job
+  m3-max-73696); one `vkCmdCopyImage` region has one extent, which stops at an image's edge only
+  where that image's region does ("Copy regions for each image must be aligned to a multiple of
+  the texel block extent in each dimension, except at the edges of the image").
 - A texture made for shader writes whose format the device does not store through a storage
   image without a format (the 8-bit sRGB formats, `RGB9E5Float` or `BGR10A2Unorm` where the
   device lacks their storage), or holds through a view of another (an `A8Unorm` held in red, the
@@ -2667,9 +2677,13 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   side's slice, level and origin. It records one `vkCmdCopyImage` between the two images, at once,
   with nothing staged and no byte copied beyond the region. Both textures have one pixel format
   and one sample count, as Metal's validation requires; a compressed region is whole blocks or
-  reaches the level's edge on both sides; a 3D texture's image copies into or out of a 2D
-  slice. A format of depth and stencil both copies its pixels whole, as Metal's copy takes no
-  plane option: each region names both aspects. A size of 0 on an axis a texture lacks copies one
+  reaches the level's edge on both sides, and whole blocks may end inside the level's last block
+  past its edge, as Metal copies the one 4 x 4 block of a level of 4 x 2 texels whole where
+  Apple's page asks for the size clamped to the edge (probe `compressed_copies_of_small_levels.m`
+  in the conformance crate): the command's extent stops at the edge, both sides' at the same
+  one. A 3D texture's image copies into or out of a 2D slice. A format of depth and stencil both
+  copies its pixels whole, as Metal's copy takes no plane option: each region names both
+  aspects. A size of 0 on an axis a texture lacks copies one
   texel there; on another axis the copy copies nothing.
 - A copy records two barriers. The first moves each texture's level and slice from its home
   layout to the transfer layout after every earlier command, and makes every earlier write visible
@@ -2682,9 +2696,14 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   end among them. The encoder owes nothing at its end.
 - Refused: what Metal's validation refuses, textures of two pixel formats or two sample counts
   (`Refusal::TextureCopyMismatch`), and a region outside either texture or off its block grid
-  (`Refusal::TextureRegion`). Not built (`Gap::TextureCopy`): what one `vkCmdCopyImage` in the
+  (`Refusal::TextureRegion`), a size past the block the level's edge rounds up to among them
+  (8 x 4 at a level of 4 x 2, which the validation layer stops and plain Metal answers
+  differently by each call). Not built (`Gap::TextureCopy`): what one `vkCmdCopyImage` in the
   floor does not make (a multisample texture, one pixel format held in two Vulkan formats by the
-  textures' usages, a 1D texture with another type).
+  textures' usages, a 1D texture with another type, and whole blocks that end inside one
+  level's last block past its edge and not inside the other's, as the 4 x 4 block of a level of
+  4 x 2 texels into a level of 8 x 4, which plain Metal copies whole: one extent stops at one
+  image's edge alone).
 - Within one level and slice of one image (a texture into itself, or a texture and its view,
   which shares its image), regions apart copy with one `vkCmdCopyImage`, that subresource in the
   general layout: one barrier moves it there and one home, the same three barriers as any copy.
@@ -2715,7 +2734,11 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   `copy_from_texture_to_buffer_with_options` are their options forms, a `BlitOption` naming the
   aspect a copy of a depth and stencil format moves (`MTLBlitOptionDepthFromDepthStencil` or
   `MTLBlitOptionStencilFromDepthStencil`, which Metal takes of a format of that aspect alone too),
-  one region of that aspect; the forms without an option are those of `None`.
+  one region of that aspect; the forms without an option are those of `None`. A compressed
+  region takes whole blocks ending inside the level's last block past its edge as
+  `copy_from_texture` does, each way: plain Metal copies the block of a level of 4 x 2 texels at
+  4 x 4 from a buffer too, where Metal's validation layer stops it (`(destinationOrigin.y +
+  sourceSize.height)(4) must be <= height(2)`), and the runtime does what plain Metal does.
   `MTLBlitOptionRowLinearPVRTC` is not offered, as no PVRTC texture is made. Each records
   `vkCmdCopyBufferToImage` or `vkCmdCopyImageToBuffer` against the bytes shaders reach (a Managed
   buffer's device copy, where the device keeps one), one region an image of the region, each at its

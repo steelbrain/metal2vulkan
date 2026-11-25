@@ -606,7 +606,8 @@ pub enum Refusal {
     /// [`Texture::replace_region`](crate::Texture::replace_region),
     /// [`Texture::get_bytes`](crate::Texture::get_bytes) or a blit copy
     /// ([`BlitCommandEncoder::copy_from_texture`](crate::BlitCommandEncoder::copy_from_texture))
-    /// of a level or slice past the texture's, or of a region that leaves the level or is off the
+    /// of a level or slice past the texture's, or of a region that leaves the level (but whole
+    /// blocks ending inside the level's last block, which plain Metal copies whole) or is off the
     /// format's block grid.
     ///
     /// Basis: ours (no texel of the texture is there to copy).
@@ -1260,7 +1261,11 @@ pub enum Gap {
     /// [`BlitCommandEncoder::copy_from_texture`](crate::BlitCommandEncoder::copy_from_texture)
     /// that the floor's `vkCmdCopyImage` does not make: a multisample texture; one pixel format
     /// held in two Vulkan formats, which the two textures' usages chose; a 1D texture with one of
-    /// another type; or a texture buffer, whose texels are its buffer's bytes and no image.
+    /// another type; a texture buffer, whose texels are its buffer's bytes and no image; or a
+    /// compressed region of whole blocks that ends inside one level's last block past its edge
+    /// and not inside the other's (the one 4 x 4 block of a level of 4 x 2 texels into a level of
+    /// 8 x 4), which plain Metal copies whole and one command's one extent cannot stop at one
+    /// image's edge alone.
     ///
     /// Basis: ours (Vulkan 1.3 copies none of these with one command; each is built when a
     /// replay stream makes one).

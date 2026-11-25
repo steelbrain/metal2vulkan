@@ -163,8 +163,11 @@ impl BlitCommandEncoder {
     /// `destinationSlice:destinationLevel:destinationOrigin:`: `size` texels from `from` in
     /// `source` to `to` in `destination`, one `vkCmdCopyImage`. Both textures have one pixel
     /// format and one sample count, as Metal's validation requires; a compressed format's region
-    /// is whole blocks or reaches the level's edge on both sides. A format of depth and stencil
-    /// both copies its pixels whole, as Metal's copy takes no plane option: each region of the
+    /// is whole blocks or reaches the level's edge on both sides, and whole blocks may end past
+    /// the edge inside the level's last block (the one 4 x 4 block of a level of 4 x 2 texels):
+    /// plain Metal copies that block whole, and the command's extent stops at the edge, both
+    /// sides' at the same one (where they stop at different ones, [`Gap::TextureCopy`]). A format
+    /// of depth and stencil both copies its pixels whole, as Metal's copy takes no plane option: each region of the
     /// command names both aspects. A 3D texture's region one image
     /// deep copies into or out of
     /// a 2D slice. A size of 0 on an axis one of the textures lacks (depth on any but a 3D
@@ -315,7 +318,11 @@ impl BlitCommandEncoder {
     /// `toTexture:destinationSlice:destinationLevel:destinationOrigin:`: `size` texels from
     /// `source`, laid out as `layout` says, to `to` in `destination`, one
     /// `vkCmdCopyBufferToImage` a 3D region's image. The options form with no option is this
-    /// call. Sizes of 0 copy as [`copy_from_texture`](Self::copy_from_texture)'s do. The command
+    /// call. Sizes of 0 copy as [`copy_from_texture`](Self::copy_from_texture)'s do, and a
+    /// compressed region takes whole blocks ending inside the level's last block as its does.
+    /// Metal's validation layer stops this call's (`(destinationOrigin.y + sourceSize.height)(4)
+    /// must be <= height(2)` at a level of 4 x 2) and plain Metal copies the block; a guest's
+    /// Metal runs without the layer, so the runtime does what plain Metal does. The command
     /// buffer keeps the texture and the buffer until it retires. A Managed buffer's bytes here are
     /// those shaders reach: its device copy, where the device keeps one. A texture in place over
     /// those bytes ([`Buffer::new_texture`]) whose rows meet the region's, which Metal leaves
@@ -1848,6 +1855,15 @@ pub(crate) fn texture_copy(
     let (Some(from), Some(to)) = placed else {
         return Ok(None);
     };
+    // One command's one extent copies both regions, and stops at an image's edge only where
+    // that region does ("Copy regions for each image must be aligned to a multiple of the texel
+    // block extent in each dimension, except at the edges of the image, where region extents
+    // must match the edge of the image"): whole blocks that end inside one level's last block
+    // past its edge and not the other's copy with no one extent, though plain Metal copies the
+    // block whole.
+    if from.size != to.size {
+        return Err(gap());
+    }
     // One subresource of one image, the textures one or a texture and its view, copies in the
     // general layout (`VUID-vkCmdCopyImage-srcImage-09460`); two textures in place over one
     // buffer may share bytes too. No command's source and destination share a byte

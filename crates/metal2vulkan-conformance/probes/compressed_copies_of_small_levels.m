@@ -44,6 +44,30 @@
 //       -o compressed_copies_of_small_levels compressed_copies_of_small_levels.m
 //   ./compressed_copies_of_small_levels --all
 //   MTL_DEBUG_LAYER=1 ./compressed_copies_of_small_levels bc3-mp-9-block
+//
+// WHAT IT MEASURED, Apple M3 Max, macOS 27.0.1 (Build 26A434), job m3-max-73696, BC1 and BC3
+// alike:
+//
+//   - with the layer off, every case is taken and completes (status 4, no error);
+//   - 4x4 at levels 9, 10 and 11 lands exactly what the clamped size lands, by every kind: the
+//     level's one block, everything else kept (levels FNV-1a, BC1 then BC3: level 9
+//     df214fe18bfe662d and cd215888fb218a95, 10 fda65c9a502da7a5 and 716f1b3f1cb39e25, 11
+//     3145d998df908f15 and 0a3e663ab6db29e5; t2b and get bytes, level 9 eb66b13e7d8437ad and
+//     b5b6a640cc0c0ed5, 10 e466c8dac77e3825 and e80282a8667247e5, 11 e2d8ac956a0c98d5 and
+//     7e4011a76428e2e5);
+//   - with the layer on, 4x4 at levels 9 to 11 runs as with it off for mp, pp, t2b, replace and
+//     get (the layer bounds the region by the level rounded up to the block: "(origin.x +
+//     adjustedSize.width)(8) must be <= paddedWidth(4)"), and ends the process (SIGABRT) for
+//     b2t: "(destinationOrigin.y + sourceSize.height)(4) must be <= height(2)";
+//   - over (8x4 at level 9) ends the process under the layer for every kind ("must be <=
+//     paddedWidth(4)"); without it mp, pp and b2t land the level's block alone, t2b writes the
+//     block and a block of 0 after it, replace writes nothing and get reads nothing;
+//   - between levels, 4x4 is taken with the layer and without, and 9to8, 8to9 and 10to8 land
+//     the block named whole (`m`); 8to10 lands level 8's first block, (0,0), not the one at
+//     (4,0) it names; the smaller level's extent lands the same, and ends the process under the
+//     layer: "size.height(2) must be a multiple of MTLPixelFormatBC1_RGBA blockHeight(4)" (2x1:
+//     the width too), Apple's clamped form into a larger level (9to8, 10to8) among them;
+//   - level 8, whole blocks, is taken everywhere and lands its blocks.
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>

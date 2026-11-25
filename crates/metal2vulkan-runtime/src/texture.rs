@@ -3579,8 +3579,22 @@ impl Placed {
 /// Checks `region` of `level` and `slice` of a texture of `d` whose copy unit covers `block`
 /// texels: the level and slice are the texture's (a cube's slices are six a cube, a 3D texture
 /// has slice 0 alone), and the region lies inside the level, its origin on the block grid and its
-/// size whole blocks or reaching the level's edge. `None` for an empty region. The place is in
-/// the image, which the texture starts at `base` of: a view's first level and array layer.
+/// size whole blocks or reaching the level's edge. A size of whole blocks may also end past the
+/// edge inside the level's last block, the one an edge of no whole blocks rounds up to (the one
+/// 4 x 4 block of a level of 4 x 2 texels): plain Metal copies that block whole, by every copy
+/// that places a region, where Apple's page for the copy asks for the size clamped to the edge
+/// (probe `compressed_copies_of_small_levels.m` in the conformance crate, an Apple M3 Max,
+/// macOS 27.0.1, job m3-max-73696; Metal's validation layer bounds the region by the level
+/// rounded up to the block too, "(origin.x + adjustedSize.width)(8) must be <= paddedWidth(4)",
+/// but for a copy from a buffer, which it stops, and a guest's Metal runs without the layer).
+/// The place stops at the edge, as a copy command's extent must
+/// (`VUID-vkCmdCopyImage-srcOffset-00144`, `VUID-vkCmdCopyImage-dstOffset-00150`,
+/// `VUID-vkCmdCopyBufferToImage-imageSubresource-07971`,
+/// `VUID-vkCmdCopyImageToBuffer-imageSubresource-07971` and their other axes) and may where it
+/// is no whole blocks (`VUID-vkCmdCopyImage-srcImage-01728`,
+/// `VUID-vkCmdCopyBufferToImage-dstImage-00207`, `VUID-vkCmdCopyImageToBuffer-srcImage-00207`),
+/// so it copies the same blocks. `None` for an empty region. The place is in the image, which
+/// the texture starts at `base` of: a view's first level and array layer.
 ///
 /// Err: [`Refusal::TextureRegion`].
 pub(crate) fn place(
@@ -3603,13 +3617,19 @@ pub(crate) fn place(
     let extent = [d.width, d.height, d.depth].map(|e| (e >> level).max(1));
     let [bw, bh] = block;
     let block = [bw, bh, 1];
+    let mut size = region.size;
     for axis in 0..3 {
-        let (origin, size) = (region.origin[axis], region.size[axis]);
-        let end = origin.checked_add(size).ok_or_else(outside)?;
-        let on_grid = origin % block[axis] == 0 && (size % block[axis] == 0 || end == extent[axis]);
-        if end > extent[axis] || !on_grid {
+        let (origin, edge, grid) = (region.origin[axis], extent[axis], block[axis]);
+        let end = origin.checked_add(size[axis]).ok_or_else(outside)?;
+        let whole = size[axis] % grid == 0;
+        let on_grid = origin % grid == 0 && (whole || end == edge);
+        // Whole blocks may end in the level's last block past its edge, where the edge is no
+        // whole blocks: the block it rounds up to.
+        let rounded = whole && origin < edge && end <= edge.next_multiple_of(grid);
+        if (end > edge && !rounded) || !on_grid {
             return Err(outside());
         }
+        size[axis] = end.min(edge) - origin;
     }
     if region.size.contains(&0) {
         return Ok(None);
@@ -3621,7 +3641,7 @@ pub(crate) fn place(
             false => base[1] + slice,
         },
         origin: region.origin,
-        size: region.size,
+        size,
     }))
 }
 
@@ -4537,7 +4557,9 @@ impl Texture {
     /// `replaceRegion:mipmapLevel:slice:withBytes:bytesPerRow:bytesPerImage:`: the bytes of
     /// `region` of `level` and `slice` (a 3D texture's slice is 0), rows `bytes_per_row` and
     /// images `bytes_per_image` apart in `bytes`, a compressed format's rows being rows of
-    /// blocks. The call reads `bytes` in place, each byte of the region's rows once, by raw
+    /// blocks; its region may be whole blocks ending inside the level's last block past the
+    /// level's edge (the one 4 x 4 block of a level of 4 x 2 texels), which plain Metal copies
+    /// whole. The call reads `bytes` in place, each byte of the region's rows once, by raw
     /// copies ([`HostBytes`]): the CPU copies them once, at the call, as Metal's does. The bytes go
     /// to the device's staging region before the call returns (a staging buffer of their own past
     /// the region's 16 MiB), and the upload copies them into the image ahead of every command
