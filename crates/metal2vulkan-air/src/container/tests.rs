@@ -1189,12 +1189,12 @@ fn format_2_2_entries_hold_their_module_to_the_next_start() {
         assert_eq!(f.hash, sha256(module));
         f.stream().expect("its stream");
     }
-    let table = |l: &Metallib<'_>| {
+    fn table<'a>(l: &Metallib<'a>) -> Vec<(&'a str, FunctionStage, Hash256, &'a [u8])> {
         l.functions
             .iter()
             .map(|f| (f.name, f.stage, f.hash, f.bitcode))
-            .collect::<Vec<_>>()
-    };
+            .collect()
+    }
     let current = Builder::new(functions.clone()).build();
     assert_eq!(table(&lib), table(&metallib(&current)));
 
