@@ -4574,6 +4574,14 @@ impl Texture {
     /// buffer committed after it, so the call is ordered as Metal's CPU write is. Where the region has no room, the call first waits for the oldest copy in it to
     /// complete. Counted in [`Metrics::bytes_copied`]. An empty region copies nothing.
     ///
+    /// A heap texture ([`Device::new_heap_texture`]) whose bytes another resource of its heap
+    /// wrote since its last write moves from undefined ahead of the copy, counted in
+    /// [`Metrics::heap_moves`], so its next write keeps the texels the call wrote; the heap's
+    /// other textures over its bytes move before their next writes. A call while a command buffer
+    /// committed before it, and not yet completed, writes the texture's bytes or another
+    /// resource's over them is the program's race, as Metal's makes it: the upload may run ahead
+    /// of that command buffer, and the texture's next write may move it.
+    ///
     /// A Managed texture with named bytes ([`Device::new_managed_texture`]) takes them there
     /// instead, as Metal writes a Managed texture's CPU copy, and then
     /// [`Texture::upload_region`] copies them into the image; nothing is staged or counted. A
@@ -4591,6 +4599,7 @@ impl Texture {
     /// [`Buffer::did_modify_range`] returns.
     ///
     /// [`Metrics::bytes_copied`]: crate::Metrics::bytes_copied
+    /// [`Metrics::heap_moves`]: crate::Metrics::heap_moves
     pub fn replace_region(
         &self,
         region: Region,
@@ -4647,6 +4656,11 @@ impl Texture {
             [Held::Texture(Arc::clone(inner.imaged()))],
             // SAFETY: recording under the work lock, the upload holding the image and the stage.
             |device, command| unsafe {
+                // A heap texture an alias's write left stale moves from undefined before the
+                // copy, and the textures over its bytes are left stale (`crate::alias`).
+                if let Some(place) = inner.placement() {
+                    crate::alias::host_write(core, command, place);
+                }
                 let region = copy.buffer_image_copy(stage.offset(), 0, 0);
                 inner.record(
                     device,

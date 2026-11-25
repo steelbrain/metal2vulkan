@@ -2964,10 +2964,13 @@ pub struct Metrics {
     pub overlapping_copies_refused: u64,
     /// Heap textures' images moved from undefined to their home layout before a command that
     /// writes them (a dispatch's slot or declared write, a pass's attachment, a draw's write, a
-    /// blit's destination), because a write over their bytes through another resource of their
-    /// heap left them stale since their last write (Vulkan's memory aliasing): in place, or in a
-    /// command buffer of its own that leads the command's part of its command buffer. No Metal
-    /// counterpart.
+    /// blit's destination) or a host write's copy ([`Texture::replace_region`]), because a write
+    /// over their bytes through another resource of their heap left them stale since their last
+    /// write (Vulkan's memory aliasing): in place, in a command buffer of its own that leads the
+    /// command's part of its command buffer, or in the host write's upload ahead of its copy. No
+    /// Metal counterpart.
+    ///
+    /// [`Texture::replace_region`]: crate::Texture::replace_region
     pub heap_moves: u64,
     /// On a device without `VK_EXT_shader_stencil_export`, the draws recorded beyond a draw's
     /// own for a pipeline state whose fragment function writes `[[stencil]]`: one for each

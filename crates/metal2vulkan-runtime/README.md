@@ -1613,8 +1613,11 @@ made, with no lock, and never rewritten for layouts.
   `Device::new_heap_texture(descriptor, index, heap, offset)` binds the texture's image at that
   offset in the heap, where the consumer's own placement put it: no allocation and no texture
   block, the bytes those the memory holds, as Metal does not zero heap textures. Textures may
-  alias one another and the heap's buffers. A placement past the heap's end, an offset in the
-  block off the image's alignment, or a heap range past its block is refused
+  alias one another and the heap's buffers. A heap texture whose bytes another resource of its
+  heap wrote since its last write moves from undefined before its next write, a GPU command's or
+  `Texture::replace_region`'s copy (`Metrics::heap_moves`), as Vulkan's memory aliasing asks. A
+  placement past the heap's end, an offset in the block off the image's alignment, or a heap
+  range past its block is refused
   (`Refusal::HeapTexturePlace`); the image is never bound outside its heap. The texture holds
   the block, so a released block goes back to the pool only once its textures' images are gone.
   `Device::new_heap_buffer(heap, offset, length)` is `newBufferWithLength:options:offset:` of a

@@ -17,7 +17,14 @@
 //! orders every earlier command before it and every later one after it. Reads move nothing. A
 //! buffer is never moved; its writes make its texture links stale. A stale texture takes part
 //! until that write, whether or not a link is left: the release of what wrote over its bytes
-//! leaves them written over.
+//! leaves them written over. A host write of a texture (`Texture::replace_region`) is such a use:
+//! as its call records its upload, under the work lock, the move it owes goes in the upload ahead
+//! of its copy, and its write applies ([`host_write`]). A command buffer committed after the call
+//! is staged after it and runs after the upload; one submitted before the call was staged before
+//! it and runs before the upload. A host write while a command buffer committed before it, and
+//! not yet completed, writes the texture's bytes or a resource's over them is the program's race,
+//! as Metal's `replaceRegion` makes it: the upload may run ahead of that command buffer, and the
+//! texture's next write may move it.
 //!
 //! Inside a command buffer, encode order is the order its commands run in: [`Marks`] keeps what
 //! the command buffer did to the placements it touched, and a write of one that a link was
@@ -249,6 +256,20 @@ impl Placement {
     fn key(&self) -> usize {
         std::ptr::from_ref(self) as usize
     }
+
+    /// Its write, in the order the device's one queue runs it: its staleness clears and its
+    /// texture links turn stale. A texture that took part only for the move it owed takes none
+    /// once written.
+    fn written(&self) {
+        self.stale.store(false, Relaxed);
+        let links = lock(&self.links);
+        for link in links.textures.iter() {
+            link.stale.store(true, Relaxed);
+        }
+        if !links.take_part() && self.linked.swap(false, Relaxed) {
+            self.heap.linked(false);
+        }
+    }
 }
 
 impl Drop for Placement {
@@ -431,15 +452,7 @@ pub(crate) fn stage(
         .filter_map(|place| place.moved.map(Moved::barrier))
         .collect();
     for place in &part.writes {
-        place.stale.store(false, Relaxed);
-        let links = lock(&place.links);
-        for link in links.textures.iter() {
-            link.stale.store(true, Relaxed);
-        }
-        // A texture that took part only for the move it owed takes none once written.
-        if !links.take_part() && place.linked.swap(false, Relaxed) {
-            place.heap.linked(false);
-        }
+        place.written();
     }
     if moves.is_empty() {
         return Ok(None);
@@ -471,6 +484,32 @@ pub(crate) fn stage(
         core.counters.count(Metric::HeapMoves);
     }
     Ok(Some(command))
+}
+
+/// A host write of the heap texture placed as `place` (`Texture::replace_region`), recorded into
+/// `command`, its upload's, under the work lock, ahead of the write's copy: where the texture is
+/// stale, as the submit thread has staged the segments, its move from undefined, as [`record`]
+/// records it, counted (`Metrics::heap_moves`); then its write ([`Placement::written`]). Nothing
+/// where it takes no part.
+///
+/// # Safety
+///
+/// `command` is recording outside a rendering, under the work lock, and its upload keeps the
+/// texture until it retires.
+pub(crate) unsafe fn host_write(core: &Core, command: vk::CommandBuffer, place: &Placement) {
+    if !place.linked() {
+        return;
+    }
+    if let Some(moved) = place.moved.filter(|_| place.owes_move()) {
+        let counters = &core.counters;
+        // SAFETY: the caller's contract.
+        unsafe {
+            record(&core.device, command, &[moved.barrier()], &mut |m| {
+                counters.count(m)
+            })
+        };
+    }
+    place.written();
 }
 
 /// Records `moves`, heap textures' moves from undefined ([`Marks::used`]), into `command`, the
