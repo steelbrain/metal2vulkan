@@ -1,0 +1,374 @@
+{
+  "format": 1,
+  "case": "compressed-small-levels-bc3-rgba",
+  "suite_version": 1,
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "program",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "6a0299c52c7f4cbdc219a273a5a1cf3b20d64b8dc7a05c31dd7a9faee7cb3cc7"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "work",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "t2t/levels-8-to-11",
+                  "observed": {
+                    "value": {
+                      "bytes": "3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d2anaCjpqmsr7K1uLu+wcTHq66xtLe6vcDDxsnMz9LV2Ly/wsXIy87R1Nfa3eDj5uk="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 80
+                          }
+                        },
+                        "element": "u8",
+                        "row_offset": 0,
+                        "row_elements": 80,
+                        "row_pitch": 80,
+                        "rows": 1,
+                        "image_pitch": 80,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "b2t/levels-8-to-11",
+                  "observed": {
+                    "value": {
+                      "bytes": "3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d2anaCjpqmsr7K1uLu+wcTHq66xtLe6vcDDxsnMz9LV2Ly/wsXIy87R1Nfa3eDj5uk="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 80
+                          }
+                        },
+                        "element": "u8",
+                        "row_offset": 0,
+                        "row_elements": 80,
+                        "row_pitch": 80,
+                        "rows": 1,
+                        "image_pitch": 80,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "replace/levels-8-to-11",
+                  "observed": {
+                    "value": {
+                      "bytes": "3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d2anaCjpqmsr7K1uLu+wcTHq66xtLe6vcDDxsnMz9LV2Ly/wsXIy87R1Nfa3eDj5uk="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 80
+                          }
+                        },
+                        "element": "u8",
+                        "row_offset": 0,
+                        "row_elements": 80,
+                        "row_pitch": 80,
+                        "rows": 1,
+                        "image_pitch": 80,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "t2b/level-9",
+                  "observed": {
+                    "value": {
+                      "bytes": "mp2go6aprK+ytbi7vsHEx+7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7g=="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 64
+                          }
+                        },
+                        "element": "u8",
+                        "row_offset": 0,
+                        "row_elements": 64,
+                        "row_pitch": 64,
+                        "rows": 1,
+                        "image_pitch": 64,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "t2b/level-10",
+                  "observed": {
+                    "value": {
+                      "bytes": "q66xtLe6vcDDxsnMz9LV2O7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7g=="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 64
+                          }
+                        },
+                        "element": "u8",
+                        "row_offset": 0,
+                        "row_elements": 64,
+                        "row_pitch": 64,
+                        "rows": 1,
+                        "image_pitch": 64,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "t2b/level-11",
+                  "observed": {
+                    "value": {
+                      "bytes": "vL/CxcjLztHU19rd4OPm6e7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7g=="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 64
+                          }
+                        },
+                        "element": "u8",
+                        "row_offset": 0,
+                        "row_elements": 64,
+                        "row_pitch": 64,
+                        "rows": 1,
+                        "image_pitch": 64,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "get/level-9",
+                  "observed": {
+                    "value": {
+                      "bytes": "mp2go6aprK+ytbi7vsHEx+7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7g=="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 64
+                          }
+                        },
+                        "element": "u8",
+                        "row_offset": 0,
+                        "row_elements": 64,
+                        "row_pitch": 64,
+                        "rows": 1,
+                        "image_pitch": 64,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "get/level-10",
+                  "observed": {
+                    "value": {
+                      "bytes": "q66xtLe6vcDDxsnMz9LV2O7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7g=="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 64
+                          }
+                        },
+                        "element": "u8",
+                        "row_offset": 0,
+                        "row_elements": 64,
+                        "row_pitch": 64,
+                        "rows": 1,
+                        "image_pitch": 64,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "get/level-11",
+                  "observed": {
+                    "value": {
+                      "bytes": "vL/CxcjLztHU19rd4OPm6e7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7g=="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 64
+                          }
+                        },
+                        "element": "u8",
+                        "row_offset": 0,
+                        "row_elements": 64,
+                        "row_pitch": 64,
+                        "rows": 1,
+                        "image_pitch": 64,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "statuses",
+                  "observed": {
+                    "value": {
+                      "lines": [
+                        "Completed",
+                        "Completed",
+                        "Completed"
+                      ]
+                    }
+                  }
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": {
+        "stopped": {
+          "call": "work",
+          "message": "Copy From Buffer Validation\n(destinationOrigin.y + sourceSize.height)(4) must be <= height(2).\nCopy From Buffer Validation\n(destinationOrigin.x + sourceSize.width)(4) must be <= width(2).\n(destinationOrigin.y + sourceSize.height)(4) must be <= height(1).\nCopy From Buffer Validation\n(destinationOrigin.x + sourceSize.width)(4) must be <= width(1).\n(destinationOrigin.y + sourceSize.height)(4) must be <= height(1)."
+        }
+      }
+    }
+  ],
+  "times": [
+    {
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 4.82",
+      "instrument": 242,
+      "times": {
+        "case": "compressed-small-levels-bc3-rgba",
+        "calls": 1,
+        "in_calls": 5311833,
+        "on_cpu": 317250,
+        "blocked": 4971291,
+        "elsewhere": 4342792,
+        "spend": 9654625,
+        "spend_least": 9481249,
+        "spend_most": 12481126,
+        "per_call": [
+          {
+            "call": "work",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 5311833,
+            "on_cpu": 317250,
+            "blocked": 4971291,
+            "wall_least": 5211792,
+            "wall_most": 7037959,
+            "wall_total": 5311833,
+            "on_cpu_total": 317250,
+            "blocked_total": 4971291
+          }
+        ]
+      }
+    }
+  ]
+}

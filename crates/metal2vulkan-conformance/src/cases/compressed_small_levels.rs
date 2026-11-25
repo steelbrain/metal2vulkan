@@ -151,7 +151,7 @@ impl CompressedSmallLevels {
 
     /// The program, in three command buffers so each one's copies read what the one before wrote:
     /// the textures written; each small level's block copied by each call at 4 x 4; the
-    /// destinations' levels 8 to 11 copied out. Then every read-back, in the order [`reads`]
+    /// destinations' levels 8 to 11 copied out. Then every read-back, in the order `reads`
     /// names.
     pub fn program(&self) -> Work {
         let Format { format, block, .. } = *self.format();
@@ -406,6 +406,47 @@ mod tests {
                 assert_eq!(fnv(&one(level, block)), hash, "{block} level {level}");
                 assert_eq!(fnv(&read_out(level, block)), out, "{block} level {level}");
             }
+        }
+    }
+
+    /// Metal's recorded bytes are the model's at every site: each level's block whole where the
+    /// destination is a texture, the block and then the buffer's own bytes where it is a buffer.
+    #[test]
+    fn the_recorded_copies_are_the_model() {
+        for case in all() {
+            let (name, block) = (case.name(), case.format().block);
+            let recording = crate::recording::read(name).unwrap_or_else(|why| {
+                panic!("no recording of {name}: {why}; run `conformance record`")
+            });
+            let mut differ = Vec::new();
+            for answer in &recording.answers {
+                for outcome in &answer.outcomes {
+                    for (at, (site, _)) in reads(block).into_iter().enumerate() {
+                        let model = match at {
+                            0..3 => landed(block),
+                            _ => read_out(*SMALL.start() + (at as u64 - 3) % 3, block),
+                        };
+                        let Some(node) = outcome.transcript.root.child(&site) else {
+                            differ.push(format!("{name}: no site {site}"));
+                            continue;
+                        };
+                        let Value::Bytes(bytes) = &node.observed.value else {
+                            differ.push(format!("{name}: {site}: no bytes"));
+                            continue;
+                        };
+                        if *bytes != model {
+                            differ.push(format!(
+                                "{name}: {site}: Metal holds {bytes:02x?}, the model {model:02x?}"
+                            ));
+                        }
+                    }
+                }
+            }
+            assert!(
+                differ.is_empty(),
+                "Metal's recorded copies are not the model:\n{}",
+                differ.join("\n")
+            );
         }
     }
 
