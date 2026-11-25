@@ -247,8 +247,8 @@ impl BlitCommandEncoder {
         if destination.host_reads() {
             building.wrote_host();
         }
-        if let Some(atom) = building.atom() {
-            building.wrote_shared(destination.shared_range(atom));
+        if let Some(held) = building.coherence() {
+            held.wrote(destination.shared_range(held.atom));
         }
         building.overs_after(overs, false);
         let (read, write) = match copy.shared {
@@ -492,8 +492,8 @@ impl BlitCommandEncoder {
         if destination.is_shared() {
             building.wrote_host();
         }
-        if let Some(atom) = building.atom() {
-            building.wrote_shared(destination.shared_range(atom));
+        if let Some(held) = building.coherence() {
+            held.wrote(destination.shared_range(held.atom));
         }
         let earlier = [memory_barrier(Reach::Commands)];
         let written = [written()];
@@ -620,10 +620,10 @@ impl BlitCommandEncoder {
         if host {
             building.wrote_host();
         }
-        if let Some(atom) = building.atom() {
-            building.wrote_shared(match into_image {
-                true => texture.shared_range(atom),
-                false => buffer.shared_range(atom),
+        if let Some(held) = building.coherence() {
+            held.wrote(match into_image {
+                true => texture.shared_range(held.atom),
+                false => buffer.shared_range(held.atom),
             });
         }
         let (layout, access) = match into_image {
@@ -742,8 +742,8 @@ impl BlitCommandEncoder {
         if buffer.is_shared() {
             building.wrote_host();
         }
-        if let Some(atom) = building.atom() {
-            building.wrote_shared(buffer.shared_range(atom));
+        if let Some(held) = building.coherence() {
+            held.wrote(buffer.shared_range(held.atom));
         }
         let earlier = [memory_barrier(Reach::Commands)];
         let written = [written()];
@@ -899,8 +899,8 @@ impl BlitCommandEncoder {
         if texture.host_reads() {
             building.wrote_host();
         }
-        if let Some(atom) = building.atom() {
-            building.wrote_shared(texture.shared_range(atom));
+        if let Some(held) = building.coherence() {
+            held.wrote(texture.shared_range(held.atom));
         }
         building.overs_after(overs, false);
         use vk::AccessFlags2 as A;
@@ -1115,12 +1115,12 @@ impl BlitCommandEncoder {
             // Marked after `ordered_command`, as a copy into a Shared buffer is. The copy writes
             // the block of its bytes, which the host reads (`crate::coherence`).
             building.wrote_host();
-            if let Some(atom) = building.atom() {
-                building.wrote_shared(crate::coherence::Range::of_block(
+            if let Some(held) = building.coherence() {
+                held.wrote(crate::coherence::Range::of_block(
                     &block.memory,
                     buffer.offset(),
                     buffer.length(),
-                    atom,
+                    held.atom,
                 ));
             }
             let earlier = [memory_barrier(Reach::Commands)];

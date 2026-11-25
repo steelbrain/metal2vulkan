@@ -3,7 +3,7 @@
 
 use crate::alias::{Aliased, Marks, Placement};
 use crate::buffer::{Buffer, BufferInner, BufferObject};
-use crate::coherence::{self, Range, Ranges};
+use crate::coherence::{self, Ranges};
 use crate::complete::Completion;
 use crate::counters::{Metric, Stage, Tally};
 use crate::device::{lock, Core, Device};
@@ -294,12 +294,10 @@ pub(crate) struct Gpu {
     /// The occlusion queries of its render encoders' visibility results, from pools of its own,
     /// each given back to the device as it retires (`crate::visibility`).
     pub(crate) queries: Queries,
-    /// The Shared memory its commands may write, as they name it (`crate::coherence`).
-    pub(crate) writes: coherence::Writes,
-    /// What its commands reach of Shared memory, as its commit found it: each submission that
-    /// carries a segment of it flushes it all first, and its retirement settles what they may
-    /// write (`crate::coherence`). `None` before its commit and where it reaches none.
-    pub(crate) shared: Option<Arc<Ranges>>,
+    /// What it holds of Shared memory, where the device's Shared type is not host-coherent:
+    /// what its commands may write and, from its commit, what they reach (`crate::coherence`).
+    /// `None` where the type is host-coherent.
+    pub(crate) coherence: Option<coherence::Recorded>,
 }
 
 impl Gpu {
@@ -403,6 +401,7 @@ impl CommandBuffer {
     /// A new command buffer of `queue`, which counted it live, keeping its objects in `kept`,
     /// empty, the lists of a retired one where the queue had them.
     pub(crate) fn new(queue: Arc<QueueInner>, device: Device, kept: Objects) -> CommandBuffer {
+        let coherence = (device.core().coherence.as_ref()).map(coherence::Coherence::recording);
         CommandBuffer {
             inner: Arc::new(CbInner {
                 queue,
@@ -424,8 +423,7 @@ impl CommandBuffer {
                             fences: Fences::default(),
                             executed: Vec::new(),
                             queries: Queries::default(),
-                            writes: coherence::Writes::default(),
-                            shared: None,
+                            coherence,
                         },
                         handlers: Handlers {
                             scheduled: Vec::new(),
@@ -663,12 +661,12 @@ impl CommandBuffer {
         // is not host-coherent: no command is recorded after it (`crate::coherence`).
         let core = self.building(|building| {
             let core = Arc::clone(building.device.core());
-            if let Some(coherence) = &core.coherence {
-                let gpu = &mut building.gpu;
-                let shared = Ranges::of(&gpu.kept, &gpu.blocks, &gpu.writes, coherence.atom);
-                gpu.shared = shared.map(Arc::new);
-                if let Some(shared) = &gpu.shared {
-                    coherence.committed(shared);
+            let gpu = &mut building.gpu;
+            if let Some(held) = &mut gpu.coherence {
+                let reach = Ranges::of(&gpu.kept, &gpu.blocks, &held.writes, held.atom);
+                held.reach = reach.map(Arc::new);
+                if let (Some(reach), Some(coherence)) = (&held.reach, &core.coherence) {
+                    coherence.committed(reach);
                 }
             }
             Ok(core)
@@ -913,13 +911,21 @@ impl CommandBuffer {
             // What a test records may write anything the host reads.
             building.wrote_host();
             f(&building.device.core().device, command);
-            let atom = building.atom();
             for buffer in buffers {
                 building.keep(buffer);
-                building.wrote_shared(atom.and_then(|atom| buffer.shared_range(atom)));
+                if let Some(held) = building.coherence() {
+                    held.wrote(buffer.shared_range(held.atom));
+                }
             }
             Ok(())
         })
+    }
+
+    /// For the device tests: whether it holds Shared memory's coherence state as it records
+    /// (`crate::coherence`), which only a device whose Shared type is not host-coherent builds.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn holds_coherence_for_test(&self) -> Result<bool, Error> {
+        self.building(|building| Ok(building.gpu.coherence.is_some()))
     }
 
     /// For the device tests: the checks of heap placements at the head of each of its segments
@@ -1231,17 +1237,12 @@ impl Building {
         self.host_written = true;
     }
 
-    /// A command may write `range` of Shared memory, which is settled before the host sees the
-    /// command buffer's progress (`crate::coherence`); nothing for `None`.
-    pub(crate) fn wrote_shared(&mut self, range: Option<Range>) {
-        self.gpu.writes.add(range);
-    }
-
-    /// The device's `nonCoherentAtomSize`, which Shared ranges are widened to, where the Shared
-    /// type is not host-coherent; `None` where it is, and no range is named
-    /// (`crate::coherence`).
-    pub(crate) fn atom(&self) -> Option<u64> {
-        (self.device.core().coherence.as_ref()).map(|coherence| coherence.atom)
+    /// What it holds of Shared memory, where the device's Shared type is not host-coherent: a
+    /// range its commands may write, named there, is settled before the host sees its progress,
+    /// widened to the atom it holds (`crate::coherence`). `None` where the type is host-coherent,
+    /// and no range is named.
+    pub(crate) fn coherence(&mut self) -> Option<&mut coherence::Recorded> {
+        self.gpu.coherence.as_mut()
     }
 
     /// A dispatch wrote: an indirect dispatch after it needs a barrier that reaches its
@@ -1802,9 +1803,14 @@ pub(crate) fn retire(
     // The GPU's writes to Shared memory are the host's before anything tells it the command buffer
     // completed: its status, a wait for it, its handlers (`crate::coherence`). Settled while it
     // still keeps every block they lie in.
-    if let (Some(shared), Some(coherence)) = (&gpu.shared, &core.coherence) {
-        coherence.settle(core, &shared.written);
-        coherence.retired(shared);
+    if let Some(coherence::Recorded {
+        reach: Some(reach), ..
+    }) = &gpu.coherence
+    {
+        if let Some(coherence) = &core.coherence {
+            coherence.settle(core, &reach.written);
+            coherence.retired(reach);
+        }
     }
     // What was released while it was in flight may go (`crate::memory::Wait`).
     core.pool.ended();
@@ -1844,14 +1850,13 @@ pub(crate) fn retire(
         fences,
         executed,
         queries,
-        writes,
-        shared,
+        coherence,
     } = gpu;
     if let Some(recorder) = recorder {
         core.recorders.give_back(core, recorder);
     }
     ring.give_back(core);
-    drop((segments, blocks, images, fences, executed, writes, shared));
+    drop((segments, blocks, images, fences, executed, coherence));
     queries.give_back(core);
     kept.clear();
     if let Some(pair) = stamps {

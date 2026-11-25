@@ -71,6 +71,14 @@ mod on_device {
         let private = (device.take_block(MemoryClass::Private, 4096)).expect("a Private block");
         let unseen = (device.new_buffer(private.id, 0, LEN, None)).expect("a buffer");
         let queue = device.new_command_queue(4).expect("a queue");
+        let recording: CommandBuffer = queue.command_buffer().expect("a command buffer");
+        assert_eq!(
+            (recording.holds_coherence_for_test())
+                .unwrap_or_else(|error| panic!("{name}: {error}")),
+            atom.is_some(),
+            "{name}: a command buffer holds the coherence state exactly where its device does"
+        );
+        drop(recording);
         // The first fill of each, so the second meets no first use.
         fill(name, &queue, &buffer, 0..LEN, 1);
         fill(name, &queue, &unseen, 0..LEN, 1);

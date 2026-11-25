@@ -831,8 +831,7 @@ impl ComputeCommandEncoder {
         usage: ResourceUsage,
     ) -> Result<(), Error> {
         let building = self.building();
-        let atom = building.atom();
-        let (id, shared, unstored, texture, span, place, written) = match resource {
+        let (id, shared, unstored, texture, span, place) = match resource {
             Resource::Buffer(buffer) => {
                 if !buffer.is_of(building.device.core()) {
                     return Err(Error::Refused(Refusal::OtherDevice));
@@ -845,7 +844,6 @@ impl ComputeCommandEncoder {
                     None,
                     Some(buffer.span()),
                     BufferObject::object(buffer).placement().cloned(),
-                    atom.and_then(|atom| buffer.shared_range(atom)),
                 )
             }
             Resource::Texture(texture) => {
@@ -864,7 +862,6 @@ impl ComputeCommandEncoder {
                     Some(lent),
                     None,
                     TextureObject::object(texture).placement().cloned(),
-                    atom.and_then(|atom| texture.shared_range(atom)),
                 )
             }
             Resource::IndirectCommandBuffer(commands) => {
@@ -878,10 +875,16 @@ impl ComputeCommandEncoder {
         let Some(access) = usage.access() else {
             return Ok(());
         };
-        // What it writes of Shared memory is settled before the host sees its progress
-        // (`crate::coherence`).
-        if access.writes() {
-            self.building().wrote_shared(written);
+        // What it writes of Shared memory is settled before the host sees its progress, where
+        // the Shared type is not host-coherent (`crate::coherence`).
+        if let Some(held) = self.building().coherence() {
+            if access.writes() {
+                held.wrote(match resource {
+                    Resource::Buffer(buffer) => buffer.shared_range(held.atom),
+                    Resource::Texture(texture) => texture.shared_range(held.atom),
+                    Resource::IndirectCommandBuffer(_) => None,
+                });
+            }
         }
         self.declared_shared_write |= access.writes() && shared;
         if access.writes() && self.declared_unstored_write.is_none() {
@@ -1219,11 +1222,10 @@ impl ComputeCommandEncoder {
             self.facts.module = Some(module);
             // The Shared memory its bound slots write, once for the facts: the bindings are the
             // same until they change, which finds the facts again (`crate::coherence`).
-            if self.facts.host {
-                let building = recording(&mut self.building);
-                if let Some(atom) = building.atom() {
-                    for range in shared_writes(&self.slots, &self.textures, interface, atom) {
-                        building.wrote_shared(Some(range));
+            if let Some(held) = (self.building.as_mut()).and_then(Building::coherence) {
+                if self.facts.host {
+                    for range in shared_writes(&self.slots, &self.textures, interface, held.atom) {
+                        held.wrote(Some(range));
                     }
                 }
             }

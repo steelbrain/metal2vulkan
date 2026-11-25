@@ -542,13 +542,22 @@ struct Batch {
     reached: Vec<Arc<BufferInner>>,
     /// The images of the Direct3D 11 planes its segments use (`Segment::planes`).
     planes: Vec<Arc<Image>>,
-    /// What each command buffer with a segment in it reaches of Shared memory, once each, and the
-    /// Shared ranges its copy-ins read: flushed before it is submitted (`crate::coherence`).
-    shared: Vec<Arc<Ranges>>,
-    copied: Vec<Range>,
+    /// What it flushes before it is submitted, where the Shared type is not host-coherent and
+    /// a command buffer with a segment in it or a copy-in it carries reaches Shared memory
+    /// (`crate::coherence`); `None` where none does.
+    flushes: Option<Flushes>,
     /// The first failed call recording a command buffer of moves that leads a segment of it
     /// (`crate::alias::stage`), which loses the device.
     lost: Option<DeviceLoss>,
+}
+
+/// What a batch flushes before it is submitted, where the Shared type is not host-coherent
+/// (`crate::coherence`): what each command buffer with a segment in it reaches of Shared memory,
+/// once each, and the Shared ranges its copy-ins read.
+#[derive(Default)]
+struct Flushes {
+    reached: Vec<Arc<Ranges>>,
+    copied: Vec<Range>,
 }
 
 /// One part of a submit info: a segment's or an upload's commands and its signals, and for a
@@ -1894,8 +1903,7 @@ impl WorkState {
             wrote: Vec::new(),
             reached: Vec::new(),
             planes: Vec::new(),
-            shared: Vec::new(),
-            copied: Vec::new(),
+            flushes: None,
             lost: None,
         });
         if leads {
@@ -1909,9 +1917,13 @@ impl WorkState {
             group.unseen += 1;
         }
         group.leans.join(&segment.overs);
-        if let Some(shared) = &pending.gpu.shared {
-            if !(group.shared.iter()).any(|held| Arc::ptr_eq(held, shared)) {
-                group.shared.push(Arc::clone(shared));
+        if let Some(coherence::Recorded {
+            reach: Some(reach), ..
+        }) = &pending.gpu.coherence
+        {
+            let flushes = group.flushes.get_or_insert_with(Flushes::default);
+            if !(flushes.reached.iter()).any(|held| Arc::ptr_eq(held, reach)) {
+                flushes.reached.push(Arc::clone(reach));
             }
         }
         for buffer in &segment.managed_written {
@@ -2052,7 +2064,8 @@ impl WorkState {
         for (_, copy_in) in &taken {
             copy_in.backs(&mut batch.backs);
             if let Some(coherence) = &core.coherence {
-                batch.copied.extend(copy_in.shared_ranges(coherence.atom));
+                let flushes = batch.flushes.get_or_insert_with(Flushes::default);
+                flushes.copied.extend(copy_in.shared_ranges(coherence.atom));
             }
         }
         // The copies back owed by writes submitted before it to the Managed buffers its segments
@@ -2466,8 +2479,7 @@ impl Batch {
             wrote: Vec::new(),
             reached: Vec::new(),
             planes: Vec::new(),
-            shared: Vec::new(),
-            copied: Vec::new(),
+            flushes: None,
             lost: None,
         }
     }
@@ -2547,8 +2559,7 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
         held,
         copy_ins,
         mut planes,
-        shared,
-        copied,
+        flushes,
         lost,
         ..
     } = batch;
@@ -2698,22 +2709,21 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
         // The host's writes to the Shared memory its command buffers and copy-ins reach are the
         // GPU's before it runs, where the Shared type is not host-coherent (`crate::coherence`).
         // One command buffer and no copy-in flushes its own ranges, merged at its commit.
-        if let Some(coherence) = &core.coherence {
-            match (copied.is_empty(), &shared[..]) {
-                (true, [one]) => coherence.flush(core, &one.reached),
-                _ => {
-                    let mut flushed = copied;
-                    flushed.extend(
-                        shared
-                            .iter()
-                            .flat_map(|ranges| ranges.reached.iter().copied()),
-                    );
-                    coherence::merge(&mut flushed);
-                    coherence.flush(core, &flushed);
+        if let Some(Flushes { reached, copied }) = flushes {
+            if let Some(coherence) = &core.coherence {
+                match (copied.is_empty(), &reached[..]) {
+                    (true, [one]) => coherence.flush(core, &one.reached),
+                    _ => {
+                        let mut flushed = copied;
+                        flushed.extend(
+                            (reached.iter()).flat_map(|ranges| ranges.reached.iter().copied()),
+                        );
+                        coherence::merge(&mut flushed);
+                        coherence.flush(core, &flushed);
+                    }
                 }
             }
         }
-        drop(shared);
         let asked = times::host_time();
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         (core.work.asking).store(true, Ordering::SeqCst);

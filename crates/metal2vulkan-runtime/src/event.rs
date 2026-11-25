@@ -43,7 +43,8 @@ pub(crate) struct EventInner {
     /// Signalled whenever the value the host sees rises, and at a loss.
     changed: Condvar,
     /// The highest value the GPU's signals raised before which the Shared memory command buffers
-    /// in flight may write was settled for the host (`crate::coherence`).
+    /// in flight may write was settled for the host (`crate::coherence`); 0, and never read, where
+    /// the Shared type is host-coherent.
     settled: AtomicU64,
 }
 
@@ -143,6 +144,12 @@ impl SharedEvent {
     /// what the GPU wrote before its signal.
     pub fn signaled_value(&self) -> u64 {
         let inner = &self.event.inner;
+        let Some(coherence) = &inner.core.coherence else {
+            let state = lock(&inner.state);
+            let floor = state.observed.max(state.floor);
+            // A lost device answers with what was seen before the loss.
+            return inner.counter().map_or(floor, |counter| counter.max(floor));
+        };
         let (observed, floor) = {
             let state = lock(&inner.state);
             (state.observed, state.floor)
@@ -151,7 +158,7 @@ impl SharedEvent {
         let signalled = inner
             .counter()
             .map_or(observed, |counter| counter.max(observed));
-        inner.seen(signalled);
+        inner.seen(coherence, signalled);
         signalled.max(floor)
     }
 
@@ -193,16 +200,29 @@ impl SharedEvent {
         let deadline = Instant::now().checked_add(timeout);
         let mut state = lock(&inner.state);
         loop {
-            let counter = match state.floor.max(state.observed) >= value {
-                true => None,
-                false => inner.counter().ok().filter(|&counter| counter >= value),
-            };
-            if counter.is_some() || state.floor.max(state.observed) >= value {
-                // The GPU's writes before the signals seen are the host's first.
-                let signalled = counter.unwrap_or(0).max(state.observed);
-                drop(state);
-                inner.seen(signalled);
-                return Ok(true);
+            match &inner.core.coherence {
+                None => {
+                    if state.floor.max(state.observed) >= value
+                        || inner.counter().is_ok_and(|counter| counter >= value)
+                    {
+                        return Ok(true);
+                    }
+                }
+                Some(coherence) => {
+                    // What the GPU's signals raised the value to, where the wait is met: their
+                    // writes before it are the host's first.
+                    let met = match state.floor.max(state.observed) >= value {
+                        true => Some(state.observed),
+                        false => (inner.counter().ok())
+                            .filter(|&counter| counter >= value)
+                            .map(|counter| counter.max(state.observed)),
+                    };
+                    if let Some(signalled) = met {
+                        drop(state);
+                        inner.seen(coherence, signalled);
+                        return Ok(true);
+                    }
+                }
             }
             if state.lost {
                 return Ok(false);
@@ -269,14 +289,11 @@ impl EventInner {
         Arc::ptr_eq(&self.core, core)
     }
 
-    /// Before the host sees `signalled`, a value the GPU's signals raised: where it is above the
-    /// last value settled, the Shared memory the command buffers in flight may write is flushed
-    /// and invalidated (`crate::coherence::Coherence::signal_seen`), then it is the value
-    /// settled.
-    fn seen(&self, signalled: u64) {
-        let Some(coherence) = &self.core.coherence else {
-            return;
-        };
+    /// Before the host sees `signalled`, a value the GPU's signals raised, on a device whose
+    /// Shared type is not host-coherent: where it is above the last value settled, the Shared
+    /// memory the command buffers in flight may write is flushed and invalidated
+    /// (`crate::coherence::Coherence::signal_seen`), then it is the value settled.
+    fn seen(&self, coherence: &crate::coherence::Coherence, signalled: u64) {
         if signalled > self.settled.load(Ordering::Acquire) {
             coherence.signal_seen(&self.core);
             self.settled.fetch_max(signalled, Ordering::AcqRel);

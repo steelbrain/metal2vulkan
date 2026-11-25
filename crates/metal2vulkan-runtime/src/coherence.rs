@@ -135,7 +135,7 @@ pub(crate) struct Writes {
 
 impl Writes {
     /// A command may write `range`; nothing for `None`.
-    pub(crate) fn add(&mut self, range: Option<Range>) {
+    fn add(&mut self, range: Option<Range>) {
         let Some(range) = range else {
             return;
         };
@@ -147,6 +147,27 @@ impl Writes {
             merge(&mut self.ranges);
         }
         self.ranges.push(range);
+    }
+}
+
+/// What a command buffer holds of Shared memory, only where the device's Shared type is not
+/// host-coherent ([`Coherence::recording`]): a device whose type is holds none, and its command
+/// buffers name no range.
+pub(crate) struct Recorded {
+    /// The device's `nonCoherentAtomSize`, which its ranges widen to.
+    pub(crate) atom: u64,
+    /// What its commands may write, as they name it.
+    pub(crate) writes: Writes,
+    /// What its commands reach, as its commit found it: each submission that carries a segment of
+    /// it flushes it all first, and its retirement settles what they may write. `None` before its
+    /// commit and where it reaches none.
+    pub(crate) reach: Option<Arc<Ranges>>,
+}
+
+impl Recorded {
+    /// A command may write `range`; nothing for `None`.
+    pub(crate) fn wrote(&mut self, range: Option<Range>) {
+        self.writes.add(range);
     }
 }
 
@@ -220,6 +241,15 @@ impl Coherence {
             atom: atom.max(1),
             flight: Mutex::new(Vec::new()),
         })
+    }
+
+    /// What a command buffer holds of Shared memory as its recording starts: nothing written yet.
+    pub(crate) fn recording(&self) -> Recorded {
+        Recorded {
+            atom: self.atom,
+            writes: Writes::default(),
+            reach: None,
+        }
     }
 
     /// A command buffer committed with `ranges`: while it lives in flight, a shared event's signal
