@@ -42,7 +42,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1333 |
 | distinct SDK items the Metal leg reaches, of any status | 812 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 7979 |
+| ledger rows (a case whose gap is recorded) | 7983 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -4469,6 +4469,10 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `shared-exponent-update-half` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatRGB9E5Float, so rt binds no such texture to a read_write … |
 | `shared-exponent-write-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatRGB9E5Float, so rt binds no such texture to a read_write … |
 | `shared-exponent-write-half` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatRGB9E5Float, so rt binds no such texture to a read_write … |
+| `stencil-output` | A known gap of the runtime (its README, Known gaps of render pipeline states): NVIDIA's 615 and 620 drivers do not list `VK_EXT_shader_stencil_export`, so the r… |
+| `stencil-output` | Follows from the refused draw 3 (the row above): the stencil holds draw 1's output, drawn by bits, and draw 2's increment, where Metal's draw 3 has applied its … |
+| `stencil-output-loaded` | A known gap of the runtime (its README, Known gaps of render pipeline states): NVIDIA's 615 and 620 drivers do not list `VK_EXT_shader_stencil_export`, so the r… |
+| `stencil-output-loaded` | Follows from the refused draw 3 (the row above): the stencil holds draw 1's output, drawn by bits, and draw 2's increment, where Metal's draw 3 has applied its … |
 | `surface-fills-over-planes-and-buffers` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture descriptor of a pixel format above 26… |
 | `surface-textures-420v-chroma-rg8` | rt's own gap: this device lays the case's two-plane surface in place under neither the dma-buf nor the opaque fd (53626: 0 in place, 2 copied), so the surface t… |
 | `surface-textures-420v-luma-r8` | rt's own gap: this device lays the case's two-plane surface in place under neither the dma-buf nor the opaque fd (53626: 0 in place, 2 copied), so the surface t… |
