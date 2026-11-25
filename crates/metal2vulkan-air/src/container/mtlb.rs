@@ -1,7 +1,8 @@
 //! MTLB: header, function table, extended header, per-function public/private metadata, and the
 //! bitcode section.
 //!
-//! Layout (little-endian, packed), as observed in Apple output of formats 2.7–2.9:
+//! Layout (little-endian, packed), as observed in Apple output of formats 2.7–2.9, and where
+//! format 2.2 (an older toolchain's) differs, as observed in one library of that format:
 //!
 //! - Header (0x58 bytes): `MTLB`, `platform u16`, `version u16 u16`, `file_type u8` (0 an
 //!   executable library, 1 a Core Image kernel library, 2 a dynamic library), `os u8`,
@@ -10,11 +11,26 @@
 //!   metadata, and bitcode sections.
 //! - Function list: `u32 count`, then `count` entries of `u32 entry_size` (counting itself) and a
 //!   tag list; the list size in the header is the sum of the entry sizes. The extended-header tag
-//!   list follows the last entry.
+//!   list follows the last entry. Format 2.2 has none: its public-metadata section starts where
+//!   the last entry ends. So where a section that holds bytes starts at the last entry's end, the
+//!   library has no extended-header tags.
 //! - Per function, `OFFT` holds its public-metadata, private-metadata, and bitcode offsets relative
 //!   to their section bases. Each metadata record is `u32 size` and a tag list of exactly that
 //!   size. The bitcode is `MDSZ` bytes of wrapped bitcode, and `HASH` is its SHA-256, except in a
 //!   Core Image kernel library (below).
+//! - Format 2.2's entries carry no `MDSZ` (`NAME`, `TYPE`, `HASH`, `OFFT`, `VERS`). Such a
+//!   function's bitcode runs from its start to the next function's start, or to the bitcode
+//!   section's end for the last module. That is the length `MDSZ` states where it is written: the
+//!   modules lie one after another, each a bitcode wrapper padded to a multiple of 16 bytes, and
+//!   `MDSZ` counts the padding (a probe, an M3 Max under macOS 27.0.1: in each module of a library
+//!   Apple's toolchain wrote, `MDSZ` is the distance to the next module's start and not the
+//!   wrapper's offset plus size). In the format 2.2 library, every function's `HASH` is the
+//!   SHA-256 of exactly those bytes, three of its seven modules being padded past the wrapper's
+//!   end. `HASH` is verified over that range as over an `MDSZ` range, so a module of any other
+//!   length is `HashMismatch`. Metal takes a library without `MDSZ` and runs its functions; without
+//!   any of the other five tags it makes no function that runs as written (the same probe,
+//!   `metal2vulkan-conformance`'s `probes/metallib_without_entry_tags.m`), and those stay
+//!   required.
 //! - A Core Image kernel library's `HASH` is 32 bytes that are not, in general, the SHA-256 of
 //!   the module its functions share. Apple's `metallib -cikernel` writes one value for every
 //!   function, which for some modules is the written module's SHA-256 and for others is not (the
@@ -331,7 +347,7 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Metallib<'_>, Error> {
     }
     // `count` is untrusted and only loosely bounded above, so nothing is reserved from it: the
     // list grows one entry at a time, and each entry is pushed only after its own bytes parsed.
-    let mut parsed = Vec::new();
+    let mut read = Vec::new();
     let mut at = entries_start;
     for _ in 0..count {
         let size = offset(u64::from(read_u32(file, at)?))?;
@@ -343,13 +359,33 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Metallib<'_>, Error> {
         if list_end != end {
             return Err(container_error(ContainerError::BadTag, at as u64));
         }
-        parsed.push(function(file, &header, at as u64, &list)?);
+        read.push(function(&header, at as u64, &list)?);
         at = end;
     }
     if at != entries_end {
         return Err(container_error(ContainerError::BadOffset, 32));
     }
-    let (extended, _) = tags::read_list(file, at, file.len())?;
+    // A module without `MDSZ` ends where the next one starts (the module docs).
+    let mut starts: Vec<u64> = read.iter().map(|e| e.bitcode_start).collect();
+    starts.sort_unstable();
+    starts.dedup();
+    let mut parsed = Vec::with_capacity(read.len());
+    for e in read {
+        parsed.push(e.with_bitcode(file, &header, &starts)?);
+    }
+    // No extended header where a section starts at the last entry's end (format 2.2).
+    let follows = [
+        header.public_metadata,
+        header.private_metadata,
+        header.bitcode,
+    ]
+    .into_iter()
+    .any(|s| s.size > 0 && s.offset == at as u64);
+    let extended = if follows {
+        Vec::new()
+    } else {
+        tags::read_list(file, at, file.len())?.0
+    };
     let mut linkage = linkage(file, &extended)?;
     if header.file_type == FILE_TYPE_DYNAMIC {
         let section = header.bitcode;
@@ -545,14 +581,75 @@ struct Parsed<'a> {
     private_at: u64,
 }
 
-/// Parse one function-table entry starting at `entry` from its tags. Metadata records are not read
-/// here (see [`records`]).
-fn function<'a>(
-    file: &'a [u8],
-    header: &MtlbHeader,
+/// A function-table entry's tags, read, before its bitcode range is known: a module without `MDSZ`
+/// ends where the next module starts, so its range waits for every entry's start.
+struct Entry<'a> {
+    name: &'a str,
+    stage: FunctionStage,
+    hash: Hash256,
+    air_version: (u16, u16),
+    language_version: (u16, u16),
+    raw_tags: Vec<RawTag<'a>>,
+    /// The function-table entry.
     entry: u64,
-    list: &[Tag<'a>],
-) -> Result<Parsed<'a>, Error> {
+    /// The function's bitcode, from `OFFT`.
+    bitcode_start: u64,
+    /// `MDSZ`, where the entry has one.
+    size: Option<u64>,
+    /// `OFFT`'s public-metadata offset, relative to the section.
+    public_at: u64,
+    /// `OFFT`'s private-metadata offset, relative to the section.
+    private_at: u64,
+}
+
+impl<'a> Entry<'a> {
+    /// The function over its bitcode: `MDSZ` bytes from its start, or without `MDSZ` the bytes up
+    /// to the next of `starts` (every function's start, sorted and deduplicated) or to the bitcode
+    /// section's end (the module docs).
+    fn with_bitcode(
+        self,
+        file: &'a [u8],
+        header: &MtlbHeader,
+        starts: &[u64],
+    ) -> Result<Parsed<'a>, Error> {
+        let start = self.bitcode_start;
+        let end = match self.size {
+            Some(size) => start.checked_add(size),
+            None => Some(
+                starts
+                    .get(starts.partition_point(|s| *s <= start))
+                    .copied()
+                    .unwrap_or_else(|| header.bitcode.end()),
+            ),
+        };
+        let bitcode = end
+            .filter(|e| *e <= header.bitcode.end())
+            .and_then(|e| Some((usize::try_from(start).ok()?, usize::try_from(e).ok()?)))
+            .and_then(|(s, e)| file.get(s..e))
+            .ok_or_else(|| container_error(ContainerError::BadOffset, self.entry))?;
+        Ok(Parsed {
+            function: LibraryFunction {
+                name: self.name,
+                stage: self.stage,
+                hash: self.hash,
+                air_version: self.air_version,
+                language_version: self.language_version,
+                bitcode,
+                public: FunctionPublicMetadata::default(),
+                private: Vec::new(),
+                raw_tags: self.raw_tags,
+            },
+            entry: self.entry,
+            bitcode_start: start,
+            public_at: self.public_at,
+            private_at: self.private_at,
+        })
+    }
+}
+
+/// Read one function-table entry starting at `entry` from its tags. Its bitcode range is resolved
+/// by [`Entry::with_bitcode`], and metadata records are read by [`records`].
+fn function<'a>(header: &MtlbHeader, entry: u64, list: &[Tag<'a>]) -> Result<Entry<'a>, Error> {
     let mut name = None;
     let mut stage = None;
     let mut hash = None;
@@ -589,35 +686,22 @@ fn function<'a>(
     }
     let missing = || container_error(ContainerError::MissingTag, entry);
     let (public_at, private_at, bitcode_at) = offsets.ok_or_else(missing)?;
-    let size = size.ok_or_else(missing)?;
     let (air_version, language_version) = versions.ok_or_else(missing)?;
-
     let bitcode_start = header
         .bitcode
         .offset
         .checked_add(bitcode_at)
         .ok_or_else(|| container_error(ContainerError::BadOffset, entry))?;
-    let bitcode = bitcode_start
-        .checked_add(size)
-        .map(|e| (bitcode_start, e))
-        .filter(|(_, e)| *e <= header.bitcode.end())
-        .and_then(|(s, e)| Some((usize::try_from(s).ok()?, usize::try_from(e).ok()?)))
-        .and_then(|(s, e)| file.get(s..e))
-        .ok_or_else(|| container_error(ContainerError::BadOffset, entry))?;
-    Ok(Parsed {
-        function: LibraryFunction {
-            name: name.ok_or_else(missing)?,
-            stage: stage.ok_or_else(missing)?,
-            hash: hash.ok_or_else(missing)?,
-            air_version,
-            language_version,
-            bitcode,
-            public: FunctionPublicMetadata::default(),
-            private: Vec::new(),
-            raw_tags,
-        },
+    Ok(Entry {
+        name: name.ok_or_else(missing)?,
+        stage: stage.ok_or_else(missing)?,
+        hash: hash.ok_or_else(missing)?,
+        air_version,
+        language_version,
+        raw_tags,
         entry,
         bitcode_start,
+        size,
         public_at,
         private_at,
     })

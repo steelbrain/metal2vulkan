@@ -390,7 +390,9 @@ pub enum ContainerError {
     BadTag,
     /// A tag that may appear once per function appears twice.
     DuplicateTag,
-    /// A function entry lacks a required tag (`NAME`, `TYPE`, `HASH`, `MDSZ`, `OFFT`, `VERS`).
+    /// A function entry lacks a required tag (`NAME`, `TYPE`, `HASH`, `OFFT`, `VERS`). `MDSZ` is not
+    /// required: without it, a function's bitcode runs to the next module's start (`container`'s
+    /// docs).
     MissingTag,
     /// Metal's own universal metallib (`0xCBFEBABE`) without the slice of its AIR.
     NoAirSlice,

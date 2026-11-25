@@ -66,19 +66,42 @@ pub fn metallib(functions: &[MtlbFunction<'_>]) -> Vec<u8> {
 /// [`metallib`] with `linkage`: its regions follow the bitcode, as in Apple's output.
 pub fn metallib_linked(functions: &[MtlbFunction<'_>], linkage: &MtlbLinkage<'_>) -> Vec<u8> {
     let file_type = if linkage.dynamic { 2 } else { 0 };
-    write(functions, linkage, file_type)
+    write(functions, linkage, file_type, Format::Current)
 }
 
 /// A Core Image kernel library (`metal -fcikernel`, `metallib -cikernel`): file type 1, its
 /// functions (Apple's toolchain tags each `TYPE` 5) sharing the first one's bitcode, written once,
 /// as in Apple's output (a probe).
 pub fn core_image_metallib(functions: &[MtlbFunction<'_>]) -> Vec<u8> {
-    write(functions, &MtlbLinkage::default(), 1)
+    write(functions, &MtlbLinkage::default(), 1, Format::Current)
 }
 
-/// The metallib of `functions` and `linkage` with header `file_type`; every type but an
-/// executable library's (0) shares the first function's bitcode.
-fn write(functions: &[MtlbFunction<'_>], linkage: &MtlbLinkage<'_>, file_type: u8) -> Vec<u8> {
+/// An executable library in the layout of format 2.2, an older toolchain's (as one library of that
+/// format is written): the header's version 2.2 with its os and os version 0, no `MDSZ` in any
+/// entry, and no extended header, the public metadata starting where the last entry ends. Each
+/// function's bitcode is written as given, the next one's following it, so a test that pads a
+/// module (as Apple's toolchain pads each to a multiple of 16 bytes) writes that padding into it.
+pub fn metallib_2_2(functions: &[MtlbFunction<'_>]) -> Vec<u8> {
+    write(functions, &MtlbLinkage::default(), 0, Format::V2_2)
+}
+
+/// The container layout [`write`] writes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Format {
+    /// Today's toolchain's: format 2.9, `MDSZ` in every entry, an extended header.
+    Current,
+    /// Format 2.2's ([`metallib_2_2`]).
+    V2_2,
+}
+
+/// The metallib of `functions` and `linkage` with header `file_type`, in `format`; every type but
+/// an executable library's (0) shares the first function's bitcode.
+fn write(
+    functions: &[MtlbFunction<'_>],
+    linkage: &MtlbLinkage<'_>,
+    file_type: u8,
+    format: Format,
+) -> Vec<u8> {
     let (mut public, mut private, mut bitcode, mut entries) =
         (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let md = |tags: &[([u8; 4], Vec<u8>)]| {
@@ -122,7 +145,9 @@ fn write(functions: &[MtlbFunction<'_>], linkage: &MtlbLinkage<'_>, file_type: u
         tag(&mut list, b"NAME", &name);
         tag(&mut list, b"TYPE", &[f.type_code]);
         tag(&mut list, b"HASH", &sha256(&f.bitcode));
-        tag(&mut list, b"MDSZ", &(f.bitcode.len() as u64).to_le_bytes());
+        if format == Format::Current {
+            tag(&mut list, b"MDSZ", &(f.bitcode.len() as u64).to_le_bytes());
+        }
         let mut offt = Vec::new();
         for v in [pub_at, priv_at, bc_at] {
             offt.extend_from_slice(&(v as u64).to_le_bytes());
@@ -170,7 +195,14 @@ fn write(functions: &[MtlbFunction<'_>], linkage: &MtlbLinkage<'_>, file_type: u
         }
         regions.push((*b"ILST", out));
     }
-    let ext_len = regions.len() * 22 + 4;
+    assert!(
+        format == Format::Current || regions.is_empty(),
+        "format 2.2 has no extended header for regions"
+    );
+    let ext_len = match format {
+        Format::Current => regions.len() * 22 + 4,
+        Format::V2_2 => 0,
+    };
     let list_off = 0x58usize;
     let pub_off = list_off + 4 + entries_len + ext_len;
     let priv_off = pub_off + public.len();
@@ -183,16 +215,24 @@ fn write(functions: &[MtlbFunction<'_>], linkage: &MtlbLinkage<'_>, file_type: u
         tag(&mut ext, fourcc, &at);
         region_at += bytes.len();
     }
-    ext.extend_from_slice(b"ENDT");
+    if format == Format::Current {
+        ext.extend_from_slice(b"ENDT");
+    }
+    assert_eq!(ext.len(), ext_len);
     let file_size = region_at;
+    // The version, the os byte and the os version.
+    let (minor, os, os_major) = match format {
+        Format::Current => (9u16, 0x81, 26u16),
+        Format::V2_2 => (2, 0, 0),
+    };
     let mut out = Vec::new();
     out.extend_from_slice(b"MTLB");
     out.extend_from_slice(&0x8001u16.to_le_bytes());
     out.extend_from_slice(&2u16.to_le_bytes());
-    out.extend_from_slice(&9u16.to_le_bytes());
+    out.extend_from_slice(&minor.to_le_bytes());
     out.push(file_type);
-    out.push(0x81);
-    out.extend_from_slice(&26u16.to_le_bytes());
+    out.push(os);
+    out.extend_from_slice(&os_major.to_le_bytes());
     out.extend_from_slice(&0u16.to_le_bytes());
     for v in [
         file_size,

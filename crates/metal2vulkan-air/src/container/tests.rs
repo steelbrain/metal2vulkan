@@ -89,6 +89,8 @@ struct Builder {
     /// Extended-header tags holding the `(offset, size)` of a region written after the trailer,
     /// with the region's bytes (`HDYN`, `ILST`).
     regions: Vec<([u8; 4], Vec<u8>)>,
+    /// The extended header is written (its tags and `ENDT`); format 2.2 writes none.
+    extended_header: bool,
 }
 
 impl Builder {
@@ -103,6 +105,7 @@ impl Builder {
             shared_bitcode: false,
             shared_private: false,
             regions: vec![],
+            extended_header: true,
         }
     }
 
@@ -167,13 +170,20 @@ impl Builder {
         }
         let entries_len: usize = entries.iter().map(Vec::len).sum();
         // Each region tag is 6 + 16 bytes; its offset is known once the layout is.
-        let ext_len = self
-            .extended
-            .iter()
-            .map(|(_, b)| 6 + b.len())
-            .sum::<usize>()
-            + self.regions.len() * 22
-            + 4;
+        assert!(
+            self.extended_header || (self.extended.is_empty() && self.regions.is_empty()),
+            "tags need an extended header"
+        );
+        let ext_len = if self.extended_header {
+            self.extended
+                .iter()
+                .map(|(_, b)| 6 + b.len())
+                .sum::<usize>()
+                + self.regions.len() * 22
+                + 4
+        } else {
+            0
+        };
         let list_off = 0x58usize;
         let pub_off = list_off + 4 + entries_len + ext_len;
         let priv_off = pub_off + public.len();
@@ -189,7 +199,9 @@ impl Builder {
             tag(&mut ext, fourcc, &at);
             region_at += bytes.len();
         }
-        ext.extend_from_slice(b"ENDT");
+        if self.extended_header {
+            ext.extend_from_slice(b"ENDT");
+        }
         assert_eq!(ext.len(), ext_len);
         let file_size = region_at;
 
@@ -781,7 +793,8 @@ fn malformed_function_tags() {
         let err = parse(&b.build()).unwrap_err();
         assert_eq!(container_kind(&err), want, "{err:?}");
     };
-    for missing in [*b"NAME", *b"TYPE", *b"HASH", *b"MDSZ", *b"OFFT", *b"VERS"] {
+    // `MDSZ` is not required (`format_2_2_entries_hold_their_module_to_the_next_start`).
+    for missing in [*b"NAME", *b"TYPE", *b"HASH", *b"OFFT", *b"VERS"] {
         check(&|f| f.omit.push(missing), ContainerError::MissingTag);
     }
     check(
@@ -1127,4 +1140,77 @@ fn both_metadata_size_conventions_parse_and_nothing_else() {
             "{delta}: {err:?}"
         );
     }
+}
+
+/// `functions` in format 2.2's layout, an older toolchain's: header version 2.2, no `MDSZ` in any
+/// entry, and no extended header, the public metadata starting where the last entry ends.
+fn format_2_2(functions: Vec<FnSpec>) -> Builder {
+    let mut b = Builder::new(functions);
+    b.version = (2, 2);
+    b.extended_header = false;
+    for f in &mut b.functions {
+        f.omit.push(*b"MDSZ");
+    }
+    b
+}
+
+/// The bytes a bitcode wrapper's offset and size cover.
+fn wrapper_end(module: &[u8]) -> usize {
+    let word = |at: usize| u32::from_le_bytes(module[at..at + 4].try_into().unwrap()) as usize;
+    word(8) + word(12)
+}
+
+/// Without `MDSZ` (format 2.2), a function's bitcode runs from its start to the next module's
+/// start, or to the bitcode section's end for the last module: the padding after each wrapper's
+/// stream included, which its `HASH` covers. Without an extended header the library has no
+/// extended tags. The table is the one the same functions with `MDSZ` give.
+#[test]
+fn format_2_2_entries_hold_their_module_to_the_next_start() {
+    let mut functions = vec![
+        FnSpec::new("v", 0, 1),
+        FnSpec::new("f", 1, 2),
+        FnSpec::new("g", 1, 3),
+    ];
+    // Pads of 12, none and 4 bytes past the wrapper's stream.
+    functions[1].bitcode = wrap(&module_stream(2), 0);
+    functions[2].bitcode = wrap(&module_stream(3), 4);
+    let modules: Vec<Vec<u8>> = functions.iter().map(|f| f.bitcode.clone()).collect();
+    assert!(modules.iter().any(|m| wrapper_end(m) < m.len()));
+    let old = format_2_2(functions.clone()).build();
+    let lib = metallib(&old);
+    assert_eq!(lib.header.version, (2, 2));
+    assert!(lib.extended.is_empty());
+    assert_eq!(
+        lib.header.public_metadata.offset,
+        0x58 + 4 + lib.header.function_list.size
+    );
+    for (f, module) in lib.functions.iter().zip(&modules) {
+        assert_eq!(f.bitcode, &module[..], "{}", f.name);
+        assert_eq!(f.hash, sha256(module));
+        f.stream().expect("its stream");
+    }
+    let table = |l: &Metallib<'_>| {
+        l.functions
+            .iter()
+            .map(|f| (f.name, f.stage, f.hash, f.bitcode))
+            .collect::<Vec<_>>()
+    };
+    let current = Builder::new(functions.clone()).build();
+    assert_eq!(table(&lib), table(&metallib(&current)));
+
+    // One entry without `MDSZ` among entries with it.
+    let mut mixed = Builder::new(functions.clone());
+    mixed.functions[1].omit.push(*b"MDSZ");
+    assert_eq!(table(&metallib(&mixed.build())), table(&lib));
+
+    // A `HASH` of the wrapper's bytes alone, short of the padding, is not the module's.
+    let mut short = format_2_2(functions);
+    let unpadded = sha256(&modules[0][..wrapper_end(&modules[0])]);
+    short.functions[0].hash = Some(unpadded);
+    let err = parse(&short.build()).unwrap_err();
+    assert_eq!(
+        container_kind(&err),
+        ContainerError::HashMismatch,
+        "{err:?}"
+    );
 }

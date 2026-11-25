@@ -209,6 +209,7 @@ mod engine_zero_factors;
 mod engine_zeroed_colors;
 mod engine_zeroed_threadgroup;
 mod env_registry;
+mod format_2_2_libraries;
 mod fuzz_interp;
 mod fuzz_soak;
 mod golden_hashes;
