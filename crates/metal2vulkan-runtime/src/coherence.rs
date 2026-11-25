@@ -243,13 +243,15 @@ impl Coherence {
         })
     }
 
-    /// What a command buffer holds of Shared memory as its recording starts: nothing written yet.
-    pub(crate) fn recording(&self) -> Recorded {
-        Recorded {
+    /// What a command buffer holds of Shared memory as its recording starts, nothing written yet:
+    /// boxed, so a command buffer of a device whose Shared type is host-coherent holds one `None`
+    /// pointer in its place.
+    pub(crate) fn recording(&self) -> Box<Recorded> {
+        Box::new(Recorded {
             atom: self.atom,
             writes: Writes::default(),
             reach: None,
-        }
+        })
     }
 
     /// A command buffer committed with `ranges`: while it lives in flight, a shared event's signal

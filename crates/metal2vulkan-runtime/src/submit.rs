@@ -545,7 +545,7 @@ struct Batch {
     /// What it flushes before it is submitted, where the Shared type is not host-coherent and
     /// a command buffer with a segment in it or a copy-in it carries reaches Shared memory
     /// (`crate::coherence`); `None` where none does.
-    flushes: Option<Flushes>,
+    flushes: Option<Box<Flushes>>,
     /// The first failed call recording a command buffer of moves that leads a segment of it
     /// (`crate::alias::stage`), which loses the device.
     lost: Option<DeviceLoss>,
@@ -553,7 +553,8 @@ struct Batch {
 
 /// What a batch flushes before it is submitted, where the Shared type is not host-coherent
 /// (`crate::coherence`): what each command buffer with a segment in it reaches of Shared memory,
-/// once each, and the Shared ranges its copy-ins read.
+/// once each, and the Shared ranges its copy-ins read. Boxed at the first of them, so a batch
+/// holds one `None` pointer in its place where it has none.
 #[derive(Default)]
 struct Flushes {
     reached: Vec<Arc<Ranges>>,
@@ -1919,9 +1920,9 @@ impl WorkState {
         group.leans.join(&segment.overs);
         if let Some(coherence::Recorded {
             reach: Some(reach), ..
-        }) = &pending.gpu.coherence
+        }) = pending.gpu.coherence.as_deref()
         {
-            let flushes = group.flushes.get_or_insert_with(Flushes::default);
+            let flushes = group.flushes.get_or_insert_with(Box::default);
             if !(flushes.reached.iter()).any(|held| Arc::ptr_eq(held, reach)) {
                 flushes.reached.push(Arc::clone(reach));
             }
@@ -2064,7 +2065,7 @@ impl WorkState {
         for (_, copy_in) in &taken {
             copy_in.backs(&mut batch.backs);
             if let Some(coherence) = &core.coherence {
-                let flushes = batch.flushes.get_or_insert_with(Flushes::default);
+                let flushes = batch.flushes.get_or_insert_with(Box::default);
                 flushes.copied.extend(copy_in.shared_ranges(coherence.atom));
             }
         }
@@ -2709,7 +2710,8 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
         // The host's writes to the Shared memory its command buffers and copy-ins reach are the
         // GPU's before it runs, where the Shared type is not host-coherent (`crate::coherence`).
         // One command buffer and no copy-in flushes its own ranges, merged at its commit.
-        if let Some(Flushes { reached, copied }) = flushes {
+        if let Some(flushes) = flushes {
+            let Flushes { reached, copied } = *flushes;
             if let Some(coherence) = &core.coherence {
                 match (copied.is_empty(), &reached[..]) {
                     (true, [one]) => coherence.flush(core, &one.reached),

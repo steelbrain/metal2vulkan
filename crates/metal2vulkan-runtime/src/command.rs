@@ -295,9 +295,20 @@ pub(crate) struct Gpu {
     /// each given back to the device as it retires (`crate::visibility`).
     pub(crate) queries: Queries,
     /// What it holds of Shared memory, where the device's Shared type is not host-coherent:
-    /// what its commands may write and, from its commit, what they reach (`crate::coherence`).
-    /// `None` where the type is host-coherent.
-    pub(crate) coherence: Option<coherence::Recorded>,
+    /// what its commands may write and, from its commit, what they reach (`crate::coherence`),
+    /// boxed from its make. `None` where the type is host-coherent: one pointer, as each hand-off
+    /// moves the command buffer by value.
+    pub(crate) coherence: Option<Box<coherence::Recorded>>,
+}
+
+/// Whether `segments` hold nothing for the GPU: no commands, wait or signal ([`Gpu::is_empty`]).
+fn nothing_for_the_gpu(segments: &[Segment]) -> bool {
+    (segments.iter()).all(|segment| {
+        segment.command.is_none()
+            && segment.waits.is_empty()
+            && segment.signals.is_empty()
+            && segment.binary.is_empty()
+    })
 }
 
 impl Gpu {
@@ -305,12 +316,7 @@ impl Gpu {
     /// records no timestamps, and takes no submission unless a copy-in waits for it
     /// (`crate::capture`): the copy-in is then its submission.
     pub(crate) fn is_empty(&self) -> bool {
-        (self.segments.iter()).all(|segment| {
-            segment.command.is_none()
-                && segment.waits.is_empty()
-                && segment.signals.is_empty()
-                && segment.binary.is_empty()
-        })
+        nothing_for_the_gpu(&self.segments)
     }
 
     /// Its last segment signals the consumer's semaphores: the command buffer presents drawables
@@ -1242,7 +1248,7 @@ impl Building {
     /// widened to the atom it holds (`crate::coherence`). `None` where the type is host-coherent,
     /// and no range is named.
     pub(crate) fn coherence(&mut self) -> Option<&mut coherence::Recorded> {
-        self.gpu.coherence.as_mut()
+        self.gpu.coherence.as_deref_mut()
     }
 
     /// A dispatch wrote: an indirect dispatch after it needs a barrier that reaches its
@@ -1802,12 +1808,11 @@ pub(crate) fn retire(
     }
     // The GPU's writes to Shared memory are the host's before anything tells it the command buffer
     // completed: its status, a wait for it, its handlers (`crate::coherence`). Settled while it
-    // still keeps every block they lie in.
-    if let Some(coherence::Recorded {
-        reach: Some(reach), ..
-    }) = &gpu.coherence
-    {
-        if let Some(coherence) = &core.coherence {
+    // still keeps every block they lie in; what it held of Shared memory goes here, so a `None`
+    // is tested once.
+    let held = gpu.coherence;
+    if let Some(held) = held {
+        if let (Some(reach), Some(coherence)) = (&held.reach, &core.coherence) {
             coherence.settle(core, &reach.written);
             coherence.retired(reach);
         }
@@ -1819,7 +1824,7 @@ pub(crate) fn retire(
         // One with nothing for the GPU, as Metal reports it: its start and end equal, at its
         // queue's previous command buffer's end or its own kernel end, whichever is later.
         let gpu_times = gpu_times.or_else(|| {
-            (error.is_none() && gpu.is_empty()).then(|| {
+            (error.is_none() && nothing_for_the_gpu(&gpu.segments)).then(|| {
                 let at = (inner.queue.last_end.load(Relaxed)).max(state.times.kernel_end);
                 (at, at)
             })
@@ -1850,13 +1855,13 @@ pub(crate) fn retire(
         fences,
         executed,
         queries,
-        coherence,
+        coherence: _,
     } = gpu;
     if let Some(recorder) = recorder {
         core.recorders.give_back(core, recorder);
     }
     ring.give_back(core);
-    drop((segments, blocks, images, fences, executed, coherence));
+    drop((segments, blocks, images, fences, executed));
     queries.give_back(core);
     kept.clear();
     if let Some(pair) = stamps {

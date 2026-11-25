@@ -1222,8 +1222,8 @@ impl ComputeCommandEncoder {
             self.facts.module = Some(module);
             // The Shared memory its bound slots write, once for the facts: the bindings are the
             // same until they change, which finds the facts again (`crate::coherence`).
-            if let Some(held) = (self.building.as_mut()).and_then(Building::coherence) {
-                if self.facts.host {
+            if self.facts.host {
+                if let Some(held) = (self.building.as_mut()).and_then(Building::coherence) {
                     for range in shared_writes(&self.slots, &self.textures, interface, held.atom) {
                         held.wrote(Some(range));
                     }

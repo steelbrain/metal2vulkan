@@ -658,11 +658,6 @@ struct Atomics {
     threads: [AtomicU64; THREADS],
     submissions: AtomicU64,
     submit_infos: AtomicU64,
-    shared_flushes: AtomicU64,
-    shared_flushed_bytes: AtomicU64,
-    shared_invalidates: AtomicU64,
-    shared_invalidated_bytes: AtomicU64,
-    shared_coherence_failures: AtomicU64,
     submit_call_nanos: AtomicU64,
     submit_call_max_nanos: AtomicU64,
     pipeline_creation_nanos: AtomicU64,
@@ -892,6 +887,13 @@ struct Atomics {
     indirect_command_buffers: AtomicU64,
     preprocess_used_bytes: AtomicU64,
     preprocess_idle_bytes: AtomicU64,
+    /// Shared memory's flushes and invalidates (`crate::coherence`), after every other counter,
+    /// so a device that makes none keeps each of those at its place.
+    shared_flushes: AtomicU64,
+    shared_flushed_bytes: AtomicU64,
+    shared_invalidates: AtomicU64,
+    shared_invalidated_bytes: AtomicU64,
+    shared_coherence_failures: AtomicU64,
     /// Segment ends whose barrier reaches the host, for the tests.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     host_reaches: AtomicU64,
