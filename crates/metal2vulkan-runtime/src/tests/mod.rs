@@ -15,6 +15,7 @@ mod border;
 mod buffer_accesses;
 mod cache;
 mod choice;
+mod coherence;
 pub(crate) mod command;
 mod compute;
 mod copy_out;

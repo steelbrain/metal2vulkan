@@ -2075,7 +2075,8 @@ pub struct Metrics {
     /// `vkFlushMappedMemoryRanges` calls over Shared memory: one before each submission whose
     /// command buffers or copy-ins reach Shared memory, one before each invalidate
     /// ([`shared_invalidates`](Self::shared_invalidates)), one after each `replace_region` through
-    /// a staging span, and one at the zero source's make. Every device makes them, whatever its
+    /// a staging span, one at each `upload_region` of named bytes in Shared memory, and one at the
+    /// zero source's make. Every device makes them, whatever its
     /// Shared type's flags: a driver whose type is host-coherent answers each at once (the
     /// runtime README, "Shared memory's coherence").
     pub shared_flushes: u64,

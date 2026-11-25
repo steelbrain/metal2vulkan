@@ -23,8 +23,9 @@
 //!   wait for it. The flush first keeps the host's own writes to those ranges, which Vulkan leaves
 //!   undefined when a range written by the host is invalidated without a flush.
 //! - **The runtime's own host accesses** of the Shared type: the bytes `replace_region` writes into
-//!   a staging span are flushed before the copy is recorded, those a copy into a span wrote are
-//!   invalidated before `get_bytes` reads them, and the zero source is flushed once, at its make.
+//!   a staging span are flushed before the copy is recorded, and so are the named bytes
+//!   `upload_region` copies, at the call; those a copy into a span wrote are invalidated before
+//!   `get_bytes` reads them; and the zero source is flushed once, at its make.
 //!
 //! What a command buffer may write ([`Writes`]): each Shared buffer a command writes, or a texture
 //! over one, as the command names it (a blit's destination, a binding its function's interface

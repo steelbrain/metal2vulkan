@@ -646,8 +646,15 @@ pub(crate) trait BufferObject {
     /// (`crate::coherence`). Of a Managed buffer, the block of its bytes, which the host writes;
     /// `None` in Private memory, an import or an export.
     fn shared_range(&self, atom: u64) -> Option<crate::coherence::Range> {
+        self.shared_span(0, u64::MAX, atom)
+    }
+
+    /// Of [`shared_range`](Self::shared_range), the `len` bytes at `offset` in the buffer, cut at
+    /// its end.
+    fn shared_span(&self, offset: u64, len: u64, atom: u64) -> Option<crate::coherence::Range> {
         let inner = self.object();
-        crate::coherence::Range::of_block(&inner.block.memory, inner.offset, inner.length, atom)
+        let len = len.min(inner.length.saturating_sub(offset));
+        crate::coherence::Range::of_block(&inner.block.memory, inner.offset + offset, len, atom)
     }
 
     /// Whether shaders reach the buffer in Shared memory, which the host reads.

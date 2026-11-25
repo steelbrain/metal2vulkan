@@ -3666,6 +3666,14 @@ impl Transfer {
         self.row * self.rows * self.images
     }
 
+    /// The bytes from the region's first byte to the end of its last, in bytes at its own pitches
+    /// (`bytes_per_row` and `bytes_per_image`).
+    fn extent(&self) -> u64 {
+        self.images.saturating_sub(1) * self.bytes_per_image
+            + self.rows.saturating_sub(1) * self.bytes_per_row
+            + self.row
+    }
+
     /// The runs of bytes between the caller's bytes and the staging buffer, which holds the
     /// region's rows packed: each run's offset in the caller's bytes, its offset in the staging
     /// buffer and its length. One run where the caller's rows lie packed too, else one a row.
@@ -4696,6 +4704,10 @@ impl Texture {
         let (buffer, at) = bytes.device_range();
         let region = copy.buffer_image_copy(at + start, row_length, image_height);
         let core = &inner.core;
+        // The bytes the consumer wrote are the GPU's before the copy reads them
+        // (`crate::coherence`).
+        let read = bytes.shared_span(start, copy.extent(), core.coherence.atom);
+        crate::coherence::flush(core, read.as_slice());
         core.work.upload(
             core,
             None,

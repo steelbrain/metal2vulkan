@@ -238,8 +238,9 @@ Memory comes in blocks the consumer takes and places buffers in, as a placement 
 in its memory.
 
 - `Device::take_block(class, len)` gives a block of `MemoryClass::Private` (device-local, no host
-  mapping) or `MemoryClass::Shared` (host-visible, host-coherent and host-cached, mapped for the
-  block's life) memory, as a `Block`: rt's own handle, with no Metal counterpart, which derefs to
+  mapping) or `MemoryClass::Shared` (host-visible and host-cached, host-coherent too where the
+  device has such a type, mapped for the block's life; Shared memory's coherence below) memory, as
+  a `Block`: rt's own handle, with no Metal counterpart, which derefs to
   the block's `BlockInfo` (its number, class, length, device address and, for Shared, its host
   address, and the allocation it is a range of with its offset there). One `VkBuffer` spans each
   of the pool's allocations, with every buffer usage and a device address; a block is a range of
@@ -522,6 +523,51 @@ The pool's allocations are in the guest's range whole, their free ranges and the
 staging blocks included; the consumer hands the guest blocks only. A block given back stays mapped
 with its allocation: from a block's give-back to the next take that lands on its bytes, they are
 the runtime's. A guest kernel that writes a free range damages only its own later buffers.
+
+### Shared memory's coherence
+
+Shared memory is the first host-visible, host-cached memory type a buffer can use, a
+host-coherent one first (`floor::MemoryTypes::shared`). Some devices have no type with all
+three: Mesa's Intel driver over the i915 kernel driver, on a GPU without a cache it shares with
+the CPU, lists a device-local, host-visible, host-coherent type and a device-local, host-visible,
+host-cached one. On a type without `VK_MEMORY_PROPERTY_HOST_COHERENT_BIT`, the host's writes
+reach the GPU only through `vkFlushMappedMemoryRanges`, and the GPU's writes reach the host only
+through `vkInvalidateMappedMemoryRanges`. The runtime makes both calls on every device, whatever
+the type's flags, at these points:
+
+- Before each submission, it flushes the Shared memory the submission's command buffers reach, as
+  each commit found it: every buffer the command buffer keeps (bound, declared with
+  `use_resource`, a blit's or a pass's), the buffer under every texture over a Shared buffer it
+  keeps, every heap it uses, and the bytes each Managed copy-in it carries reads.
+- Before the host can see the GPU's progress, it flushes the Shared memory a command buffer may
+  write, then invalidates it. That happens as the command buffer completes, before its status reads
+  completed, a wait for it returns or its completed handlers run. It also happens before a shared
+  event's value that a GPU signal raised reaches a listener, `SharedEvent::signaled_value` or
+  `SharedEvent::wait_until_signaled_value`, and then it covers every command buffer committed and
+  not yet completed. A command buffer may write: a blit's destination, a binding its function's
+  interface writes, a resource it declares with `use_resource` for writing, a render pass's
+  attachments and resolve targets, a visibility result buffer, a synchronize's buffer, the
+  whole Shared memory of every heap it uses, and every texture over a Shared buffer in an image
+  of its own. The flush comes first because Vulkan leaves a range undefined when the host wrote
+  it and it is invalidated without a flush.
+- Around its own host accesses: the bytes `Texture::replace_region` stages are flushed before
+  their copy, and so are the bytes `Texture::upload_region` copies from a Managed texture's
+  named buffer, at the call; the bytes a copy stages for `Texture::get_bytes` are flushed and
+  invalidated before it reads them; the zero source of fills is flushed once, when it is made.
+
+Each range is widened to whole multiples of the device's `nonCoherentAtomSize`, inside the
+pool's allocation, which the runtime maps whole. `Metrics::shared_flushes` and
+`shared_invalidates` count the calls, `shared_flushed_bytes` and `shared_invalidated_bytes` their
+bytes, and `shared_coherence_failures` the calls that did not return success; the work goes on
+after one. Where the type is host-coherent the calls change nothing; Mesa 26.2's Intel driver
+returns from them before it reads a range where no type of the device needs a flush.
+
+On a device whose Shared type is not host-coherent, a range that a command buffer reaches only
+through an address, with no binding or `use_resource` declaration naming its buffer, is neither
+flushed nor invalidated: the consumer declares what its commands reach. The consumer's own host
+reads and writes, through its own mappings (The consumer's mappings) or between those points, are
+its own. Imported blocks (below) are host-coherent memory and take no call. Exported blocks and
+surfaces are Private memory with no host mapping, and take none either.
 
 ### Imported blocks
 
@@ -985,6 +1031,23 @@ the Direct3D 11 texture's payload until it is freed.
 
 ### Known gaps of memory blocks
 
+- On a device whose Shared type is not host-coherent (Shared memory's coherence), the flushes
+  and invalidates are that device's cost: before each submission over what its command buffers
+  reach, and at each completion and each shared event's GPU-raised value seen over what they may
+  write, on the submit and completion threads and in the calls that read an event's value. No
+  device of ours has such a type, so neither that time nor the calls' effect on such a device has
+  been measured; on ours the Shared type is host-coherent.
+- On such a device, a host write to a range a command buffer may write, made while the command
+  buffer runs, may be lost, and so may the GPU's writes to the same atoms. The runtime flushes
+  each such range just before it invalidates it, and Vulkan states: "If a range of non-coherent
+  memory is written by the host and then invalidated without first being flushed, its contents
+  are undefined." A host write that lands between the flush and the invalidate is such a write.
+  Vulkan's `nonCoherentAtomSize` is "the size and alignment in bytes that bounds concurrent access
+  to host-mapped device memory", so the same holds where the host's write and the GPU's touch
+  different bytes of one atom.
+- On such a device, a Shared buffer that a command buffer reaches only through a residency set is
+  neither flushed nor invalidated: the runtime has no residency set, and such a buffer is one the
+  commands reach through an address with no declaration naming it.
 - On the Radeon 780M (RADV of Mesa 26.2.6) a texture over a buffer in a dma-buf's one import is
   the counted copy (`over_copies_dma_buf`). The external image query refuses the dma-buf handle
   with `LINEAR` tiling (`VK_ERROR_FORMAT_NOT_SUPPORTED`) for RGBA8Unorm and RGBA8Uint, for every
@@ -2038,7 +2101,8 @@ made, with no lock, and never rewritten for layouts.
   wrote Shared memory (a Shared buffer bound or declared for writing, a write through an address
   outside the dispatch's resources, or a blit copy or fill into a Shared buffer) or signals an
   event, so the host reads those writes once the
-  command buffer completes or it sees the event; a segment that wrote only Private memory leaves
+  command buffer completes or it sees the event, after the flushes and invalidates of Shared
+  memory's coherence (Memory blocks and buffers); a segment that wrote only Private memory leaves
   the host out. No segment starts with a barrier of its own; a blit copy records its own two
   (see "Blit encoders").
   `enqueue` takes the command buffer's place in its queue; `commit` hands it to the submit
@@ -5398,7 +5462,9 @@ below 256 an indirect command reaches fewer vertex slots (Known gaps of indirect
 The runtime submits to the first queue family with `VK_QUEUE_GRAPHICS_BIT` and
 `VK_QUEUE_COMPUTE_BIT` (`floor::Capabilities::queue_family`). It allocates buffers from three memory
 types, each the first with its flags that a buffer of `floor::BUFFER_USAGE` can use: every buffer
-usage Vulkan 1.3 defines, and device addresses. Vulkan guarantees such a buffer a device-local
+usage Vulkan 1.3 defines, and device addresses. Of the types with Shared's flags, the first that is
+also host-coherent is taken where the device has one; the runtime flushes and invalidates Shared
+memory on every device all the same (Shared memory's coherence). Vulkan guarantees such a buffer a device-local
 type, so of the three only Shared and the ring can be missing on a conforming device. Vulkan answers which memory types a buffer can use
 only for a created device, so `PhysicalDevice::check` finds a type with each set of flags, and
 `Device::new` chooses on the device (`Device::memory_types` answers `floor::MemoryTypes`). A device
@@ -5409,7 +5475,7 @@ the device lists.
 | Memory type | Flags | Used for |
 |---|---|---|
 | Private | `VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT` | Private storage, which only the GPU reads and writes |
-| Shared | `VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT`, `VK_MEMORY_PROPERTY_HOST_COHERENT_BIT`, `VK_MEMORY_PROPERTY_HOST_CACHED_BIT` | Shared storage, which the host maps and reads |
+| Shared | `VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT`, `VK_MEMORY_PROPERTY_HOST_CACHED_BIT` | Shared storage, which the host maps and reads |
 | ring | `VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT`, `VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT`, `VK_MEMORY_PROPERTY_HOST_COHERENT_BIT` | the parameter ring, which the host writes with no flush and the GPU reads |
 
 Vulkan's device type, not the Shared type's flags, decides a Managed buffer's form: on a device
