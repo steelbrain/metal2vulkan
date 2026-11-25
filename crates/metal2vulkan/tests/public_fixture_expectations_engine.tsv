@@ -374,6 +374,8 @@ engine/air_1_8_front_end.air.ll	a18_fs	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/air_1_8_front_end.ll	a18_blit	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/air_1_8_front_end.ll	a18_vs	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/air_1_8_front_end.ll	a18_fs	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/air_1_8_sampling.air.ll	a18_sample_fs	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/air_1_8_sampling.ll	a18_sample_fs	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/air_2_1_front_end.air.ll	a21_mip	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/air_2_1_front_end.air.ll	a21_blit_vs	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/air_2_1_front_end.air.ll	a21_blit_fs	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
