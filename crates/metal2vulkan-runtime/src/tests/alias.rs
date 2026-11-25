@@ -19,6 +19,9 @@
 //!   none again.
 //! - A new heap buffer looks at the heap's live textures alone, as many with 10,000 live buffers as
 //!   with 100; a new heap texture at the heap's live placements at most.
+//! - A host write of a texture a buffer's fill left stale: the host write moves it, its next GPU
+//!   write (its mipmaps, a blit into another region, a pass that loads it) moves nothing, and the
+//!   region the host wrote holds the host's texels.
 //!
 //! `llvm-as` assembles the kernels' libraries; without it the tests are skipped, visibly.
 
@@ -34,10 +37,11 @@ mod on_device {
     };
     use crate::texture::TextureObject;
     use crate::{
-        Block, Buffer, ColorAttachmentDescriptor, CommandBuffer, CommandQueue, CullMode, Device,
-        FunctionDescriptor, HeapRange, IndexClass, MemoryClass, PixelFormat, PrimitiveType,
-        RenderPipelineDescriptor, StageSource, StorageMode, TextureDescriptor, TextureType,
-        TextureUsage,
+        Block, Buffer, BufferLayout, ColorAttachmentDescriptor, CommandBuffer, CommandQueue,
+        CullMode, Device, Error, FunctionDescriptor, HeapRange, HostBytes, IndexClass, LoadAction,
+        MemoryClass, PixelFormat, PrimitiveType, Refusal, Region, RenderPassDescriptor,
+        RenderPipelineDescriptor, StageSource, StorageMode, StoreAction, TextureDescriptor,
+        TexturePlace, TextureType, TextureUsage,
     };
     use metal2vulkan_devtools::fixtures_dir;
     use std::sync::Arc;
@@ -501,6 +505,130 @@ mod on_device {
             drop(buffers);
             (device.release_block(block)).unwrap_or_else(|error| panic!("{name}: {error}"));
             println!("heap checks: {name}: a new buffer looks at {textures} textures alone");
+        });
+    }
+
+    /// The host write's texture's extent, and the region of its first level the host writes.
+    const SIDE: u32 = 64;
+    const WRITTEN: Region = Region {
+        origin: [8, 8, 0],
+        size: [16, 16, 1],
+    };
+
+    /// The bytes of a row of [`WRITTEN`]'s `RGBA8Unorm` texels.
+    const ROW: u64 = 16 * 4;
+
+    /// The GPU writes of T after the host's, none of which covers [`WRITTEN`]: its mipmaps, a blit
+    /// from a buffer into another region of its first level, and a pass that loads its first level.
+    const LATER: [&str; 3] = ["mipmaps", "blit", "load"];
+
+    /// The host's write of a heap texture an alias's write left stale defines the texels it
+    /// writes, as Metal's `replaceRegion` does. T, 64 by 64 `RGBA8Unorm` of two levels, is placed
+    /// first, then B, a buffer over its bytes. Each round fills B by a blit, which leaves T stale
+    /// as the submit thread stages it, then writes [`WRITTEN`] of T's first level by
+    /// `replace_region`, then writes T on the GPU elsewhere ([`LATER`]). The host write moves T
+    /// from undefined, one move; the GPU write moves nothing, and [`WRITTEN`] holds the host's
+    /// texels after it. Only those texels are read: Metal leaves T's others undefined. No other
+    /// host write reaches a heap texture: `upload_region` copies a Managed texture's named bytes,
+    /// and a heap texture has none.
+    #[test]
+    fn every_device_keeps_a_host_write_into_a_stale_heap_texture_through_its_next_gpu_write() {
+        each_device("alias_host_write", |name, _, device| {
+            let done = |result: Result<(), Error>| {
+                result.unwrap_or_else(|error| panic!("{name}: {error}"))
+            };
+            let _grant = (device.grant_indices(IndexClass::Texture, FIRST, 1))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let (block, heap) = heap(name, &device);
+            let mut d =
+                TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, SIDE, SIDE);
+            d.mipmap_level_count = 2;
+            d.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+            let fit = (device.heap_texture_size_and_align(&d))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let t = (device.new_heap_texture(&d, Some(FIRST), heap, 0))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let b = (device.new_heap_buffer(heap, 0, fit.size.next_multiple_of(4)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert!(
+                matches!(
+                    t.upload_region(WRITTEN, 0, 0),
+                    Err(Error::Refused(Refusal::ManagedTextureBytes { .. }))
+                ),
+                "{name}: a heap texture has no named bytes to upload"
+            );
+            let mut buffers = Buffers::new(name, &device, 1);
+            let source = buffers.of(name, &device, &[0.5; 16 * 16]);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let mut rounds = Vec::new();
+            for (round, later) in (0u32..).zip(LATER) {
+                let cb = queue.command_buffer().expect("a command buffer");
+                let mut blit = cb.blit_command_encoder().expect("a blit encoder");
+                done(blit.fill_buffer(&b, 0..b.length(), 0xa5));
+                blit.end_encoding();
+                run(name, &cb);
+                let [width, height, _] = WRITTEN.size;
+                let written: Vec<u8> = (0..height)
+                    .flat_map(|y| (0..width).flat_map(move |x| (0..4).map(move |c| (x, y, c))))
+                    .map(|(x, y, c)| ((x * 7 + y * 13 + c * 61 + 5 + round * 29) % 256) as u8)
+                    .collect();
+                let before = moves(&device);
+                done(t.replace_region(WRITTEN, 0, 0, HostBytes::from(&written[..]), ROW, 0));
+                let host = moves(&device) - before;
+                let cb = queue.command_buffer().expect("a command buffer");
+                match later {
+                    "mipmaps" | "blit" => {
+                        let mut blit = cb.blit_command_encoder().expect("a blit encoder");
+                        done(match later {
+                            "mipmaps" => blit.generate_mipmaps(&t),
+                            _ => blit.copy_from_buffer(
+                                &source,
+                                BufferLayout {
+                                    offset: 0,
+                                    bytes_per_row: ROW,
+                                    bytes_per_image: 0,
+                                },
+                                [16, 16, 1],
+                                &t,
+                                TexturePlace {
+                                    slice: 0,
+                                    level: 0,
+                                    origin: [40, 40, 0],
+                                },
+                            ),
+                        });
+                        blit.end_encoding();
+                    }
+                    _ => {
+                        let mut pass = RenderPassDescriptor::default();
+                        let color = &mut pass.color_attachments[0];
+                        color.texture = Some(t.clone());
+                        color.load_action = LoadAction::Load;
+                        color.store_action = StoreAction::Store;
+                        let encoder = (cb.render_command_encoder(&pass))
+                            .unwrap_or_else(|error| panic!("{name}: {error}"));
+                        encoder.end_encoding();
+                    }
+                }
+                run(name, &cb);
+                let gpu = moves(&device) - before - host;
+                let mut read = vec![0; written.len()];
+                done(t.get_bytes(&mut read, ROW, 0, WRITTEN, 0, 0));
+                println!(
+                    "host write: {name}: {later}: heap_moves +{host} at the host write, +{gpu} at \
+                     the GPU write; the host's texels {}",
+                    if read == written { "kept" } else { "lost" }
+                );
+                rounds.push((later, host, gpu, read == written));
+            }
+            let want = LATER.map(|later| (later, 1_u64, 0_u64, true));
+            assert_eq!(
+                rounds, want,
+                "{name}: (the GPU write, heap_moves at the host write, at the GPU write, the host's \
+                 texels kept)"
+            );
+            drop((t, b, source, buffers, queue));
+            (device.release_block(block)).unwrap_or_else(|error| panic!("{name}: {error}"));
         });
     }
 }
