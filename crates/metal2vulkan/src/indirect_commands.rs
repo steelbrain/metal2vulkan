@@ -9,7 +9,7 @@
 mod descriptor;
 pub use descriptor::{CommandDescriptor, ComputeDispatch, RenderDraws};
 mod host;
-pub use host::{BindingError, CommandBuffer, CommandBufferError, RecordView, ResolvedBindings};
+pub use host::{CommandBuffer, CommandBufferError, RecordView};
 
 use std::fmt;
 use std::num::NonZeroU64;
@@ -48,46 +48,6 @@ pub const COMMAND_BYTES: usize =
     ((THREADGROUP_WORD + THREADGROUP_COUNT + 2) * 4).next_multiple_of(8);
 /// Host-initialized command count, atomic encoding-fault flag, descriptor flags, and packed binding counts.
 pub const COMMAND_BUFFER_HEADER_BYTES: usize = 16;
-/// Bytes of one command's written flag (a `u32`), past every record ([`written_flag_offset`]).
-pub const WRITTEN_FLAG_BYTES: usize = 4;
-
-/// The byte offset of command `index`'s written flag in the storage of a buffer of `capacity`
-/// commands: the flags follow the records, one `u32` a command. No translated function writes a
-/// record or its flag. A consumer whose storage holds the flags, and whose own writes of the
-/// records set them, knows a record whose flag is clear to hold what it last reset it to, and may
-/// reset only the flagged ones, clearing each flag with its record.
-pub const fn written_flag_offset(capacity: u32, index: u32) -> u64 {
-    COMMAND_BUFFER_HEADER_BYTES as u64
-        + capacity as u64 * COMMAND_BYTES as u64
-        + index as u64 * WRITTEN_FLAG_BYTES as u64
-}
-
-/// The guest address of the records of the indirect command buffer of resource ID 0, the null
-/// one, which no records lie at ([`records_address`]).
-pub const RECORDS_ADDRESS_BASE: u64 = 1 << 63;
-/// How far an indirect command buffer's resource ID is shifted to give the guest address its
-/// records start at past [`RECORDS_ADDRESS_BASE`] ([`records_address`]): 2^31 bytes from one ID's
-/// start to the next's. Records of more bytes run past the next IDs' starts.
-pub(crate) const RECORDS_ADDRESS_SHIFT: u32 = 31;
-/// The first resource ID whose records [`records_address`] cannot place, 2^31: the IDs of indirect
-/// command buffers run from 1 below it, as Metal's do (on an M3 Max, a reservation of 2^31 - 2
-/// handed out 2^31 - 1 next, and one of 2^31 to 2^32 - 1 never returned). The last ID's records
-/// start 2^62 bytes below 2^64, so records of any length a device holds fit after any ID's start.
-pub const RECORDS_ID_LIMIT: u64 = 1 << 31;
-
-/// The guest address the records of the indirect command buffer whose resource ID is `id` (below
-/// [`RECORDS_ID_LIMIT`]) start at: `2^63 + id * 2^31`. An argument buffer's command-buffer member
-/// holds the ID, as Metal's `gpuResourceID` and `setIndirectCommandBuffer:atIndex:` give it (small
-/// integers from 1, measured on an M3 Max and an M4, or the IDs a reservation leaves next, up to
-/// 2^31 - 1 on an M3 Max). Records of more than 2^31 bytes run past the next IDs' starts, and the
-/// resident set keeps each records range whole. So a consumer that makes an
-/// indirect command buffer with ID `id` makes its record buffer resident at `records_address(id)`,
-/// a range no Metal buffer reaches (each lies below 2^63). The null ID 0 gives an address no
-/// records start at. No translated function reaches the records through it: every encoder
-/// operation is refused (`GpuEncodedIndirectCommands`).
-pub const fn records_address(id: u64) -> u64 {
-    RECORDS_ADDRESS_BASE | (id << RECORDS_ADDRESS_SHIFT)
-}
 
 /// The byte offsets of the header's and a record's fields, which the CPU's encoder writes and the
 /// device replay reads (`bind::replay`).
@@ -213,110 +173,16 @@ impl BufferStage {
 }
 
 /// A buffer slot a setter set: the address Metal's getter answers and the attribute stride form.
-/// A slot no setter set, or one a reset cleared, is none ([`Bindings::buffers`]).
+/// A slot no setter set, or one a reset cleared, is none in its [`Bindings`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BufferBinding {
     /// The buffer's address plus the low 32 bits of the offset set, or, for a nil buffer, the low
     /// 32 bits of the offset alone, as Metal keeps and answers it. Below
     /// [`BufferBinding::MIN_BUFFER_ADDRESS`] it names no buffer ([`BufferBinding::names_buffer`]);
-    /// at or above it, it must identify registered device storage.
+    /// at or above it, it names one.
     pub address: u64,
     /// None uses the pipeline's static stride. The all-bits-set value is reserved for None.
     pub attribute_stride: Option<u64>,
-}
-
-/// A live host resource and its device-address interval, which
-/// [`BufferBinding::resolve_buffer`] resolves a record's buffer address against. Registration
-/// does not transfer ownership.
-pub struct RegisteredBuffer<'a, T> {
-    resource: &'a T,
-    address: u64,
-    length: u64,
-}
-
-/// The selected allocation and exact interior offset; no memory is copied or rebound.
-#[non_exhaustive]
-pub struct ResolvedBuffer<'a, T> {
-    /// The registered resource whose interval holds the address.
-    pub resource: &'a T,
-    /// The address's offset from the start of the resource's interval.
-    pub offset: u64,
-    /// The bytes of the interval from that offset to its end.
-    pub available_bytes: u64,
-}
-
-/// Why a buffer address does not resolve ([`RegisteredBuffer::new`],
-/// [`BufferBinding::resolve_buffer`]).
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AddressError {
-    /// A registration whose address is below [`BufferBinding::MIN_BUFFER_ADDRESS`], which no
-    /// binding names, whose length is zero, or whose interval passes the end of the address
-    /// space.
-    InvalidAllocation {
-        /// The registered address.
-        address: u64,
-        /// The registered length.
-        length: u64,
-    },
-    /// More than one registered interval holds the requested bytes at the address.
-    Ambiguous {
-        /// The binding's address.
-        address: u64,
-        /// The bytes requested from it.
-        required_bytes: u64,
-    },
-    /// No registered interval holds the requested bytes at the address.
-    Unavailable {
-        /// The binding's address.
-        address: u64,
-        /// The bytes requested from it.
-        required_bytes: u64,
-    },
-}
-
-impl fmt::Display for AddressError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidAllocation { address, length } => write!(
-                f,
-                "invalid registered buffer interval at {address:#x} with {length} bytes"
-            ),
-            Self::Ambiguous {
-                address,
-                required_bytes,
-            } => write!(
-                f,
-                "multiple registered buffers cover {required_bytes} bytes at {address:#x}"
-            ),
-            Self::Unavailable {
-                address,
-                required_bytes,
-            } => write!(
-                f,
-                "no registered buffer covers {required_bytes} bytes at {address:#x}"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for AddressError {}
-
-impl<'a, T> RegisteredBuffer<'a, T> {
-    /// Registers `resource` as holding `length` bytes from device address `address`.
-    pub fn new(resource: &'a T, address: u64, length: u64) -> Result<Self, AddressError> {
-        if address < BufferBinding::MIN_BUFFER_ADDRESS
-            || length == 0
-            || address.checked_add(length - 1).is_none()
-        {
-            return Err(AddressError::InvalidAllocation { address, length });
-        }
-        Ok(Self {
-            resource,
-            address,
-            length,
-        })
-    }
 }
 
 impl BufferBinding {
@@ -328,47 +194,6 @@ impl BufferBinding {
     /// Whether the address names a buffer: not a nil buffer's offset.
     pub const fn names_buffer(&self) -> bool {
         self.address >= Self::MIN_BUFFER_ADDRESS
-    }
-
-    /// Find a unique live allocation covering the requested span without descriptor alignment rules.
-    /// Multiple covering registrations are rejected rather than resolved by registration order.
-    /// A nil buffer's binding stays unbound; the caller owns nullability, access, and shader
-    /// alignment policy.
-    /// A zero-byte span at the allocation end grants no permission to dereference that address.
-    pub fn resolve_buffer<'a, T>(
-        self,
-        buffers: &[RegisteredBuffer<'a, T>],
-        required_bytes: u64,
-    ) -> Result<Option<ResolvedBuffer<'a, T>>, AddressError> {
-        if !self.names_buffer() {
-            return Ok(None);
-        }
-        let mut resolved = None;
-        for buffer in buffers {
-            let Some(offset) = self.address.checked_sub(buffer.address) else {
-                continue;
-            };
-            let Some(available_bytes) = buffer.length.checked_sub(offset) else {
-                continue;
-            };
-            if required_bytes <= available_bytes {
-                if resolved.is_some() {
-                    return Err(AddressError::Ambiguous {
-                        address: self.address,
-                        required_bytes,
-                    });
-                }
-                resolved = Some(ResolvedBuffer {
-                    resource: buffer.resource,
-                    offset,
-                    available_bytes,
-                });
-            }
-        }
-        resolved.map(Some).ok_or(AddressError::Unavailable {
-            address: self.address,
-            required_bytes,
-        })
     }
 }
 
@@ -514,7 +339,7 @@ impl Bindings {
     /// cleared it. A record holds none as an address and a stride of 0 and a set slot's stride
     /// form as all ones (the pipeline's) or the stride, the answers of Metal's getters on a buffer
     /// of dynamic attribute strides.
-    pub fn buffers(&self, stage: BufferStage) -> &[Option<BufferBinding>; BINDING_COUNT] {
+    fn buffers(&self, stage: BufferStage) -> &[Option<BufferBinding>; BINDING_COUNT] {
         &self.buffers[stage.index()]
     }
 
@@ -573,8 +398,8 @@ pub struct CommandRecord {
 
 /// Why a record was refused: its length, an unknown action, a barrier flag other than 0 or 1,
 /// the all-ones attribute stride, which stands for the pipeline's static stride, a stage-in
-/// region beside a draw whose arguments take its words, or a field's index past what a record
-/// holds.
+/// region beside a draw whose arguments take its words, a malformed pipeline state, or a
+/// threadgroup length beside an indexed patch draw.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecordError {
     Length {
@@ -598,13 +423,6 @@ pub enum RecordError {
     /// takes the first two lengths' words (`layout::CONTROL_POINT_INDICES`): a render command
     /// sets none.
     ThreadgroupMemoryLength,
-    /// A field's index past what a record holds: a buffer slot
-    /// at or past [`BINDING_COUNT`], or a threadgroup length at or past
-    /// [`THREADGROUP_BUFFER_ARGUMENT_COUNT`].
-    Index {
-        index: usize,
-        count: usize,
-    },
 }
 
 impl fmt::Display for RecordError {
@@ -629,10 +447,6 @@ impl fmt::Display for RecordError {
             Self::ThreadgroupMemoryLength => f.write_str(
                 "an indexed patch draw's control-point index buffer takes the threadgroup \
                  lengths' first words",
-            ),
-            Self::Index { index, count } => write!(
-                f,
-                "indirect command field index {index} is past the record's {count}"
             ),
         }
     }
@@ -776,32 +590,6 @@ pub(crate) fn writes_of(action: &Action, barrier: bool) -> crate::pipeline::Comm
     }
     writes
 }
-
-/// One field of a command's record, as one CPU setter writes it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RecordField {
-    /// The action ([`CommandRecord::action`]): a dispatch or a draw.
-    Action(Action),
-    /// The barrier flag ([`CommandRecord::barrier`]).
-    Barrier(bool),
-    /// The pipeline the command names ([`Bindings::pipeline`]), set: a pipeline a reset retained
-    /// goes ([`CommandRecord::retained_pipeline`]).
-    Pipeline(NonZeroU64),
-    /// Slot `slot` of `stage`'s buffers ([`Bindings::buffers`]), set, or unset with `None`.
-    Buffer {
-        stage: BufferStage,
-        slot: usize,
-        binding: Option<BufferBinding>,
-    },
-    /// Threadgroup-memory length `index` ([`CommandRecord::threadgroup_memory_lengths`]).
-    ThreadgroupMemoryLength { index: usize, length: u32 },
-    /// The stage-in region ([`CommandRecord::stage_in_region`]).
-    StageInRegion([u32; 6]),
-    /// The imageblock size ([`CommandRecord::imageblock_size`]).
-    ImageblockSize([u16; 2]),
-}
-
-impl CommandRecord {}
 
 fn require_length(bytes: &[u8]) -> Result<(), RecordError> {
     if bytes.len() == COMMAND_BYTES {

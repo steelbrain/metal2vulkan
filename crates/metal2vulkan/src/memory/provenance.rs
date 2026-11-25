@@ -1828,8 +1828,7 @@ fn exact_member_at<'e>(
 /// through a pointer whose roots are `roots` and whose offset range is `range` reads exactly one
 /// command-buffer or pipeline-state member's field at a translation-time constant offset in its
 /// argument buffer's first element, or `None`. The member's field is its word: the command buffer's
-/// resource ID (its records lie at `indirect_commands::records_address` of it), or the pipeline
-/// template's host-registered token.
+/// resource ID, or the pipeline template's host-registered token.
 pub(crate) fn object_handle_load(
     e: &Entry,
     abi: &AbiIndex,

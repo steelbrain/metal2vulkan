@@ -14,12 +14,12 @@ fn reset_clears_action_and_bindings_to_zero() {
 }
 
 /// A compute command's reset keeps the pipeline it executes with, reported cleared: the pipeline
-/// word holds it and the state word flags it, `decode` reports it as `retained_pipeline` beside no
-/// set pipeline, and `resolve_bindings` executes it. A retained pipeline beside a set one does
-/// not encode; a state word with a bit other than `RETAINED` and `KERNEL_PIPELINE`, or
-/// `RETAINED` without a pipeline, does not decode.
+/// word holds it and the state word flags it, and `decode` reports it as `retained_pipeline`
+/// beside no set pipeline. A retained pipeline beside a set one does not encode; a state word with
+/// a bit other than `RETAINED` and `KERNEL_PIPELINE`, or `RETAINED` without a pipeline, does not
+/// decode.
 #[test]
-fn a_retained_pipeline_runs_and_reads_back_cleared() {
+fn a_retained_pipeline_reads_back_cleared() {
     let token = NonZeroU64::new(0x0123_4567_89ab_cdef);
     let record = CommandRecord {
         action: Action::DispatchThreads {
@@ -37,15 +37,6 @@ fn a_retained_pipeline_runs_and_reads_back_cleared() {
     let decoded = CommandRecord::decode(&bytes).unwrap();
     assert_eq!(decoded, record);
     assert_eq!(decoded.bindings.pipeline, None);
-    let owned = Inheritance {
-        pipeline: StateSource::Command,
-        buffers: StateSource::Command,
-    };
-    let parent = Bindings::default();
-    assert_eq!(
-        decoded.resolve_bindings(owned, &parent).unwrap().pipeline,
-        token
-    );
     // A set pipeline is reported, and its state word is 0.
     let set = CommandRecord {
         bindings: Bindings {
@@ -108,7 +99,6 @@ fn a_kernel_s_pipeline_is_told_from_the_cpu_s() {
         record.encode_into(&mut bytes).unwrap();
         assert_eq!(&bytes[state..state + 4], &word.to_le_bytes());
         assert_eq!(&CommandRecord::decode(&bytes).unwrap(), record);
-        assert!(RecordView::new(&bytes).unwrap().kernel_pipeline());
     }
     // Flagged beside no pipeline.
     let unnamed = CommandRecord {
@@ -236,7 +226,14 @@ fn malformed_records_are_rejected_before_host_replay() {
 #[test]
 fn a_render_descriptor_allows_draws_and_refuses_dispatches() {
     let render = CommandDescriptor::Render {
-        draws: RenderDraws::PRIMITIVES,
+        draws: RenderDraws {
+            primitives: true,
+            indexed: false,
+            patches: false,
+            indexed_patches: false,
+            mesh_threadgroups: false,
+            mesh_threads: false,
+        },
         max_vertex_buffer_bind_count: 2,
         max_fragment_buffer_bind_count: 3,
         max_object_buffer_bind_count: 0,

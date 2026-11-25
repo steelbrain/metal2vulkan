@@ -48,16 +48,6 @@ pub struct RenderDraws {
 }
 
 impl RenderDraws {
-    /// Draws of primitives alone, Metal's `Draw`.
-    pub const PRIMITIVES: RenderDraws = RenderDraws {
-        primitives: true,
-        indexed: false,
-        patches: false,
-        indexed_patches: false,
-        mesh_threadgroups: false,
-        mesh_threads: false,
-    };
-
     /// The header's policy bits of the draws.
     fn bits(self) -> u32 {
         [

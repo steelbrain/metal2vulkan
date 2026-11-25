@@ -64,7 +64,6 @@ assoc-const	metal2vulkan-runtime::Texture::FLOAT_DEPTH_UPLOAD_NOTE	pub const FLO
 assoc-const	metal2vulkan-runtime::TextureSwizzleChannels::DEFAULT	pub const DEFAULT: TextureSwizzleChannels
 assoc-const	metal2vulkan::bind::AstcDecode::BLOCK_BYTES	pub const BLOCK_BYTES: u32
 assoc-const	metal2vulkan::bind::indirect_commands::BufferBinding::MIN_BUFFER_ADDRESS	pub const MIN_BUFFER_ADDRESS: u64
-assoc-const	metal2vulkan::bind::indirect_commands::RenderDraws::PRIMITIVES	pub const PRIMITIVES: RenderDraws
 assoc-const	metal2vulkan::device::ApiVersion::V1_2	pub const V1_2: ApiVersion
 assoc-const	metal2vulkan::device::ApiVersion::V1_3	pub const V1_3: ApiVersion
 assoc-const	metal2vulkan::device::DevicePolicy::RESIDENT_TABLES	pub const RESIDENT_TABLES: DevicePolicy
@@ -216,7 +215,6 @@ assoc-const-value	metal2vulkan-runtime::Texture::FLOAT_DEPTH_UPLOAD_NOTE	Precisi
 assoc-const-value	metal2vulkan-runtime::TextureSwizzleChannels::DEFAULT	TextureSwizzleChannels
 assoc-const-value	metal2vulkan::bind::AstcDecode::BLOCK_BYTES	16
 assoc-const-value	metal2vulkan::bind::indirect_commands::BufferBinding::MIN_BUFFER_ADDRESS	1 <<32
-assoc-const-value	metal2vulkan::bind::indirect_commands::RenderDraws::PRIMITIVES	RenderDraws
 assoc-const-value	metal2vulkan::device::ApiVersion::V1_2	ApiVersion
 assoc-const-value	metal2vulkan::device::ApiVersion::V1_3	ApiVersion
 assoc-const-value	metal2vulkan::device::DevicePolicy::RESIDENT_TABLES	DevicePolicy
@@ -360,10 +358,7 @@ const	metal2vulkan::bind::MAX_SCREEN_EXTENT	pub const MAX_SCREEN_EXTENT: u32
 const	metal2vulkan::bind::indirect_commands::BINDING_COUNT	pub const BINDING_COUNT: usize
 const	metal2vulkan::bind::indirect_commands::COMMAND_BUFFER_HEADER_BYTES	pub const COMMAND_BUFFER_HEADER_BYTES: usize
 const	metal2vulkan::bind::indirect_commands::COMMAND_BYTES	pub const COMMAND_BYTES: usize
-const	metal2vulkan::bind::indirect_commands::RECORDS_ADDRESS_BASE	pub const RECORDS_ADDRESS_BASE: u64
-const	metal2vulkan::bind::indirect_commands::RECORDS_ID_LIMIT	pub const RECORDS_ID_LIMIT: u64
 const	metal2vulkan::bind::indirect_commands::THREADGROUP_BUFFER_ARGUMENT_COUNT	pub const THREADGROUP_BUFFER_ARGUMENT_COUNT: u32
-const	metal2vulkan::bind::indirect_commands::WRITTEN_FLAG_BYTES	pub const WRITTEN_FLAG_BYTES: usize
 const	metal2vulkan::cache::ARTIFACT_FORMAT_VERSION	pub const ARTIFACT_FORMAT_VERSION: u32
 const	metal2vulkan::cache::RUNTIME_VERSION	pub const RUNTIME_VERSION: u32
 const	metal2vulkan::cache::SEMANTICS_VERSION	pub const SEMANTICS_VERSION: u32
@@ -425,10 +420,7 @@ const-value	metal2vulkan::bind::MAX_SCREEN_EXTENT	1 <<16
 const-value	metal2vulkan::bind::indirect_commands::BINDING_COUNT	32
 const-value	metal2vulkan::bind::indirect_commands::COMMAND_BUFFER_HEADER_BYTES	16
 const-value	metal2vulkan::bind::indirect_commands::COMMAND_BYTES	((THREADGROUP_WORD + THREADGROUP_COUNT + 2) * 4).next_multiple_of(8)
-const-value	metal2vulkan::bind::indirect_commands::RECORDS_ADDRESS_BASE	1 <<63
-const-value	metal2vulkan::bind::indirect_commands::RECORDS_ID_LIMIT	1 <<31
 const-value	metal2vulkan::bind::indirect_commands::THREADGROUP_BUFFER_ARGUMENT_COUNT	31
-const-value	metal2vulkan::bind::indirect_commands::WRITTEN_FLAG_BYTES	4
 const-value	metal2vulkan::metal::format::BICUBIC_TEXELS_UNBOUND	crate::metal::bicubic::BicubicTexels::NEUTRAL.0
 const-value	metal2vulkan::metal::sampler::NOT_MIPMAPPED_MAX_LOD	0.25
 const-value	metal2vulkan::metal::vertex::MAX_VERTEX_ALIGNMENT	4
@@ -635,14 +627,11 @@ enum	metal2vulkan::bind::EtcTexels	#[cfg_attr(feature = "serde", derive(serde::S
 enum	metal2vulkan::bind::RateMapError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum RateMapError
 enum	metal2vulkan::bind::UnpinnedCompile	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum UnpinnedCompile
 enum	metal2vulkan::bind::indirect_commands::Action	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] pub enum Action
-enum	metal2vulkan::bind::indirect_commands::AddressError	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum AddressError
-enum	metal2vulkan::bind::indirect_commands::BindingError	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum BindingError
 enum	metal2vulkan::bind::indirect_commands::BufferStage	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum BufferStage
 enum	metal2vulkan::bind::indirect_commands::CommandBufferError	#[derive(Clone, Debug, PartialEq, Eq)] pub enum CommandBufferError
 enum	metal2vulkan::bind::indirect_commands::CommandDescriptor	#[derive(Clone, Debug, PartialEq, Eq)] pub enum CommandDescriptor
 enum	metal2vulkan::bind::indirect_commands::ComputeDispatch	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum ComputeDispatch
 enum	metal2vulkan::bind::indirect_commands::RecordError	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum RecordError
-enum	metal2vulkan::bind::indirect_commands::RecordField	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum RecordField
 enum	metal2vulkan::bind::indirect_commands::StateSource	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum StateSource
 enum	metal2vulkan::cache::ArtifactError	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ArtifactError
 enum	metal2vulkan::device::Exposure	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Exposure
@@ -1916,11 +1905,6 @@ field	metal2vulkan::bind::indirect_commands::RenderDraws.mesh_threadgroups	pub m
 field	metal2vulkan::bind::indirect_commands::RenderDraws.mesh_threads	pub mesh_threads: bool
 field	metal2vulkan::bind::indirect_commands::RenderDraws.patches	pub patches: bool
 field	metal2vulkan::bind::indirect_commands::RenderDraws.primitives	pub primitives: bool
-field	metal2vulkan::bind::indirect_commands::ResolvedBindings.pipeline	pub pipeline: Option<NonZeroU64>
-field	metal2vulkan::bind::indirect_commands::ResolvedBindings.threadgroup_memory_lengths	pub threadgroup_memory_lengths: &'a [u32; THREADGROUP_COUNT]
-field	metal2vulkan::bind::indirect_commands::ResolvedBuffer.available_bytes	pub available_bytes: u64
-field	metal2vulkan::bind::indirect_commands::ResolvedBuffer.offset	pub offset: u64
-field	metal2vulkan::bind::indirect_commands::ResolvedBuffer.resource	pub resource: &'a T
 field	metal2vulkan::cache::SpecializationKey.data	pub data: Vec<u8>
 field	metal2vulkan::cache::SpecializationKey.entries	pub entries: Vec<vk::SpecializationMapEntry>
 field	metal2vulkan::cache::VariantKey.address_maps	pub address_maps: BTreeMap<SlotRef, crate::metal::sampler::AddressModeMap>
@@ -2807,8 +2791,6 @@ fn	metal2vulkan::bind::alpha_test_code	pub fn alpha_test_code(reference: f32) ->
 fn	metal2vulkan::bind::clamped_depth	pub const fn clamped_depth(bits: u32) -> u32
 fn	metal2vulkan::bind::function_table_entry_offset	pub fn function_table_entry_offset(index: u32) -> u64
 fn	metal2vulkan::bind::function_table_header	pub fn function_table_header(size: u32) -> [u32; 2]
-fn	metal2vulkan::bind::indirect_commands::records_address	pub const fn records_address(id: u64) -> u64
-fn	metal2vulkan::bind::indirect_commands::written_flag_offset	pub const fn written_flag_offset(capacity: u32, index: u32) -> u64
 fn	metal2vulkan::device::vk_stage	pub fn vk_stage(stage: Stage) -> vk::ShaderStage
 fn	metal2vulkan::metal::format::alpha_in_red	pub fn alpha_in_red(pf: PixelFormat, profile: &DeviceProfile) -> bool
 fn	metal2vulkan::metal::format::alpha_in_red_format	pub fn alpha_in_red_format(pf: PixelFormat) -> Option<vk::Format>
@@ -6221,7 +6203,6 @@ method	metal2vulkan::bind::SamplerDescriptor::new	pub fn new() -> SamplerDescrip
 method	metal2vulkan::bind::SamplerDescriptor::shape	pub fn shape(&self) -> SamplerShape
 method	metal2vulkan::bind::StageInRegion::new	pub fn new(origin: [u32; 3], size: [u32; 3]) -> StageInRegion
 method	metal2vulkan::bind::indirect_commands::Action::writes	pub fn writes(&self) -> crate::pipeline::CommandWrites
-method	metal2vulkan::bind::indirect_commands::Bindings::buffers	pub fn buffers(&self, stage: BufferStage) -> &[Option<BufferBinding>; BINDING_COUNT]
 method	metal2vulkan::bind::indirect_commands::Bindings::buffers_mut	pub fn buffers_mut(&mut self, stage: BufferStage) -> &mut [Option<BufferBinding>; BINDING_COUNT]
 method	metal2vulkan::bind::indirect_commands::BufferBinding::buffer_alignment	pub fn buffer_alignment(&self) -> u64
 method	metal2vulkan::bind::indirect_commands::BufferBinding::buffer_data_size	pub fn buffer_data_size(&self) -> u64
@@ -6229,7 +6210,6 @@ method	metal2vulkan::bind::indirect_commands::BufferBinding::buffer_data_type	pu
 method	metal2vulkan::bind::indirect_commands::BufferBinding::buffer_pointer_type	pub fn buffer_pointer_type(&self) -> Option<&PointerType>
 method	metal2vulkan::bind::indirect_commands::BufferBinding::buffer_struct_type	pub fn buffer_struct_type(&self) -> Option<&StructType>
 method	metal2vulkan::bind::indirect_commands::BufferBinding::names_buffer	pub const fn names_buffer(&self) -> bool
-method	metal2vulkan::bind::indirect_commands::BufferBinding::resolve_buffer	pub fn resolve_buffer<'a, T>(self, buffers: &[RegisteredBuffer<'a, T>], required_bytes: u64) -> Result<Option<ResolvedBuffer<'a, T>>, AddressError>
 method	metal2vulkan::bind::indirect_commands::BufferStage::of	pub const fn of(render: bool) -> [BufferStage; BUFFER_STAGES]
 method	metal2vulkan::bind::indirect_commands::CommandBuffer::decode	pub fn decode(bytes: &'a [u8], descriptor: &CommandDescriptor, inheritance: Inheritance) -> Result<Self, CommandBufferError>
 method	metal2vulkan::bind::indirect_commands::CommandBuffer::initialize	pub fn initialize(bytes: &mut [u8], capacity: u32, descriptor: &CommandDescriptor, inheritance: Inheritance) -> Result<(), CommandBufferError>
@@ -6241,13 +6221,8 @@ method	metal2vulkan::bind::indirect_commands::CommandDescriptor::validate_header
 method	metal2vulkan::bind::indirect_commands::CommandDescriptor::validate_record	pub fn validate_record(&self, record: &CommandRecord) -> Result<(), String>
 method	metal2vulkan::bind::indirect_commands::CommandRecord::decode	pub fn decode(bytes: &[u8]) -> Result<Self, RecordError>
 method	metal2vulkan::bind::indirect_commands::CommandRecord::encode_into	pub fn encode_into(&self, bytes: &mut [u8]) -> Result<(), RecordError>
-method	metal2vulkan::bind::indirect_commands::CommandRecord::resolve_bindings	pub fn resolve_bindings<'a>(&'a self, inheritance: Inheritance, parent: &'a Bindings) -> Result<ResolvedBindings<'a>, BindingError>
 method	metal2vulkan::bind::indirect_commands::CommandRecord::writes	pub fn writes(&self) -> crate::pipeline::CommandWrites
-method	metal2vulkan::bind::indirect_commands::RecordView::action	pub fn action(&self) -> Action
-method	metal2vulkan::bind::indirect_commands::RecordView::barrier	pub fn barrier(&self) -> bool
-method	metal2vulkan::bind::indirect_commands::RecordView::buffer	pub fn buffer(&self, stage: BufferStage, slot: usize) -> Option<BufferBinding>
 method	metal2vulkan::bind::indirect_commands::RecordView::imageblock_size	pub fn imageblock_size(&self) -> [u16; 2]
-method	metal2vulkan::bind::indirect_commands::RecordView::kernel_pipeline	pub fn kernel_pipeline(&self) -> bool
 method	metal2vulkan::bind::indirect_commands::RecordView::new	pub fn new(bytes: &'a [u8]) -> Result<RecordView<'a>, RecordError>
 method	metal2vulkan::bind::indirect_commands::RecordView::pipeline	pub fn pipeline(&self) -> Option<NonZeroU64>
 method	metal2vulkan::bind::indirect_commands::RecordView::record	pub fn record(&self) -> CommandRecord
@@ -6255,9 +6230,6 @@ method	metal2vulkan::bind::indirect_commands::RecordView::record_into	pub fn rec
 method	metal2vulkan::bind::indirect_commands::RecordView::retained_pipeline	pub fn retained_pipeline(&self) -> Option<NonZeroU64>
 method	metal2vulkan::bind::indirect_commands::RecordView::stage_in_region	pub fn stage_in_region(&self) -> [u32; 6]
 method	metal2vulkan::bind::indirect_commands::RecordView::threadgroup_memory_length	pub fn threadgroup_memory_length(&self, index: usize) -> Option<u32>
-method	metal2vulkan::bind::indirect_commands::RecordView::writes	pub fn writes(&self) -> crate::pipeline::CommandWrites
-method	metal2vulkan::bind::indirect_commands::RegisteredBuffer::new	pub fn new(resource: &'a T, address: u64, length: u64) -> Result<Self, AddressError>
-method	metal2vulkan::bind::indirect_commands::ResolvedBindings::buffers	pub fn buffers(&self, stage: BufferStage) -> &[Option<BufferBinding>; BINDING_COUNT]
 method	metal2vulkan::cache::PipelineKey::digest	pub const fn digest(&self) -> &Hash256
 method	metal2vulkan::cache::PipelineKey::new	pub const fn new(hash: Hash256) -> PipelineKey
 method	metal2vulkan::cache::SpecializationKey::new	pub fn new() -> SpecializationKey
@@ -6937,10 +6909,7 @@ struct	metal2vulkan::bind::indirect_commands::CommandBuffer	pub struct CommandBu
 struct	metal2vulkan::bind::indirect_commands::CommandRecord	#[derive(Clone, Debug, Default, PartialEq, Eq)] pub struct CommandRecord
 struct	metal2vulkan::bind::indirect_commands::Inheritance	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct Inheritance
 struct	metal2vulkan::bind::indirect_commands::RecordView	#[derive(Clone, Copy, Debug)] pub struct RecordView<'a>
-struct	metal2vulkan::bind::indirect_commands::RegisteredBuffer	pub struct RegisteredBuffer<'a, T>
 struct	metal2vulkan::bind::indirect_commands::RenderDraws	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct RenderDraws
-struct	metal2vulkan::bind::indirect_commands::ResolvedBindings	#[derive(Clone, Copy, Debug)] pub struct ResolvedBindings<'a>
-struct	metal2vulkan::bind::indirect_commands::ResolvedBuffer	#[non_exhaustive] pub struct ResolvedBuffer<'a, T>
 struct	metal2vulkan::cache::PipelineKey	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct PipelineKey(pub Hash256)
 struct	metal2vulkan::cache::SpecializationKey	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct SpecializationKey
 struct	metal2vulkan::cache::VariantKey	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct VariantKey
@@ -7194,10 +7163,6 @@ trait-impl	metal2vulkan::bind::RateMapError impl fmt::Display	impl fmt::Display 
 trait-impl	metal2vulkan::bind::RateMapError impl std::error::Error	impl std::error::Error for RateMapError
 trait-impl	metal2vulkan::bind::SamplerDescriptor impl Default	impl Default for SamplerDescriptor
 trait-impl	metal2vulkan::bind::UnpinnedCompile impl fmt::Display	impl fmt::Display for UnpinnedCompile
-trait-impl	metal2vulkan::bind::indirect_commands::AddressError impl fmt::Display	impl fmt::Display for AddressError
-trait-impl	metal2vulkan::bind::indirect_commands::AddressError impl std::error::Error	impl std::error::Error for AddressError
-trait-impl	metal2vulkan::bind::indirect_commands::BindingError impl fmt::Display	impl fmt::Display for BindingError
-trait-impl	metal2vulkan::bind::indirect_commands::BindingError impl std::error::Error	impl std::error::Error for BindingError
 trait-impl	metal2vulkan::bind::indirect_commands::CommandBufferError impl fmt::Display	impl fmt::Display for CommandBufferError
 trait-impl	metal2vulkan::bind::indirect_commands::CommandBufferError impl std::error::Error	impl std::error::Error for CommandBufferError
 trait-impl	metal2vulkan::bind::indirect_commands::RecordError impl fmt::Display	impl fmt::Display for RecordError
@@ -8846,10 +8811,6 @@ variant	metal2vulkan::bind::indirect_commands::Action::DrawMeshThreads	DrawMeshT
 variant	metal2vulkan::bind::indirect_commands::Action::DrawPatches	DrawPatches { control_points: u32, patch_start: u32, patch_count: u32, patch_index_buffer: u64, instance_count: u32, base_instance: u32, factor_buffer: u64, factor_instance_stride: u32, factor_scale: u32 }
 variant	metal2vulkan::bind::indirect_commands::Action::DrawPrimitives	DrawPrimitives { primitive_type: u32, vertex_start: u32, vertex_count: u32, instance_count: u32, base_instance: u32 }
 variant	metal2vulkan::bind::indirect_commands::Action::Empty	Empty
-variant	metal2vulkan::bind::indirect_commands::AddressError::Ambiguous	Ambiguous { address: u64, required_bytes: u64 }
-variant	metal2vulkan::bind::indirect_commands::AddressError::InvalidAllocation	InvalidAllocation { address: u64, length: u64 }
-variant	metal2vulkan::bind::indirect_commands::AddressError::Unavailable	Unavailable { address: u64, required_bytes: u64 }
-variant	metal2vulkan::bind::indirect_commands::BindingError::MissingPipeline	MissingPipeline { source: StateSource }
 variant	metal2vulkan::bind::indirect_commands::BufferStage::Fragment	Fragment
 variant	metal2vulkan::bind::indirect_commands::BufferStage::Kernel	Kernel
 variant	metal2vulkan::bind::indirect_commands::BufferStage::Mesh	Mesh
@@ -8868,19 +8829,11 @@ variant	metal2vulkan::bind::indirect_commands::ComputeDispatch::Threadgroups	Thr
 variant	metal2vulkan::bind::indirect_commands::ComputeDispatch::Threads	Threads
 variant	metal2vulkan::bind::indirect_commands::RecordError::Action	Action { value: u32 }
 variant	metal2vulkan::bind::indirect_commands::RecordError::Barrier	Barrier { value: u32 }
-variant	metal2vulkan::bind::indirect_commands::RecordError::Index	Index { index: usize, count: usize }
 variant	metal2vulkan::bind::indirect_commands::RecordError::Length	Length { actual: usize }
 variant	metal2vulkan::bind::indirect_commands::RecordError::PipelineState	PipelineState
 variant	metal2vulkan::bind::indirect_commands::RecordError::ReservedStride	ReservedStride
 variant	metal2vulkan::bind::indirect_commands::RecordError::StageInRegion	StageInRegion
 variant	metal2vulkan::bind::indirect_commands::RecordError::ThreadgroupMemoryLength	ThreadgroupMemoryLength
-variant	metal2vulkan::bind::indirect_commands::RecordField::Action	Action(Action)
-variant	metal2vulkan::bind::indirect_commands::RecordField::Barrier	Barrier(bool)
-variant	metal2vulkan::bind::indirect_commands::RecordField::Buffer	Buffer { stage: BufferStage, slot: usize, binding: Option<BufferBinding> }
-variant	metal2vulkan::bind::indirect_commands::RecordField::ImageblockSize	ImageblockSize([u16; 2])
-variant	metal2vulkan::bind::indirect_commands::RecordField::Pipeline	Pipeline(NonZeroU64)
-variant	metal2vulkan::bind::indirect_commands::RecordField::StageInRegion	StageInRegion([u32; 6])
-variant	metal2vulkan::bind::indirect_commands::RecordField::ThreadgroupMemoryLength	ThreadgroupMemoryLength { index: usize, length: u32 }
 variant	metal2vulkan::bind::indirect_commands::StateSource::Command	Command
 variant	metal2vulkan::bind::indirect_commands::StateSource::Parent	Parent
 variant	metal2vulkan::cache::ArtifactError::Corrupt	Corrupt

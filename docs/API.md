@@ -1346,12 +1346,7 @@ as its replay variant (`VariantKey::replay_bindings`), whose vertex and fragment
 each command's buffers from slot tables in memory, and as its merged variant
 (`VariantKey::merged_draws`), whose vertex function finds its command in one merged draw by a
 prefix of the commands' first vertices and runs the command's vertex,
-instance and buffers, in the commands' order. A buffer's records start at
-`bind::indirect_commands::records_address` of its ID, outside every Metal address; records may
-run past later IDs' starts, and a resident set keeps each records range whole. Storage may hold a written flag per command,
-a `u32` a command past the records (`bind::indirect_commands::written_flag_offset`): a consumer
-whose own writes of the records set the flags may reset only the flagged records of a run of
-commands, clearing each flag with its record.
+instance and buffers, in the commands' order.
 
 ## 7. Caching
 

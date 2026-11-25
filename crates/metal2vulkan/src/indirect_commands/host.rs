@@ -1,15 +1,14 @@
 //! The host's side of the record format: initializing a command buffer, and decoding and
-//! checking what a producer wrote, before a replay reads it. The runtime's indirect command
-//! buffers, a consumer's own runtime, validation's oracle and case model, and the crate's tests
-//! use it; the binder's device replay decodes records on the device instead.
+//! checking what a producer wrote, before a replay reads it. Validation's case model and Metal
+//! executor, and the crate's tests, use it.
 
 use super::descriptor::CommandDescriptor;
 #[cfg(doc)]
 use super::THREADGROUP_BUFFER_ARGUMENT_COUNT;
 use super::{
-    layout, require_length, writes_of, Action, Bindings, BufferBinding, BufferStage, CommandRecord,
-    Inheritance, RecordError, StateSource, BINDING_COUNT, BUFFER_STAGES, BUFFER_WORDS,
-    COMMAND_BUFFER_HEADER_BYTES, COMMAND_BYTES, HEADER_WORDS, THREADGROUP_COUNT, THREADGROUP_WORD,
+    layout, require_length, Action, Bindings, BufferBinding, BufferStage, CommandRecord,
+    Inheritance, RecordError, StateSource, BUFFER_WORDS, COMMAND_BUFFER_HEADER_BYTES,
+    COMMAND_BYTES, HEADER_WORDS, THREADGROUP_COUNT, THREADGROUP_WORD,
 };
 use std::fmt;
 use std::num::NonZeroU64;
@@ -171,42 +170,6 @@ fn require_buffer_length(bytes: &[u8], capacity: u32) -> Result<(), CommandBuffe
     }
 }
 
-/// Borrowed state selection. The host must still resolve resource identities and pipeline limits.
-#[derive(Clone, Copy, Debug)]
-pub struct ResolvedBindings<'a> {
-    pub pipeline: Option<NonZeroU64>,
-    /// Encoded command-local lengths; buffer inheritance does not replace explicit lengths.
-    /// Replay must validate the allocation for every used dynamic binding.
-    pub threadgroup_memory_lengths: &'a [u32; THREADGROUP_COUNT],
-    buffers: &'a [[Option<BufferBinding>; BINDING_COUNT]; BUFFER_STAGES],
-}
-
-impl ResolvedBindings<'_> {
-    pub fn buffers(&self, stage: BufferStage) -> &[Option<BufferBinding>; BINDING_COUNT] {
-        &self.buffers[stage.index()]
-    }
-}
-
-/// Why a command's state could not be resolved: a command that runs has no pipeline from the
-/// state source its descriptor names.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BindingError {
-    MissingPipeline { source: StateSource },
-}
-
-impl fmt::Display for BindingError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingPipeline { source } => write!(
-                f,
-                "indirect command requires a pipeline from {source:?} state"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for BindingError {}
-
 fn validate_record(bytes: &[u8]) -> Result<(Action, bool), RecordError> {
     require_length(bytes)?;
     let grid = [get_word(bytes, 4), get_word(bytes, 5), get_word(bytes, 6)];
@@ -286,36 +249,6 @@ fn get_u64(bytes: &[u8], word: usize) -> u64 {
 }
 
 impl CommandRecord {
-    /// Resolve the descriptor's state sources without copying bindings or changing the record.
-    /// A nonempty command requires a pipeline from the selected source: the other source is never
-    /// a fallback. Threadgroup lengths come from the command; allocation and synchronization
-    /// remain separate replay responsibilities.
-    pub fn resolve_bindings<'a>(
-        &'a self,
-        inheritance: Inheritance,
-        parent: &'a Bindings,
-    ) -> Result<ResolvedBindings<'a>, BindingError> {
-        let pipeline = match inheritance.pipeline {
-            // A pipeline a reset retained runs, as Metal's does.
-            StateSource::Command => self.bindings.pipeline.or(self.retained_pipeline),
-            StateSource::Parent => parent.pipeline,
-        };
-        if self.action != Action::Empty && pipeline.is_none() {
-            return Err(BindingError::MissingPipeline {
-                source: inheritance.pipeline,
-            });
-        }
-        let buffers = match inheritance.buffers {
-            StateSource::Command => &self.bindings.buffers,
-            StateSource::Parent => &parent.buffers,
-        };
-        Ok(ResolvedBindings {
-            pipeline,
-            buffers,
-            threadgroup_memory_lengths: &self.threadgroup_memory_lengths,
-        })
-    }
-
     /// Decode persistent state without executing it or resolving its host resource identities.
     pub fn decode(bytes: &[u8]) -> Result<Self, RecordError> {
         RecordView::new(bytes).map(|view| view.record())
@@ -358,16 +291,6 @@ impl<'a> RecordView<'a> {
         })
     }
 
-    /// [`CommandRecord::action`].
-    pub fn action(&self) -> Action {
-        self.action
-    }
-
-    /// [`CommandRecord::barrier`].
-    pub fn barrier(&self) -> bool {
-        self.barrier
-    }
-
     /// [`Bindings::pipeline`]: none where a reset retained the pipeline.
     pub fn pipeline(&self) -> Option<NonZeroU64> {
         self.pipeline.filter(|_| !self.retained)
@@ -376,19 +299,6 @@ impl<'a> RecordView<'a> {
     /// [`CommandRecord::retained_pipeline`].
     pub fn retained_pipeline(&self) -> Option<NonZeroU64> {
         self.pipeline.filter(|_| self.retained)
-    }
-
-    /// [`CommandRecord::kernel_pipeline`].
-    pub fn kernel_pipeline(&self) -> bool {
-        self.kernel
-    }
-
-    /// Slot `slot` of `stage`'s buffers, as [`Bindings::buffers`] holds it; none past
-    /// [`BINDING_COUNT`].
-    pub fn buffer(&self, stage: BufferStage, slot: usize) -> Option<BufferBinding> {
-        (slot < BINDING_COUNT)
-            .then(|| binding_at(self.bytes, stage.index() * BINDING_COUNT + slot))
-            .flatten()
     }
 
     /// Threadgroup-memory length `index`, as [`CommandRecord::threadgroup_memory_lengths`] holds
@@ -424,11 +334,6 @@ impl<'a> RecordView<'a> {
             u16::from_le_bytes([self.bytes[at], self.bytes[at + 1]]),
             u16::from_le_bytes([self.bytes[at + 2], self.bytes[at + 3]]),
         ]
-    }
-
-    /// [`CommandRecord::writes`] of the record.
-    pub fn writes(&self) -> crate::pipeline::CommandWrites {
-        writes_of(&self.action, self.barrier)
     }
 
     /// The whole record ([`CommandRecord::decode`]).
