@@ -6,7 +6,8 @@
 //! retires; a block's clones, one dropped giving nothing back, and a handle outliving its
 //! device; the thread gauge holding the device's four threads as it is made; a command buffer
 //! joining a held group only within the group's expected GPU run; each member of a group sent
-//! member by member signalling its own progress value; and each command buffer
+//! member by member signalling its own progress value, and its writes to Shared memory settled
+//! as it retires there; and each command buffer
 //! counted once in every stage histogram. Without a device: a push whose bytes the command buffer
 //! holds is not recorded again; a queue's expected run rises to a longer run at once and halves
 //! toward a shorter one; the join and send decisions of the group bound; the stage histograms'
@@ -148,7 +149,7 @@ pub(crate) mod on_device {
     use crate::{
         host_time, AllocationId, AllocationInfo, Block, BlockMappings, Buffer, CommandBuffer,
         CommandBufferError, CommandBufferStatus, CommandQueue, Device, DeviceLoss, DeviceOptions,
-        DispatchType, Error, Fence, Gauges, Instance, MemoryClass, Refusal, SharedEvent,
+        DispatchType, Error, Fence, Gauges, Instance, MemoryClass, Metrics, Refusal, SharedEvent,
     };
     use ash::vk;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -5049,6 +5050,163 @@ pub(crate) mod on_device {
             drop((a, l, queue));
             drop((first, second, arena, device));
         });
+    }
+
+    /// A member of a group sent member by member that completes before the group's last has its
+    /// writes to Shared memory settled as it retires at its own progress value, before its status
+    /// reads completed and its handlers run (`crate::coherence`): A fills one Shared buffer, then
+    /// L, long, fills another. Where the device holds a coherence state, the invalidates since the
+    /// group was held are A's one, over A's buffer's atoms, at A's handler and at A's status, each
+    /// seen before L's GPU end, and A's and L's two, over both buffers' atoms, at L's handler; each
+    /// handler reads its own fill. Where the device holds none, it makes no flush or invalidate.
+    /// Each device runs it as it reads its types and, under `m2v_gpu`, through the refused
+    /// device's view (`crate::tests::cached_types_incoherent`), which builds the state. L's copies
+    /// are sized to about 10 ms, and doubled for another attempt where A was seen complete only
+    /// after L's GPU end.
+    #[test]
+    fn every_device_settles_an_early_members_shared_writes_at_its_own_completion() {
+        let test = "command_group_apart_settles";
+        each_device(test, early_member_settles);
+        if cfg!(m2v_gpu) && !cfg!(m2v_shared_view) {
+            let view = || DeviceOptions {
+                memory: Some(crate::tests::cached_types_incoherent),
+                ..DeviceOptions::default()
+            };
+            each_device_with(test, view, early_member_settles);
+        }
+    }
+
+    /// [`every_device_settles_an_early_members_shared_writes_at_its_own_completion`] on `device`.
+    fn early_member_settles(name: &str, _: &Instance, device: Device) {
+        // L's GPU run aimed at.
+        const TARGET: u64 = 10_000_000;
+        let atom = (device.core().coherence.as_ref()).map(|coherence| coherence.atom);
+        let counters = device.counters();
+        let mut arena = Arena::new(&device);
+        let (first, second) = (arena.buffer(), arena.buffer());
+        let big = private(&device);
+        // The first fill of each, so the group's meet no first use.
+        let warm = queue(&device);
+        let once = warm.command_buffer().expect("a command buffer");
+        fill(&once, &first, 0);
+        fill(&once, &second, 0);
+        once.commit().expect("a commit");
+        finished(name, &once);
+        let mut copies = halves_for(name, &warm, &big, TARGET);
+        // From `before` to `after`: the flushes, their bytes, the invalidates, their bytes, and
+        // the calls that failed.
+        let calls = |before: &Metrics, after: &Metrics| {
+            [
+                after.shared_flushes - before.shared_flushes,
+                after.shared_flushed_bytes - before.shared_flushed_bytes,
+                after.shared_invalidates - before.shared_invalidates,
+                after.shared_invalidated_bytes - before.shared_invalidated_bytes,
+                after.shared_coherence_failures - before.shared_coherence_failures,
+            ]
+        };
+        for attempt in 1.. {
+            let queue = queue(&device);
+            let a = queue.command_buffer().expect("a command buffer");
+            fill(&a, &first, 0x5a5a_5a5a);
+            let l = halves(&queue, &big, copies);
+            fill(&l, &second, 0xa5a5_a5a5);
+            // At each handler, on the completion thread: the metrics, its buffer's first word and
+            // the host time.
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            for (command_buffer, buffer) in [(&a, &first), (&l, &second)] {
+                let (seen, buffer, counters) =
+                    (Arc::clone(&seen), buffer.clone(), counters.clone());
+                (command_buffer.add_completed_handler(move |_| {
+                    let metrics = counters.metrics();
+                    lock(&seen).push((metrics, word(&buffer), host_time()));
+                }))
+                .expect("a handler");
+            }
+            let (mut held, mut at_status) = (Metrics::default(), (Metrics::default(), 0));
+            behind_busy(name, &device, &queue, |busy, submitted, _| {
+                for command_buffer in [&a, &l] {
+                    command_buffer.commit().expect("a commit");
+                }
+                for command_buffer in [&a, &l] {
+                    within(name, || {
+                        command_buffer.status() != CommandBufferStatus::Committed
+                    });
+                }
+                let count = || counters.metrics().submissions - submitted;
+                assert_eq!(count(), AHEAD, "{name}: A and L held in one group");
+                // A long run seen before the group goes: it goes member by member.
+                l.queue().ran(1_000_000_000);
+                held = counters.metrics();
+                busy.open();
+                finished(name, &a);
+                // The metrics first: read before L's GPU end, as the host time after them shows,
+                // they hold nothing of L's retirement.
+                at_status = (counters.metrics(), host_time());
+                finished(name, &l);
+                assert_eq!(count() - AHEAD, 2, "{name}: A and L, a submission each");
+            });
+            let l_end = l.gpu_end_time();
+            let seen = lock(&seen).clone();
+            let &[(at_a, a_word, a_handled), (at_l, l_word, _)] = seen.as_slice() else {
+                panic!("{name}: A's and L's handlers: {seen:?}");
+            };
+            let (status_metrics, status_seen) = at_status;
+            let early = a_handled < l_end && status_seen < l_end;
+            if !early && attempt < 4 {
+                println!(
+                    "{name}: A seen complete {} ns after L's GPU end: again with {} copies",
+                    a_handled.max(status_seen) - l_end,
+                    copies * 2
+                );
+                copies = (copies * 2).min(4096);
+                drop((a, l, queue));
+                continue;
+            }
+            let (a_calls, status_calls, l_calls) = (
+                calls(&held, &at_a),
+                calls(&held, &status_metrics),
+                calls(&held, &at_l),
+            );
+            println!(
+                "{name}: atom {atom:?}; flushes, flushed bytes, invalidates, invalidated bytes and \
+                 failures since the group was held: at A's handler {a_calls:?}, {} ns before L's \
+                 GPU end; at A's status {status_calls:?}, {} ns before it; at L's handler \
+                 {l_calls:?}",
+                l_end as i64 - a_handled as i64,
+                l_end as i64 - status_seen as i64
+            );
+            assert!(early, "{name}: A seen complete before L's GPU end");
+            assert_eq!(
+                (a_word, l_word),
+                (0x5a5a_5a5a, 0xa5a5_a5a5),
+                "{name}: each handler reads its own fill"
+            );
+            if atom.is_none() {
+                assert_eq!(l_calls, [0; 5], "{name}: no coherence state, no call");
+            } else {
+                // A block starts at a multiple of 64 KiB and the atom is a power of two of at most
+                // 256, so each 256-byte buffer of the arena is whole atoms of its own.
+                let one = first.length();
+                assert_eq!(
+                    a_calls[2..],
+                    [1, one, 0],
+                    "{name}: at A's handler, A's writes invalidated as A retired, ahead of L's"
+                );
+                assert_eq!(
+                    status_calls[2..],
+                    [1, one, 0],
+                    "{name}: at A's status, A's writes invalidated"
+                );
+                assert_eq!(
+                    l_calls[2..],
+                    [2, 2 * one, 0],
+                    "{name}: at L's handler, A's writes and L's invalidated"
+                );
+            }
+            drop((a, l, queue));
+            break;
+        }
+        drop((first, second, big, once, warm, arena, device));
     }
 
     /// A completion that cannot leave room pokes no submit pass (`Work::completed`): while a
