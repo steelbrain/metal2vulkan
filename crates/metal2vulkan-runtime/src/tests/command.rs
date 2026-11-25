@@ -5168,7 +5168,8 @@ pub(crate) mod on_device {
                 calls(&held, &at_l),
             );
             println!(
-                "{name}: atom {atom:?}; flushes, flushed bytes, invalidates, invalidated bytes and \
+                "{name}: attempt {attempt}, atom {atom:?}; flushes, flushed bytes, invalidates, \
+                 invalidated bytes and \
                  failures since the group was held: at A's handler {a_calls:?}, {} ns before L's \
                  GPU end; at A's status {status_calls:?}, {} ns before it; at L's handler \
                  {l_calls:?}",
@@ -5288,9 +5289,18 @@ pub(crate) mod on_device {
                     drop((s, a, l, y, x, queue));
                     continue;
                 }
-                assert!(!early, "{name}: S seen complete before X was held");
+                // Only an attempt that asserted X's hold comes past here: the fourth fails where
+                // S was seen complete first.
+                assert!(
+                    !early,
+                    "{name}: S seen complete before X was held in all {attempt} attempts: the \
+                     hold was never observed"
+                );
                 let poked = at_last.load(Ordering::SeqCst) - before;
-                println!("{name}: {poked} pokes of the submit thread from X's hold to L's handler");
+                println!(
+                    "{name}: attempt {attempt} asserted X's hold; {poked} pokes of the submit \
+                     thread from X's hold to L's handler"
+                );
                 assert_eq!(
                     poked, 1,
                     "{name}: the group's last completion alone poked it"
