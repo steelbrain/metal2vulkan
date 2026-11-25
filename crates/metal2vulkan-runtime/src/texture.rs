@@ -3596,6 +3596,24 @@ impl Placed {
 /// so it copies the same blocks. `None` for an empty region. The place is in the image, which
 /// the texture starts at `base` of: a view's first level and array layer.
 ///
+/// A size of no whole blocks that stops inside the level is off the grid, though the other side
+/// of a copy between textures stops at its own level's edge, as 4 x 2 texels of a compressed
+/// level of 4 x 2 into the second block of a level of 8 x 4 do, the size Apple's page asks for.
+/// It stays refused for three facts:
+/// - Metal's validation layer stops it, "size.height(2) must be a multiple of
+///   MTLPixelFormatBC1_RGBA blockHeight(4)", taking a size of no whole blocks only where both
+///   places reach their levels' edges, though Apple's page asks for the clamped size;
+/// - plain Metal lands the source's block by no one rule: from a level of 4 x 2 at the block the
+///   copy names, from a level of 2 x 1 at the level's first block (the same probe, BC1 and BC3,
+///   job m3-max-73696);
+/// - Vulkan's prose asks a region of no whole blocks to match each image's edge ("Copy regions
+///   for each image must be aligned to a multiple of the texel block extent in each dimension,
+///   except at the edges of the image, where region extents must match the edge of the image"),
+///   though in Vulkan 1.4.366 only the source's extent has a valid usage of that
+///   (`VUID-vkCmdCopyImage-srcImage-01728` and `-01729`), the destination's being bounded by its
+///   level alone (`VUID-vkCmdCopyImage-dstOffset-00150` and `-00151`, its offset on the grid by
+///   `VUID-vkCmdCopyImage-pRegions-07281` and `-07282`).
+///
 /// Err: [`Refusal::TextureRegion`].
 pub(crate) fn place(
     d: &TextureDescriptor,

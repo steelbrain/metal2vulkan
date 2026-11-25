@@ -2775,12 +2775,26 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   (`Refusal::TextureCopyMismatch`), and a region outside either texture or off its block grid
   (`Refusal::TextureRegion`), a size past the block the level's edge rounds up to among them
   (8 x 4 at a level of 4 x 2, which the validation layer stops and plain Metal answers
-  differently by each call). Not built (`Gap::TextureCopy`): what one `vkCmdCopyImage` in the
-  floor does not make (a multisample texture, one pixel format held in two Vulkan formats by the
-  textures' usages, a 1D texture with another type, and whole blocks that end inside one
-  level's last block past its edge and not inside the other's, as the 4 x 4 block of a level of
-  4 x 2 texels into a level of 8 x 4, which plain Metal copies whole: one extent stops at one
-  image's edge alone).
+  differently by each call). A size of no whole blocks that stops at the source level's edge
+  and inside the destination's level is off the destination's grid too: 4 x 2 texels of a
+  compressed level of 4 x 2 into the second block of a level of 8 x 4, the size Apple's page
+  asks for. It stays refused for three facts:
+  - the validation layer stops it ("size.height(2) must be a multiple of MTLPixelFormatBC1_RGBA
+    blockHeight(4)"), though Apple's page asks for the clamped size;
+  - plain Metal lands the block by no one rule: from a level of 4 x 2 at the block the copy
+    names, from a level of 2 x 1 at the level's first block (probe
+    `compressed_copies_of_small_levels.m`, an Apple M3 Max, job m3-max-73696);
+  - Vulkan's prose asks a region of no whole blocks to match each image's edge ("Copy regions
+    for each image must be aligned to a multiple of the texel block extent in each dimension,
+    except at the edges of the image, where region extents must match the edge of the image"),
+    though in Vulkan 1.4.366 only the source's extent has a valid usage of that
+    (`VUID-vkCmdCopyImage-srcImage-01728`), and the destination's extent is bounded only by its
+    level (`VUID-vkCmdCopyImage-dstOffset-00150`).
+- Not built (`Gap::TextureCopy`): what one `vkCmdCopyImage` in the floor does not make (a
+  multisample texture, one pixel format held in two Vulkan formats by the textures' usages, a 1D
+  texture with another type, and whole blocks that end inside one level's last block past its
+  edge and not inside the other's, as the 4 x 4 block of a level of 4 x 2 texels into a level of
+  8 x 4, which plain Metal copies whole: one extent stops at one image's edge alone).
 - Within one level and slice of one image (a texture into itself, or a texture and its view,
   which shares its image), regions apart copy with one `vkCmdCopyImage`, that subresource in the
   general layout: one barrier moves it there and one home, the same three barriers as any copy.

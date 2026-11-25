@@ -62,11 +62,13 @@
 //   - over (8x4 at level 9) ends the process under the layer for every kind ("must be <=
 //     paddedWidth(4)"); without it mp, pp and b2t land the level's block alone, t2b writes the
 //     block and a block of 0 after it, replace writes nothing and get reads nothing;
-//   - between levels, 4x4 is taken with the layer and without, and 9to8, 8to9 and 10to8 land
-//     the block named whole (`m`); 8to10 lands level 8's first block, (0,0), not the one at
-//     (4,0) it names; the smaller level's extent lands the same, and ends the process under the
-//     layer: "size.height(2) must be a multiple of MTLPixelFormatBC1_RGBA blockHeight(4)" (2x1:
-//     the width too), Apple's clamped form into a larger level (9to8, 10to8) among them;
+//   - between levels, 4x4 is taken with the layer and without, and 9to8 and 8to9 land the block
+//     named whole (`m`) at the place named; 10to8 lands it whole at level 8's first block, (0,0),
+//     not at the (4,0) it names (level 8 reads `md`); 8to10 lands level 8's first block, (0,0),
+//     not the one at (4,0) it names; the smaller level's extent lands the same, and ends the
+//     process under the layer: "size.height(2) must be a multiple of MTLPixelFormatBC1_RGBA
+//     blockHeight(4)" (2x1: the width too), Apple's clamped form into a larger level (9to8,
+//     10to8) among them;
 //   - level 8, whole blocks, is taken everywhere and lands its blocks.
 
 #import <Foundation/Foundation.h>
