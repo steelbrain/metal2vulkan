@@ -35,7 +35,6 @@
 //! follows.
 
 use crate::buffer::{Buffer, BufferObject};
-use crate::coherence::Range;
 use crate::command::{Building, CommandBuffer};
 use crate::copy_out;
 use crate::counters::Metric;
@@ -1108,7 +1107,7 @@ impl BlitCommandEncoder {
             // the block of its bytes, which the host reads (`crate::coherence`).
             building.wrote_host();
             let atom = building.atom();
-            building.wrote_shared(Range::of_block(
+            building.wrote_shared(crate::coherence::Range::of_block(
                 &block.memory,
                 buffer.offset(),
                 buffer.length(),
