@@ -4393,7 +4393,7 @@ impl Texture {
             && image.view_formats.contains(&plan.format)
             && !image.surface();
         // An 8-bit sRGB texture's storage view is its UNORM twin's, not of its own format.
-        let root = (inner.view.as_ref()).map_or(inner, |view| &*view.parent);
+        let root = (inner.view.as_ref()).map_or(inner, |view| &view.parent);
         let extended = plan.storage && (image.storage.is_none() || root.twin.is_some());
         // An 8-bit sRGB view's storage view is its UNORM twin's, where the image lists the twin
         // and takes the storage usage (`Plan`'s `twin`).

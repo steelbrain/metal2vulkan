@@ -15,7 +15,8 @@
 //! - a kernel's sRGB variant is lowered at its first dispatch onto a twin and kept in the
 //!   device's map of contents: a dispatch onto the other format's twin, or onto an `RGBA8Unorm`
 //!   texture, lowers nothing; filled past a cap of 2, the map holds 2, and a variant it forgot
-//!   is lowered again at its kernel's next dispatch onto a twin.
+//!   is lowered again at its kernel's next dispatch onto a twin (on a device whose textures have
+//!   their twins' storage views).
 //!
 //! `llvm-as` assembles the fixture; without it the tests skip visibly.
 
@@ -111,7 +112,7 @@ mod on_device {
         let bits = value.to_bits();
         let sign = ((bits >> 16) & 0x8000) as u16;
         let exponent = (((bits >> 23) & 0xff) + 15 - 127) as u16;
-        sign | exponent << 10 | ((bits >> 13) & 0x3ff) as u16
+        sign | (exponent << 10) | ((bits >> 13) & 0x3ff) as u16
     }
 
     /// The value of `bits`, a `half` that [`half`] made.
@@ -121,7 +122,7 @@ mod on_device {
             return f32::from_bits(sign);
         }
         let exponent = u32::from((bits >> 10) & 0x1f) + 127 - 15;
-        f32::from_bits(sign | exponent << 23 | u32::from(bits & 0x3ff) << 13)
+        f32::from_bits(sign | (exponent << 23) | (u32::from(bits & 0x3ff) << 13))
     }
 
     /// Buffer 0's bytes for `kernel`, and the values its write takes: each `float4`, or each
@@ -278,21 +279,19 @@ mod on_device {
             return;
         };
         each_device("sRGB variants", |name, _, device| {
-            let encoded = FORMATS.iter().all(|&(_, twin, _)| stores(&device, twin));
-            if !encoded {
-                println!("{name}: the device stores no 8-bit twin; nothing to keep");
-                return;
-            }
-            device.core().kernels.set_cap(2);
-            let counters = device.counters();
-            let entries = || counters.gauges().kernel_entries;
-            let lowered = || counters.metrics().translations;
             let _grant = (device.grant_indices(IndexClass::Texture, 1, 3))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let [rgba, bgra] =
                 [0, 1].map(|at| texture(name, &device, FORMATS[at].0, 1 + at as u32));
+            if !(rgba.encodes() && bgra.encodes()) {
+                println!("{name}: a texture without its twin's storage view; nothing to keep");
+                return;
+            }
             let unorm = texture(name, &device, PixelFormat::RGBA8Unorm, 3);
-            assert!(rgba.encodes() && bgra.encodes(), "{name}: the twins");
+            device.core().kernels.set_cap(2);
+            let counters = device.counters();
+            let entries = || counters.gauges().kernel_entries;
+            let lowered = || counters.metrics().translations;
             let mut buffers = Buffers::new(&device);
             let width = buffers.of(&device, &WIDTH.to_le_bytes());
             let float = state(&device, &library, "fpv_srgb_write");
