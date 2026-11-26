@@ -5,10 +5,14 @@
 //! One compute pass runs `vwp_words` over two `uint` buffers bound at the case's offset, 0, 4, 8
 //! or 12 (a `uint` buffer binds at any multiple of 4), so its vector accesses through cast
 //! pointers land 0, 4, 8 or 12 bytes past a multiple of 16, then `vwp_vec16` over two `float4`
-//! buffers bound at multiples of 16. Every buffer's bytes are read back whole, the bytes before
+//! buffers bound at multiples of 16. One more case, `vector-word-phases-vec16-4-8`, binds
+//! `vwp_words`'s at 0 and `vwp_vec16`'s 4 and 8 bytes past a multiple of 16
+//! (`VEC16_AT_WORDS`): `float4` arguments (alignment 16) at multiples of 4 only, which Metal's API
+//! validation refuses ("must be a multiple of 16") and plain Metal runs, each element at its own
+//! address (`probes/misaligned_buffer_binds.m`). Every buffer's bytes are read back whole, the bytes before
 //! the bind offset and past the kernels' regions included, so an access placed anywhere but its
 //! own address shows as words that moved. The inputs and the bind offsets are
-//! `metal2vulkan_devtools::vector_word_phases`'s, whose `answer` is every access at its own
+//! `metal2vulkan_devtools::vector_word_phases`'s, whose `answer_at` is every access at its own
 //! address; this module's tests hold Metal's recorded answer equal to it, and the runtime's
 //! device test holds its own equal to it.
 //!
@@ -23,16 +27,20 @@ use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::transcript::{ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites};
 use metal2vulkan_devtools::vector_word_phases::{
-    inputs, vec16_offsets, FIXTURE, OFFSETS, THREADS, VEC16, WORDS,
+    inputs, vec16_offsets, FIXTURE, OFFSETS, THREADS, VEC16, VEC16_AT_WORDS, WORDS,
 };
 
-/// The case: `vwp_words`'s buffers bound at `offset`.
+/// The case: `vwp_words`'s buffers bound at `offset`, `vwp_vec16`'s at `vec16`.
 pub struct VectorWordPhases {
     name: &'static str,
     offset: u64,
+    vec16: (u64, u64),
 }
 
-/// One case per word phase.
+/// The case whose `vwp_vec16` buffers are bound at multiples of 4 only ([`VEC16_AT_WORDS`]).
+pub const VEC16_AT_WORDS_CASE: &str = "vector-word-phases-vec16-4-8";
+
+/// One case per word phase, then [`VEC16_AT_WORDS_CASE`].
 pub fn all() -> Vec<VectorWordPhases> {
     let names = [
         "vector-word-phases-0",
@@ -40,11 +48,21 @@ pub fn all() -> Vec<VectorWordPhases> {
         "vector-word-phases-8",
         "vector-word-phases-12",
     ];
-    names
+    let mut cases: Vec<VectorWordPhases> = names
         .into_iter()
         .zip(OFFSETS)
-        .map(|(name, offset)| VectorWordPhases { name, offset })
-        .collect()
+        .map(|(name, offset)| VectorWordPhases {
+            name,
+            offset,
+            vec16: vec16_offsets(offset),
+        })
+        .collect();
+    cases.push(VectorWordPhases {
+        name: VEC16_AT_WORDS_CASE,
+        offset: 0,
+        vec16: VEC16_AT_WORDS,
+    });
+    cases
 }
 
 /// The buffers in the order the case makes them, and their bytes.
@@ -78,13 +96,13 @@ fn layout(length: usize) -> ByteLayout {
 
 impl VectorWordPhases {
     /// The pass: `vwp_words` with `src` and `dst` at the case's offset, then `vwp_vec16` with `a`
-    /// and `b` at multiples of 16, each one threadgroup of [`THREADS`].
+    /// and `b` at the case's `vec16` offsets, each one threadgroup of [`THREADS`].
     fn steps(
         &self,
         (words, vec16): (crate::case::Handle, crate::case::Handle),
         buffers: &[crate::case::Handle; 4],
     ) -> Vec<ComputeStep> {
-        let (a_at, b_at) = vec16_offsets(self.offset);
+        let (a_at, b_at) = self.vec16;
         let dispatch = ComputeStep::DispatchThreadgroups {
             groups: [1, 1, 1],
             threads: [THREADS, 1, 1],
@@ -225,17 +243,18 @@ impl Case for VectorWordPhases {
 mod tests {
     use super::*;
     use crate::transcript::Value;
-    use metal2vulkan_devtools::vector_word_phases::answer;
+    use metal2vulkan_devtools::vector_word_phases::answer_at;
 
-    /// Metal's recorded answer at each word phase is every access at its own address: the
-    /// buffers `metal2vulkan_devtools::vector_word_phases::answer` gives, byte for byte, which the
+    /// Metal's recorded answer at each word phase, and with `vwp_vec16`'s `float4` buffers at
+    /// multiples of 4 only, is every access at its own address: the buffers
+    /// `metal2vulkan_devtools::vector_word_phases::answer_at` gives, byte for byte, which the
     /// product's interpreter test and the runtime's device test hold their own answers to.
     #[test]
     fn metal_places_each_vector_at_its_own_address() {
         for case in all() {
             let recording = crate::recording::read(case.name)
                 .unwrap_or_else(|e| panic!("{}: no recording: {e}", case.name));
-            let want = answer(case.offset);
+            let want = answer_at(case.offset, case.vec16);
             let want = [want.src, want.dst, want.a, want.b];
             let mut answers = 0;
             for metal in &recording.answers {
@@ -259,12 +278,22 @@ mod tests {
         }
     }
 
-    /// The four cases bind at the four word phases, under distinct names.
+    /// The four phase cases bind at the four word phases, with `vwp_vec16`'s buffers at
+    /// multiples of 16, and the last binds those 4 and 8 bytes past one, under distinct names.
     #[test]
     fn the_cases_take_each_word_phase() {
         let cases = all();
-        let offsets: Vec<u64> = cases.iter().map(|c| c.offset).collect();
-        assert_eq!(offsets, [0, 4, 8, 12]);
+        let binds: Vec<(u64, (u64, u64))> = cases.iter().map(|c| (c.offset, c.vec16)).collect();
+        assert_eq!(
+            binds,
+            [
+                (0, (16, 64)),
+                (4, (32, 48)),
+                (8, (48, 32)),
+                (12, (64, 16)),
+                (0, (4, 8))
+            ]
+        );
         let names: std::collections::BTreeSet<&str> = cases.iter().map(|c| c.name).collect();
         assert_eq!(names.len(), cases.len());
     }
