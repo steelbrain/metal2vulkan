@@ -278,6 +278,26 @@ mod tests {
         }
     }
 
+    /// Metal's API validation refuses [`VEC16_AT_WORDS_CASE`]'s binds, which plain Metal runs with
+    /// every access at its own address (the test above): the recording's validated fact holds
+    /// the validation's words for both `float4` buffers.
+    #[test]
+    fn metal_validation_refuses_the_word_aligned_float4_binds() {
+        use crate::recording::Validated;
+        let recording = crate::recording::read(VEC16_AT_WORDS_CASE)
+            .unwrap_or_else(|e| panic!("{VEC16_AT_WORDS_CASE}: no recording: {e}"));
+        assert!(!recording.answers.is_empty(), "no Metal answer");
+        for metal in &recording.answers {
+            assert!(
+                matches!(&metal.validated, Validated::Stopped { message, .. }
+                    if message.contains("must be a multiple of 16 but was set to 4")
+                        && message.contains("must be a multiple of 16 but was set to 8")),
+                "{VEC16_AT_WORDS_CASE}: the validated fact is {:?}",
+                metal.validated
+            );
+        }
+    }
+
     /// The four phase cases bind at the four word phases, with `vwp_vec16`'s buffers at
     /// multiples of 16, and the last binds those 4 and 8 bytes past one, under distinct names.
     #[test]
