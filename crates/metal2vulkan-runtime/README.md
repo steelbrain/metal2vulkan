@@ -2742,7 +2742,13 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   offset, is not a multiple of the kernel argument's alignment (`air.arg_type_align_size`, at
   most 16) is refused (`Refusal::BufferOffsetAlignment`) before anything is recorded, as Metal's
   API validation refuses the bind offset. Plain Metal runs such a dispatch at addresses of its
-  own; `docs/API.md` section 10 says which.
+  own; `docs/API.md` section 10 says which. A function kernel's argument of 8- or 16-byte
+  alignment bound at a multiple of 4 is not refused: plain Metal reaches each element at its own
+  address there, and the dispatch runs the state's variant that holds those buffers to 4
+  (`LoweringInputs::word_bound_buffers`), lowered at its first such dispatch and kept in the
+  device's map of contents under the state's key with the mask of those slots. The variant
+  holds a buffer a 64-bit atomic may reach to 8, and refuses it off a multiple of 8. A kernel the
+  consumer compiled has no variant and refuses such a bind; a draw refuses it too.
 - Parameters: fields in the push window, `[0, W)`, are pushed, `W` the device's
   `maxPushConstantsSize` up to 256 bytes (`DeviceProfile::push_window`: 256 on every lab device,
   128 on a device that reports Vulkan's least): the dispatch region and up to 24 buffer addresses
@@ -3563,6 +3569,10 @@ cache is answered compile-required on both.
 
 ### Known gaps of pipeline states
 
+- A kernel bound below its argument's alignment (an argument of 8 or 16 bytes at a multiple of 4)
+  runs a relaxed form of the kernel, whose accesses of that buffer claim 4-byte alignment. A
+  build that took that form for every such argument, bound so or not, ran the harness's four
+  `constant_*` rows on an RTX 3090 in 234-252 us against 99-122 us (job 74651).
 - A driver's create of a state's main pipeline can fail after the state has answered, where Metal
   compiles the state before it answers and a program never meets a state it was given that cannot
   run. Vulkan lets `vkCreateComputePipelines` and `vkCreateGraphicsPipelines` fail with

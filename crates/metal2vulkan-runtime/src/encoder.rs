@@ -303,10 +303,11 @@ struct DispatchFacts {
     /// ([`FieldValue::TextureLevels`], [`FieldValue::TextureLevelBase`]), found with the
     /// alignments.
     levels: bool,
-    /// The state's sRGB variant the dispatch runs, where a texture slot its kernel writes and
-    /// does not read is bound to an 8-bit sRGB texture's UNORM twin
-    /// ([`TextureObject::encodes`]), found with the alignments.
-    srgb: Option<Arc<Compiled>>,
+    /// The state's variant the dispatch runs, where a texture slot its kernel writes and does not
+    /// read is bound to an 8-bit sRGB texture's UNORM twin ([`TextureObject::encodes`]), or a
+    /// buffer slot at a multiple of 4 below its argument's alignment ([`check_alignments`]),
+    /// found with the alignments.
+    variant: Option<Arc<Compiled>>,
 }
 
 /// Which of its state's modules a dispatch runs.
@@ -972,8 +973,10 @@ impl ComputeCommandEncoder {
     ///
     /// Err: [`Refusal::NoPipeline`]; [`Refusal::ThreadgroupSize`] past Metal's limit for the
     /// kernel; [`Limit::ThreadgroupThreads`] within it and past this device's;
-    /// [`Refusal::BufferOffsetAlignment`] for a buffer the kernel reaches bound off its argument's
-    /// alignment, which nothing records; [`Gap::SwizzledReadWrite`]; [`Gap::BicubicTexels`];
+    /// [`Refusal::BufferOffsetAlignment`] for a buffer the kernel reaches bound off the alignment
+    /// its function holds it to, which nothing records (a function kernel's argument of 8 or 16
+    /// bound at a multiple of 4 runs on its kernel's variant that holds it to 4);
+    /// [`Gap::SwizzledReadWrite`]; [`Gap::BicubicTexels`];
     /// [`Limit::LevelElements`] where no run of level elements holds a texture of several levels
     /// the kernel writes or reads at a level other than the constant 0;
     /// [`Limit::ThreadgroupMemory`], the imageblock's cells at the size
@@ -1082,9 +1085,12 @@ impl ComputeCommandEncoder {
         let max = inner.whole.interface.max_total_threads;
         size_checked(&inner.whole.interface, size)?;
         // Every module of a state is the same function, with the same arguments and alignments,
-        // so the whole module answers this check and the next, once after each change.
+        // so the whole module answers this check and the next, once after each change; a buffer
+        // bound at a multiple of 4 below its argument's alignment is the variant's below.
         if !self.facts.aligned {
-            self.facts.nil = check_alignments(&self.core, &self.slots, &inner.whole.interface)?;
+            let (nil, words) =
+                check_alignments(&self.core, &self.slots, &inner.whole.interface, true)?;
+            self.facts.nil = nil;
             for &slot in &inner.whole.interface.storage_reads {
                 if matches!(self.textures.get(slot as usize), Some(Some(t)) if t.swizzled()) {
                     return Err(Error::Unsupported(Gap::SwizzledReadWrite { slot }));
@@ -1137,11 +1143,24 @@ impl ComputeCommandEncoder {
                     return Err(element(slot, gap));
                 }
             }
-            self.facts.srgb = match first {
-                None => None,
-                Some((slot, gap)) => match state.srgb_variant(srgb) {
-                    Some(variant) => Some(variant?),
-                    None => return Err(element(slot, gap)),
+            // The variant of those slots and of the buffers bound at a multiple of 4 below their
+            // argument's alignment, which holds each to what its accesses need, as it checks. A
+            // kernel the consumer compiled has none: its own module refuses such a buffer.
+            self.facts.variant = match (first, words) {
+                (None, 0) => None,
+                (first, words) => match state.variant(first.map_or(0, |_| srgb), words) {
+                    Some(variant) => {
+                        let variant = variant?;
+                        check_alignments(&self.core, &self.slots, &variant.whole.interface, false)?;
+                        Some(variant)
+                    }
+                    None => {
+                        check_alignments(&self.core, &self.slots, interface, false)?;
+                        match first {
+                            Some((slot, gap)) => return Err(element(slot, gap)),
+                            None => None,
+                        }
+                    }
                 },
             };
             // A texture declared written with no storage element, which the kernel may reach
@@ -1176,8 +1195,8 @@ impl ComputeCommandEncoder {
             });
             self.facts.aligned = true;
         }
-        // An sRGB variant's content runs in place of the state's, kept by the command buffer.
-        let variant = self.facts.srgb.clone();
+        // A variant's content runs in place of the state's, kept by the command buffer.
+        let variant = self.facts.variant.clone();
         if let Some(variant) = &variant {
             recording(&mut self.building).hold_content(variant);
         }
@@ -1676,13 +1695,17 @@ fn recording(building: &mut Option<Building>) -> &mut Building {
 /// [`check_alignment`] of each buffer bound in `slots` that `interface` reaches, the nil buffer's
 /// address where one it reaches is bound to nothing (`Ring::nil`), else 0, and the zero range's
 /// where it checks a load (`Ring::zero`), else 0. A `set_bytes` copy is at a multiple of 16 in the
-/// ring, which every mask divides, and so is the nil buffer.
+/// ring, which every mask divides, and so is the nil buffer. Where `words`, a buffer whose
+/// argument's alignment is 8 or 16, bound at a multiple of 4 below it, is not refused: the mask
+/// of those slots, bit `i` slot `i`, which plain Metal runs, each element at its own address
+/// (`LoweringInputs::word_bound_buffers`).
 fn check_alignments(
     core: &Core,
     slots: &[Slot],
     interface: &Interface,
-) -> Result<(u64, u64), Error> {
-    let (mut nil, mut zero) = (0, 0);
+    words: bool,
+) -> Result<((u64, u64), u32), Error> {
+    let (mut nil, mut zero, mut bound) = (0, 0, 0);
     for field in &interface.fields {
         let (slot, mask) = match field.value {
             FieldValue::BufferAddress { slot, mask } => (slot, mask),
@@ -1693,12 +1716,19 @@ fn check_alignments(
             _ => continue,
         };
         match slots.get(slot as usize) {
-            Some(Slot::Buffer { buffer, offset }) => check_alignment(slot, mask, buffer, *offset)?,
+            Some(Slot::Buffer { buffer, offset }) => {
+                let at = buffer.gpu_address().wrapping_add(*offset);
+                if words && mask > 3 && at & mask != 0 && at & 3 == 0 {
+                    bound |= 1 << slot;
+                } else {
+                    check_alignment(slot, mask, buffer, *offset)?;
+                }
+            }
             Some(Slot::Bytes(..)) => {}
             Some(Slot::Empty) | None => nil = core.ring.nil(core)?,
         }
     }
-    Ok((nil, zero))
+    Ok(((nil, zero), bound))
 }
 
 /// A slot's [`FieldValue::BufferBounds`] for a buffer of `length` bytes bound at `offset`: the

@@ -26,13 +26,15 @@ pub(crate) const KERNEL_ENTRIES: usize = 1024;
 /// functions keyed as a kernel is; neither key decodes a function), and a compute descriptor's
 /// `requiredThreadsPerThreadgroup`, which the state answers as its `maxTotalThreadsPerThreadgroup`
 /// and the translator's key leaves out (`None` for a render pipeline); and for a compute state's
-/// sRGB variant, its texture slots that hold an 8-bit sRGB texture's UNORM twin, bit `i` slot `i`
-/// (`PipelineInner::srgb_variant`), 0 for every other content.
+/// variant, its texture slots that hold an 8-bit sRGB texture's UNORM twin and its buffer slots
+/// bound at a multiple of 4 below their argument's alignment, bit `i` slot `i` in each
+/// (`PipelineInner::variant`), 0 for every other content.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(crate) struct KernelKey {
     pub(crate) pipeline: PipelineKey,
     pub(crate) required: Option<[u32; 3]>,
     pub(crate) srgb: u128,
+    pub(crate) words: u32,
 }
 
 /// What one content compiles to.

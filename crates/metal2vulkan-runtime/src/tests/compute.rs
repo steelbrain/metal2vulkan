@@ -256,7 +256,9 @@ pub(crate) mod on_device {
     /// records nothing. At each alignment, 2, 4, 8 and 16, every bind 1, 3, 4, 8, 12 or 15 bytes
     /// past a multiple of 16 that is not a multiple of the alignment is refused (17 binds) and
     /// leaves every word as it was; the same buffer bound 16 bytes past one then runs, stepping
-    /// the 16 words from its address.
+    /// the 16 words from its address. This kernel has no function to lower a variant from, as a
+    /// kernel the consumer compiled has none, so its binds at a multiple of 4 under 8 and 16 are
+    /// refused too (`PipelineInner::variant`).
     #[test]
     fn every_device_refuses_a_bound_address_off_its_alignment() {
         each_device("compute_misaligned_address", |name, _, device| {

@@ -475,10 +475,15 @@ pub enum Refusal {
     },
     /// A dispatch whose kernel, or a draw whose vertex or fragment function, reaches a buffer
     /// bound where its address, the buffer's `gpuAddress` plus the bind offset, is not a multiple
-    /// of the argument's alignment (`air.arg_type_align_size`, at most 16). Plain Metal runs such a dispatch at addresses of
-    /// its own: an Apple M3 Max reaches each element at its address rounded down to the smaller of
-    /// the element's alignment and 4 (`probes/misaligned_buffer_binds.m` in the conformance
-    /// crate).
+    /// of the alignment the function holds it to: the argument's (`air.arg_type_align_size`, at
+    /// most 16), but 4 for an argument of 8 or 16 that a dispatch of a function's kernel binds at
+    /// a multiple of 4, or 8 where a 64-bit atomic may reach that buffer. Plain Metal runs such a
+    /// dispatch at addresses of its own: an Apple M3 Max reaches each element at its address
+    /// rounded down to the smaller of the element's alignment and 4
+    /// (`probes/misaligned_buffer_binds.m` in the conformance crate), which is not emulated. At a
+    /// multiple of 4 that is each element's own address, which the dispatch reaches through a
+    /// variant of its kernel that holds the buffer to 4 (`LoweringInputs::word_bound_buffers`); a
+    /// draw, and a kernel the consumer compiled, have no such variant.
     ///
     /// Basis: metal-documented (Metal's API validation refuses the bind offset: "must be a
     /// multiple of 4 but was set to 2" for a `uint *` argument bound at offset 2, an Apple M3 Max,
@@ -488,7 +493,7 @@ pub enum Refusal {
         index: u32,
         /// The bind offset.
         offset: u64,
-        /// The argument's alignment in bytes.
+        /// The alignment in bytes the function holds the address to.
         alignment: u64,
     },
     /// A grant of an index already granted ([`Device::grant_indices`](crate::Device::grant_indices)).
@@ -2593,7 +2598,7 @@ impl fmt::Display for Refusal {
                 alignment,
             } => write!(
                 f,
-                "the buffer at index {index}, bound at offset {offset}, is not at a multiple of its argument's {alignment}-byte alignment"
+                "the buffer at index {index}, bound at offset {offset}, is not at a multiple of {alignment} bytes, the alignment its function holds it to"
             ),
             Refusal::IndicesGranted { class, index } => {
                 write!(f, "{class:?} index {index} is granted already")

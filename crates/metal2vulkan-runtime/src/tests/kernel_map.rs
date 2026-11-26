@@ -197,6 +197,7 @@ mod on_device {
                 pipeline: core.translator.compute_pipeline_key(descriptor),
                 required: descriptor.required_threads_per_threadgroup,
                 srgb: 0,
+                words: 0,
             };
             let held = (core.kernels.find(&key(&tiled))).expect("the tiled kernel");
             let ours = (core.kernels.find(&key(&observing))).expect("the observing kernel");

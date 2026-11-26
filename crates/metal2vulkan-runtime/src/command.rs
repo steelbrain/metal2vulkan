@@ -1480,8 +1480,8 @@ impl Building {
         self.gpu.kept.variants.hold(variant);
     }
 
-    /// Keeps `content`, a kernel's sRGB variant that a dispatch runs, until the command buffer
-    /// retires: no state holds it (`PipelineInner::srgb_variant`).
+    /// Keeps `content`, a kernel's variant that a dispatch runs, until the command buffer
+    /// retires: no state holds it (`PipelineInner::variant`).
     pub(crate) fn hold_content(&mut self, content: &Arc<Compiled>) {
         self.gpu.kept.contents.hold(content);
     }

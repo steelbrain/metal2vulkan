@@ -139,7 +139,13 @@ and so do the command line, the compile worker and every validation tool. It hol
   of its size is one `uvec2` or `uvec4`. The function states `RuntimeFact::AddressAlignment` with
   that alignment (at most 16), and the runtime refuses a dispatch whose bound address is not a
   multiple of it, as Metal's API validation refuses the bind offset (an accepted difference,
-  section 10). A slot whose argument states an alignment below 4, or none, is reached the same way where each of
+  section 10). Plain Metal reaches each element of an argument of 8- or 16-byte alignment bound at
+  a multiple of 4 exactly where the program put it (an Apple M3 Max, macOS 27.0.1,
+  `crates/metal2vulkan-conformance/probes/misaligned_buffer_binds.m`), so a function compiled with
+  such a slot in `LoweringInputs::word_bound_buffers` states the argument's alignment up to what
+  the slot's accesses need, 4, or 8 where a 64-bit atomic may reach it (any slot, where one goes
+  through a pointer loaded from memory), and its accesses through the address claim no more
+  `Aligned` than that; the runtime's dispatch of such a bind runs that variant. A slot whose argument states an alignment below 4, or none, is reached the same way where each of
   its accesses is one 1- or 2-byte unit no wider than that alignment (an `i8` access of a `uchar`
   buffer, an `i16` one of a `ushort` buffer) on a device with that width's storage access. Any
   other slot is reached from the word below each access, its offset sign-extended, so an access
@@ -2759,6 +2765,11 @@ named states the rule in full.
   Without validation an Apple M3 Max (macOS 27.0.1) runs it, reaching each element at its address
   rounded down to the smaller of the element's alignment and 4, for loads, stores and pointers
   stored in a buffer alike (`crates/metal2vulkan-conformance/probes/misaligned_buffer_binds.m`).
+  A function kernel's argument of 8- or 16-byte alignment bound at a multiple of 4 below it is not
+  refused: that rule reaches each of its elements at its own address, and the dispatch runs a
+  variant of the kernel that reaches them there (section 1, `LoweringInputs::word_bound_buffers`),
+  though Metal's API validation refuses that bind offset too. Such a buffer that a 64-bit atomic
+  may reach off a multiple of 8, a draw's, and a consumer-compiled kernel's are still refused.
 - **A recursive call past the call stack yields zero**: the stack holds what Metal's byte model
   holds for the pipeline's `max_call_stack_depth`; a call that finds it full returns zero, where
   Metal's answer is corrupt.

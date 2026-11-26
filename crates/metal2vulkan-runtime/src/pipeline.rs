@@ -164,8 +164,8 @@ pub(crate) struct PipelineInner {
     /// The samplers the state numbers and the indices the consumer gave them.
     pub(crate) numbered: Numbered,
     /// The descriptor of a state whose kernel is a function, and its content's key: what its
-    /// sRGB variants are lowered from and kept under ([`PipelineInner::srgb_variant`]). `None`
-    /// for a kernel the consumer compiled, which has none.
+    /// variants are lowered from and kept under ([`PipelineInner::variant`]). `None` for a
+    /// kernel the consumer compiled, which has none.
     source: Option<(ComputePipelineDescriptor, KernelKey)>,
 }
 
@@ -868,7 +868,9 @@ pub(crate) enum FieldValue {
     /// offset, of the address of the slot's `set_bytes` copy, or of the nil buffer's address where
     /// nothing is bound. `mask` is the alignment the module takes that address to have, less 1
     /// (`RuntimeFact::AddressAlignment`), 0 where it takes none: a dispatch whose bound buffer's
-    /// address it does not divide is refused (`Refusal::BufferOffsetAlignment`).
+    /// address it does not divide is refused (`Refusal::BufferOffsetAlignment`), but at a multiple
+    /// of 4 under a mask past 3, where it runs the variant that holds the slot to what its
+    /// accesses need (`LoweringInputs::word_bound_buffers`).
     BufferAddress { slot: u32, mask: u64 },
     /// Two `u32`s: the bytes of the buffer bound at the slot before its bind offset, then its
     /// length (a `set_bytes` copy: 0 and its length; nothing bound: 0 and 0), which the module
@@ -1072,11 +1074,12 @@ impl crate::Device {
             pipeline: core.translator.compute_pipeline_key(descriptor),
             required: descriptor.required_threads_per_threadgroup,
             srgb: 0,
+            words: 0,
         };
         let compiled = match core.kernels.find(&key) {
             Some(compiled) => compiled,
             None => {
-                let compiled = Arc::new(Compiled::of(core, descriptor, 0)?);
+                let compiled = Arc::new(Compiled::of(core, descriptor, (0, 0))?);
                 core.kernels.keep(key.clone(), compiled, &core.counters)
             }
         };
@@ -1096,11 +1099,13 @@ impl crate::Device {
 impl Compiled {
     /// The translation of `descriptor`, every variant lowered, with the `VkPipeline`s whose key
     /// the descriptor holds; a function kernel's under its texture slots of `srgb` (bit `i` slot
-    /// `i`) holding an 8-bit sRGB texture's UNORM twin (`LoweringInputs::srgb_storage`).
+    /// `i`) holding an 8-bit sRGB texture's UNORM twin (`LoweringInputs::srgb_storage`) and its
+    /// buffer slots of `words` bound at a multiple of 4 below their argument's alignment
+    /// (`LoweringInputs::word_bound_buffers`).
     fn of(
         core: &Arc<Core>,
         descriptor: &ComputePipelineDescriptor,
-        srgb: u128,
+        (srgb, words): (u128, u32),
     ) -> Result<Compiled, Error> {
         let core = Arc::clone(core);
         let budget = Budget::standard();
@@ -1122,6 +1127,14 @@ impl Compiled {
                     .map(|index| SlotRef {
                         stage: Stage::Kernel,
                         class: SlotClass::Texture,
+                        index,
+                    })
+                    .collect();
+                inputs.word_bound_buffers = (0..BUFFER_SLOTS)
+                    .filter(|&index| words >> index & 1 == 1)
+                    .map(|index| SlotRef {
+                        stage: Stage::Kernel,
+                        class: SlotClass::Buffer,
                         index,
                     })
                     .collect();
@@ -2311,37 +2324,41 @@ impl PipelineInner {
 
     /// The content of the state's kernel under its texture slots of `srgb` (bit `i` slot `i`)
     /// holding an 8-bit sRGB texture's UNORM twin, each write there encoded in the shader
-    /// (`LoweringInputs::srgb_storage`): the one the device's map of contents holds under the
-    /// state's key with `srgb`, else lowered now and kept there, so the map bounds how many live.
-    /// It numbers the state's samplers, as it lowers the same function. `None` for a kernel the
-    /// consumer compiled, which has no function to lower it from.
+    /// (`LoweringInputs::srgb_storage`), and its buffer slots of `words` bound at a multiple of 4
+    /// below their argument's alignment, each held to what its accesses need
+    /// (`LoweringInputs::word_bound_buffers`): the one the device's map of contents holds under
+    /// the state's key with both, else lowered now and kept there, so the map bounds how many
+    /// live. It numbers the state's samplers, as it lowers the same function. `None` for a kernel
+    /// the consumer compiled, which has no function to lower it from.
     ///
     /// Err: the translator's errors of its lowering, as the state's creation reports them;
     /// [`Gap::KernelInput`] of a constexpr sampler where it samples one the state's module does
     /// not.
-    pub(crate) fn srgb_variant(&self, srgb: u128) -> Option<Result<Arc<Compiled>, Error>> {
+    pub(crate) fn variant(&self, srgb: u128, words: u32) -> Option<Result<Arc<Compiled>, Error>> {
         let core = self.core();
         let (descriptor, key) = self.source.as_ref()?;
         let key = KernelKey {
             srgb,
+            words,
             ..key.clone()
         };
         if let Some(compiled) = core.kernels.find(&key) {
             return Some(Ok(compiled));
         }
-        let made = Compiled::of(core, descriptor, srgb).and_then(|compiled| {
-            match covers(&self.compiled.whole.interface, &compiled.whole.interface) {
-                true => Ok(core.kernels.keep(key, Arc::new(compiled), &core.counters)),
-                false => Err(gap(KernelInputKind::ConstexprSampler)),
-            }
-        });
+        let made =
+            Compiled::of(core, descriptor, (srgb, words)).and_then(|compiled| {
+                match covers(&self.compiled.whole.interface, &compiled.whole.interface) {
+                    true => Ok(core.kernels.keep(key, Arc::new(compiled), &core.counters)),
+                    false => Err(gap(KernelInputKind::ConstexprSampler)),
+                }
+            });
         Some(made)
     }
 }
 
 impl crate::kept::Handle for Arc<Compiled> {
-    /// The content itself: a command buffer that dispatched an sRGB variant keeps it
-    /// ([`PipelineInner::srgb_variant`]), which no state holds.
+    /// The content itself: a command buffer that dispatched a variant keeps it
+    /// ([`PipelineInner::variant`]), which no state holds.
     type Kept = Arc<Compiled>;
 
     fn object(&self) -> &Arc<Compiled> {
