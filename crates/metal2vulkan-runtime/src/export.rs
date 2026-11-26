@@ -315,7 +315,7 @@ impl Block {
         // (`crate::over::ExportedOvers`).
         core.work
             .exported_changed(block.memory.id, (0, block.memory.len));
-        core.counters.count(Metric::Barriers);
+        core.counters.count(Metric::UploadBarriers);
         core.counters.count(Metric::ExternalAcquires);
         Ok(())
     }

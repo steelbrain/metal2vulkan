@@ -1074,7 +1074,14 @@ impl Building {
                     // texture, which holds its buffer, until it retires; each image is in its
                     // home layout between commands.
                     unsafe {
-                        over::record_side(&core.device, command, &back, false, &core.counters)
+                        over::record_side(
+                            &core.device,
+                            command,
+                            &back,
+                            false,
+                            Metric::OtherBarriers,
+                            &core.counters,
+                        )
                     };
                     self.host_written |= back.iter().any(|copy| copy.shared);
                 }
@@ -1130,11 +1137,13 @@ impl Building {
     }
 
     /// The current segment's command buffer, with the barrier owed recorded first, reaching what
-    /// the caller records next (`reach`). Commands after a signal go in a new segment.
+    /// the caller records next (`reach`): a dispatch's, counted as its barrier
+    /// ([`Metrics::dispatch_hazard_barriers`](crate::Metrics::dispatch_hazard_barriers)). Commands
+    /// after a signal go in a new segment.
     pub(crate) fn command(&mut self, reach: Reach) -> Result<vk::CommandBuffer, Error> {
         let command = self.current()?;
         if self.owed {
-            self.barrier(command, reach);
+            self.barrier(command, reach, Metric::DispatchHazardBarriers);
         }
         Ok(command)
     }
@@ -1164,9 +1173,9 @@ impl Building {
     }
 
     /// Records a barrier into `command`, the current segment's, reaching what the caller records
-    /// next (`reach`), and pays what is owed. The caller starts the hazard sets again where it
-    /// has not.
-    pub(crate) fn barrier(&mut self, command: vk::CommandBuffer, reach: Reach) {
+    /// next (`reach`), counted in `cause`, one of the barrier causes, and pays what is owed. The
+    /// caller starts the hazard sets again where it has not.
+    pub(crate) fn barrier(&mut self, command: vk::CommandBuffer, reach: Reach, cause: Metric) {
         // One owed after a render pass or a release reaches every later command, whatever the
         // caller names.
         let reach = match self.owed && self.owed_all {
@@ -1174,7 +1183,7 @@ impl Building {
             false => reach,
         };
         record::barrier(&self.device.core().device, command, reach);
-        self.tally.count(Metric::Barriers);
+        self.tally.count(cause);
         self.owed = false;
         self.owed_all = false;
         if reach.reaches_indirect() {
@@ -1244,7 +1253,15 @@ impl Building {
         let tally = &mut self.tally;
         // SAFETY: the command buffer records outside any rendering and keeps each texture it uses
         // until it retires.
-        unsafe { crate::alias::record(device, command, moves, &mut |metric| tally.count(metric)) };
+        unsafe {
+            crate::alias::record(
+                device,
+                command,
+                moves,
+                Metric::OtherBarriers,
+                &mut |metric| tally.count(metric),
+            )
+        };
         Ok(())
     }
 
@@ -1617,7 +1634,16 @@ impl Building {
         // SAFETY: the command buffer records outside any render pass and keeps each image, and
         // each buffer through its texture or below, until it retires; each image is in its home
         // layout between commands.
-        unsafe { over::record_side(&core.device, command, &copies, false, &core.counters) };
+        unsafe {
+            over::record_side(
+                &core.device,
+                command,
+                &copies,
+                false,
+                Metric::OtherBarriers,
+                &core.counters,
+            )
+        };
         self.gpu
             .images
             .extend(backs.into_iter().map(|(_, _, image)| image));

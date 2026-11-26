@@ -2982,6 +2982,28 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
                     (barriers, 1),
                     "{name} {case}: barriers, passes"
                 );
+                // By cause: the pass's start and its move home, and the segment's end; the rest
+                // inside the pass, but the upload's two.
+                let causes = |m: &crate::Metrics| {
+                    [
+                        m.pass_start_barriers,
+                        m.pass_home_barriers,
+                        m.blit_barriers,
+                        m.dispatch_hazard_barriers,
+                        m.segment_end_barriers,
+                        m.upload_barriers,
+                        m.other_barriers,
+                    ]
+                };
+                let grown: Vec<u64> = (causes(&after).into_iter())
+                    .zip(causes(&before))
+                    .map(|(after, before)| after - before)
+                    .collect();
+                let expected = match looped {
+                    true => [1, 1, 0, 0, 1, 0, 2],
+                    false => [1, 1, 0, 0, 1, 2, 4],
+                };
+                assert_eq!(grown, expected, "{name} {case}: barriers by cause");
                 // The rendering ended and began again twice inside the one pass: through the
                 // loop, around the move and around the memory barrier's barrier; through a copy,
                 // around the shadow's clear and around its copy.

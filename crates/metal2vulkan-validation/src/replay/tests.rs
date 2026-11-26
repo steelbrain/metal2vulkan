@@ -1357,6 +1357,13 @@ fn frames_releases_and_splits() {
         ("commits", 2),
         ("dispatches", 0),
         ("draws", 0),
+        ("blits", 0),
+        ("render_buffer_binds", 0),
+        ("render_buffer_changes", 0),
+        ("render_offset_changes", 0),
+        ("compute_buffer_binds", 0),
+        ("compute_buffer_changes", 0),
+        ("compute_offset_changes", 0),
         ("encoders", 0),
         ("misaligned_address_words", 0),
         ("address_looking_words", 0),
@@ -1456,16 +1463,34 @@ fn a_skipped_draw_ends_the_verdict_at_its_frame_and_call() {
 }
 
 /// What a stream fixes, apart from what the runtime executed: its calls played, its commits, the
-/// encoders its command buffers made and the draws and dispatches their calls issued, per group of
-/// command buffers waited for and in total. The call that waited for a group counts in the next.
+/// encoders its command buffers made, the draws, dispatches and blit commands their calls issued,
+/// and the buffer slots their set-buffer calls set, render and compute apart, with the buffer
+/// changes (another buffer than the slot held, or a slot's first) and the offset-only changes
+/// among them (a set of the buffer and offset the slot holds is neither), per group of command
+/// buffers waited for and in total. The call that waited for a group counts in the next.
 #[test]
-fn the_stream_fixes_its_calls_commits_encoders_draws_and_dispatches() {
+fn the_stream_fixes_its_calls_commits_encoders_draws_dispatches_blits_and_binds() {
     let draw = "drawPrimitives:vertexStart:vertexCount:";
+    let bind = |buffer, offset, at| [Value::Object(buffer), Value::Uint(offset), Value::Uint(at)];
     let (report, ended) = played(&mut Kept::default(), |w| {
         w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
         w.call("newCommandQueue", 1, 2, &[], &[])?;
+        let plain = [Value::Uint(64), Value::Uint(0)];
+        w.call("newBufferWithLength:options:", 1, 8, &plain, &[])?;
+        w.call("newBufferWithLength:options:", 1, 9, &plain, &[])?;
         w.call("commandBuffer", 2, 3, &[], &[])?;
         w.call("computeCommandEncoder", 3, 4, &[], &[])?;
+        // A change, an offset-only change, neither, then an offset-only change and a change.
+        w.call("setBuffer:offset:atIndex:", 4, 0, &bind(8, 0, 0), &[])?;
+        let offset = [Value::Uint(16), Value::Uint(0)];
+        w.call("setBufferOffset:atIndex:", 4, 0, &offset, &[])?;
+        w.call("setBuffer:offset:atIndex:", 4, 0, &bind(8, 16, 0), &[])?;
+        let both = [
+            Value::List(vec![Value::Object(8), Value::Object(9)]),
+            Value::List(vec![Value::Uint(32), Value::Uint(0)]),
+            map(&[("location", Value::Uint(0)), ("length", Value::Uint(2))]),
+        ];
+        w.call("setBuffers:offsets:withRange:", 4, 0, &both, &[])?;
         w.call(
             "dispatchThreadgroups:threadsPerThreadgroup:",
             4,
@@ -1481,9 +1506,35 @@ fn the_stream_fixes_its_calls_commits_encoders_draws_and_dispatches() {
             &[Value::Nil],
             &[],
         )?;
+        // A change in each stage's slot 0, an offset-only change, then a change of buffer alone.
+        w.call("setVertexBuffer:offset:atIndex:", 5, 0, &bind(9, 0, 0), &[])?;
+        w.call(
+            "setFragmentBuffer:offset:atIndex:",
+            5,
+            0,
+            &bind(9, 0, 0),
+            &[],
+        )?;
+        let offset = [Value::Uint(64), Value::Uint(0)];
+        w.call("setVertexBufferOffset:atIndex:", 5, 0, &offset, &[])?;
         w.call(draw, 5, 0, &[], &[])?;
+        w.call(
+            "setVertexBuffer:offset:atIndex:",
+            5,
+            0,
+            &bind(8, 64, 0),
+            &[],
+        )?;
         w.call(draw, 5, 0, &[], &[])?;
         w.call("endEncoding", 5, 0, &[], &[])?;
+        w.call("blitCommandEncoder", 3, 6, &[], &[])?;
+        let fill = [
+            Value::Object(9),
+            map(&[("location", Value::Uint(0)), ("length", Value::Uint(16))]),
+            Value::Uint(0),
+        ];
+        w.call("fillBuffer:range:value:", 6, 0, &fill, &[])?;
+        w.call("endEncoding", 6, 0, &[], &[])?;
         w.call("commit", 3, 0, &[], &[])?;
         w.call("m2v.present", 1, 0, &[Value::Nil], &[])
     });
@@ -1494,7 +1545,14 @@ fn the_stream_fixes_its_calls_commits_encoders_draws_and_dispatches() {
             ("commits", 1),
             ("dispatches", 1),
             ("draws", 2),
-            ("encoders", 2),
+            ("blits", 1),
+            ("render_buffer_binds", 4),
+            ("render_buffer_changes", 3),
+            ("render_offset_changes", 1),
+            ("compute_buffer_binds", 5),
+            ("compute_buffer_changes", 2),
+            ("compute_offset_changes", 2),
+            ("encoders", 3),
             ("misaligned_address_words", 0),
             ("address_looking_words", 0),
             ("noted_words", 0),
@@ -1505,21 +1563,23 @@ fn the_stream_fixes_its_calls_commits_encoders_draws_and_dispatches() {
     };
     let executed = Counters::from([("submissions", 1)]);
     let group = Counts {
-        stream: fixed(10),
+        stream: fixed(23),
         executed: executed.clone(),
     };
     assert_eq!(report.completed, [(vec![3], group.clone())]);
     assert_eq!(report.frames, [group]);
     let total = Counts {
-        stream: fixed(12),
+        stream: fixed(25),
         executed,
     };
     assert_eq!(report.total, total);
     assert_eq!(
         report.lines()[0],
-        "completed #3 stream address_arguments=0 address_looking_words=0 calls=10 commits=1 \
-         dispatches=1 draws=2 encoders=2 misaligned_address_words=0 noted_words=0 \
-         relocated_words=0 written_bytes=0 executed submissions=1"
+        "completed #3 stream address_arguments=0 address_looking_words=0 blits=1 calls=23 \
+         commits=1 compute_buffer_binds=5 compute_buffer_changes=2 compute_offset_changes=2 \
+         dispatches=1 draws=2 encoders=3 misaligned_address_words=0 noted_words=0 \
+         relocated_words=0 render_buffer_binds=4 render_buffer_changes=3 render_offset_changes=1 \
+         written_bytes=0 executed submissions=1"
     );
 }
 

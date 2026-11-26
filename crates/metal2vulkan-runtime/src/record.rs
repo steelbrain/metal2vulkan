@@ -153,7 +153,7 @@ pub(crate) fn end(
     // SAFETY: the buffer is recording, outside any rendering; each image is the device's, in the
     // layout its move names.
     unsafe { device.cmd_pipeline_barrier2(buffer, &dependency) };
-    counters.count(Metric::Barriers);
+    counters.count(Metric::SegmentEndBarriers);
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     if host {
         counters.reach_host();

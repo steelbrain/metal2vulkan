@@ -324,9 +324,16 @@ pub(crate) fn copy_in(core: &Core, named: &[Modified], number: u64) -> Result<Co
         match into_copies.is_empty() {
             true => {
                 record::barrier(device, command, Reach::Commands);
-                core.counters.count(Metric::Barriers);
+                core.counters.count(Metric::UploadBarriers);
             }
-            false => over::record_side(device, command, &into_copies, true, &core.counters),
+            false => over::record_side(
+                device,
+                command,
+                &into_copies,
+                true,
+                Metric::UploadBarriers,
+                &core.counters,
+            ),
         }
     }
     times::end_own(device, command, stamps);

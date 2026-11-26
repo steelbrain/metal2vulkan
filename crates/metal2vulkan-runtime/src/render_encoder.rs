@@ -933,7 +933,7 @@ fn begin(
                     .image_memory_barriers(&away),
             );
         }
-        building.count(Metric::Barriers);
+        building.count(Metric::PassStartBarriers);
     }
     // SAFETY: the command buffer records outside any render pass and keeps each attachment's
     // texture until it retires; each attachment is in the layout the pass names.
@@ -1759,7 +1759,7 @@ impl RenderCommandEncoder {
         (self.drew, self.owed) = (false, false);
         self.interrupt(|building, _| {
             let command = building.ordered_command()?;
-            building.barrier(command, Reach::Commands);
+            building.barrier(command, Reach::Commands, Metric::OtherBarriers);
             Ok(())
         })
     }
@@ -1804,7 +1804,7 @@ impl RenderCommandEncoder {
                         .image_memory_barriers(&images),
                 )
             };
-            building.count(Metric::Barriers);
+            building.count(Metric::OtherBarriers);
             Ok(())
         })
     }
@@ -1954,8 +1954,8 @@ impl RenderCommandEncoder {
                     &vk::DependencyInfo::default().image_memory_barriers(&back),
                 );
             }
-            building.count(Metric::Barriers);
-            building.count(Metric::Barriers);
+            building.count(Metric::OtherBarriers);
+            building.count(Metric::OtherBarriers);
             core.counters.attachment_read_copied(count, bytes);
             Ok(())
         })
@@ -3070,7 +3070,7 @@ impl RenderCommandEncoder {
                 }
                 core.device.cmd_dispatch(command, parts, 1, 1);
             }
-            building.barrier(command, Reach::Commands);
+            building.barrier(command, Reach::Commands, Metric::OtherBarriers);
             Ok(())
         })?;
         Ok(counts)
@@ -3374,7 +3374,15 @@ impl RenderCommandEncoder {
         self.interrupt(|building, core| {
             // SAFETY: the rendering ended, and the command buffer keeps each texture it uses
             // until it retires.
-            unsafe { alias::record(&core.device, command, &moves, &mut |m| building.count(m)) };
+            unsafe {
+                alias::record(
+                    &core.device,
+                    command,
+                    &moves,
+                    Metric::OtherBarriers,
+                    &mut |m| building.count(m),
+                )
+            };
             Ok(())
         })
     }
@@ -3654,7 +3662,7 @@ impl RenderCommandEncoder {
                         .image_memory_barriers(&back),
                 );
             }
-            building.count(Metric::Barriers);
+            building.count(Metric::PassHomeBarriers);
         }
         // A resolve into a resolve image copies its render area into the buffer's bytes, at the
         // texture's pitch, after the barrier that moved the image home; the barrier that orders

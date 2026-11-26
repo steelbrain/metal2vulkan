@@ -949,7 +949,7 @@ impl Device {
             unsafe {
                 device.cmd_update_buffer(upload, destination, base, &header);
                 record::barrier(device, upload, Reach::Commands);
-                core.counters.count(Metric::Barriers);
+                core.counters.count(Metric::UploadBarriers);
                 device.cmd_copy_buffer(upload, source, destination, &regions);
             }
         })?;

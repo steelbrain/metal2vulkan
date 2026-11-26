@@ -215,8 +215,20 @@ pub(crate) enum Metric {
     Submissions,
     /// [`Metrics::passes`].
     Passes,
-    /// [`Metrics::barriers`].
-    Barriers,
+    /// [`Metrics::pass_start_barriers`].
+    PassStartBarriers,
+    /// [`Metrics::pass_home_barriers`].
+    PassHomeBarriers,
+    /// [`Metrics::blit_barriers`].
+    BlitBarriers,
+    /// [`Metrics::dispatch_hazard_barriers`].
+    DispatchHazardBarriers,
+    /// [`Metrics::segment_end_barriers`].
+    SegmentEndBarriers,
+    /// [`Metrics::upload_barriers`].
+    UploadBarriers,
+    /// [`Metrics::other_barriers`].
+    OtherBarriers,
     /// [`Metrics::pipelines_created`].
     PipelinesCreated,
     /// [`Metrics::blocks_made`].
@@ -330,7 +342,13 @@ const METRICS: usize = Metric::RenderingInterrupts as usize + 1;
 const METRIC_ORDER: [Metric; METRICS] = [
     Metric::Submissions,
     Metric::Passes,
-    Metric::Barriers,
+    Metric::PassStartBarriers,
+    Metric::PassHomeBarriers,
+    Metric::BlitBarriers,
+    Metric::DispatchHazardBarriers,
+    Metric::SegmentEndBarriers,
+    Metric::UploadBarriers,
+    Metric::OtherBarriers,
     Metric::PipelinesCreated,
     Metric::BlocksMade,
     Metric::DispatchesWithoutEffects,
@@ -682,7 +700,13 @@ struct Atomics {
     held_start_gap_nanos: AtomicU64,
     held_for_room: AtomicU64,
     passes: AtomicU64,
-    barriers: AtomicU64,
+    pass_start_barriers: AtomicU64,
+    pass_home_barriers: AtomicU64,
+    blit_barriers: AtomicU64,
+    dispatch_hazard_barriers: AtomicU64,
+    segment_end_barriers: AtomicU64,
+    upload_barriers: AtomicU64,
+    other_barriers: AtomicU64,
     bytes_copied: AtomicU64,
     bytes_zeroed: AtomicU64,
     takes_from_free_ranges: AtomicU64,
@@ -940,7 +964,13 @@ impl Counters {
         match metric {
             Metric::Submissions => &a.submissions,
             Metric::Passes => &a.passes,
-            Metric::Barriers => &a.barriers,
+            Metric::PassStartBarriers => &a.pass_start_barriers,
+            Metric::PassHomeBarriers => &a.pass_home_barriers,
+            Metric::BlitBarriers => &a.blit_barriers,
+            Metric::DispatchHazardBarriers => &a.dispatch_hazard_barriers,
+            Metric::SegmentEndBarriers => &a.segment_end_barriers,
+            Metric::UploadBarriers => &a.upload_barriers,
+            Metric::OtherBarriers => &a.other_barriers,
             Metric::PipelinesCreated => &a.pipelines_created,
             Metric::BlocksMade => &a.blocks_made,
             Metric::DispatchesWithoutEffects => &a.dispatches_without_effects,
@@ -1772,6 +1802,18 @@ impl Counters {
         };
         let stage = |stage: Stage| (a.stages[stage as usize].each_ref()).map(|n| n.load(Relaxed));
         let stage_nanos = |stage: Stage| a.stage_nanos[stage as usize].load(Relaxed);
+        // Each barrier counts in one cause; their sum is every barrier.
+        let causes = [
+            &a.pass_start_barriers,
+            &a.pass_home_barriers,
+            &a.blit_barriers,
+            &a.dispatch_hazard_barriers,
+            &a.segment_end_barriers,
+            &a.upload_barriers,
+            &a.other_barriers,
+        ]
+        .map(|n| n.load(Relaxed));
+        let [pass_start, pass_home, blit, dispatch_hazard, segment_end, upload, other] = causes;
         Metrics {
             submissions: a.submissions.load(Relaxed),
             submit_infos: a.submit_infos.load(Relaxed),
@@ -1808,7 +1850,14 @@ impl Counters {
             held_start_gap_nanos: a.held_start_gap_nanos.load(Relaxed),
             held_for_room: a.held_for_room.load(Relaxed),
             passes: a.passes.load(Relaxed),
-            barriers: a.barriers.load(Relaxed),
+            barriers: causes.iter().sum(),
+            pass_start_barriers: pass_start,
+            pass_home_barriers: pass_home,
+            blit_barriers: blit,
+            dispatch_hazard_barriers: dispatch_hazard,
+            segment_end_barriers: segment_end,
+            upload_barriers: upload,
+            other_barriers: other,
             bytes_copied: a.bytes_copied.load(Relaxed),
             bytes_zeroed: a.bytes_zeroed.load(Relaxed),
             takes_from_free_ranges: a.takes_from_free_ranges.load(Relaxed),
@@ -2261,8 +2310,45 @@ pub struct Metrics {
     /// around each copy between a texture's image and the staging region or a named buffer
     /// (`replaceRegion` and `getBytes`), and one before a zero fill of bytes an earlier fill of the
     /// upload wrote (a new buffer's zeroed bytes, or a range
-    /// [`Device::zero_block_range`](crate::Device::zero_block_range) zeroes).
+    /// [`Device::zero_block_range`](crate::Device::zero_block_range) zeroes). Each counts in one
+    /// of the seven causes below, whose sum this is.
     pub barriers: u64,
+    /// Of [`barriers`](Self::barriers), the first barrier of each render pass, before it: it pays
+    /// what is owed and moves the attachments from their home layouts to the pass's (none where
+    /// the pass opens its command buffer and moves nothing).
+    pub pass_start_barriers: u64,
+    /// Of [`barriers`](Self::barriers), the barrier at a render pass's end that moves its
+    /// attachments back to their home layouts. A pass that moves none home owes its barrier: the
+    /// next command's own barrier pays it, counted in that command's cause, or the segment's end.
+    pub pass_home_barriers: u64,
+    /// Of [`barriers`](Self::barriers), those of blit commands: the two around each copy, fill,
+    /// synchronize copy and indirect command buffer reset, one between two slabs of a copy
+    /// between textures, and a mipmap chain's, one a level.
+    pub blit_barriers: u64,
+    /// Of [`barriers`](Self::barriers), those a dispatch records before it: at a hazard with an
+    /// earlier dispatch of its encoder, or paying one an earlier command owed (an encoder that
+    /// wrote, a memory barrier call, a write through an address outside a dispatch's resources, a
+    /// render pass that moved nothing home, a release to another API).
+    pub dispatch_hazard_barriers: u64,
+    /// Of [`barriers`](Self::barriers), the one that ends each segment with commands of a command
+    /// buffer, paying what is owed.
+    pub segment_end_barriers: u64,
+    /// Of [`barriers`](Self::barriers), those in the device's uploads and in Managed buffers'
+    /// copy-ins: new textures' moves home and those after their zeroing
+    /// ([`texture_clear_barriers`](Self::texture_clear_barriers)), the two around each staging copy
+    /// (`replaceRegion` and `getBytes`), a heap texture's move before a host write, the acquires of
+    /// exported blocks and surfaces, Direct3D 11 planes' hand-overs, those between zero fills that
+    /// meet, a new indirect command buffer's, the two around each side of the copies of textures
+    /// over a buffer an upload or a copy-in carries, each upload's end, and a copy-in's where it
+    /// copies no texture.
+    pub upload_barriers: u64,
+    /// Of [`barriers`](Self::barriers), the rest: those inside a render pass (a memory barrier
+    /// after a draw that wrote memory, a move to the feedback layout, the two around an attachment
+    /// read's shadow copies or the clear of its shadow, an execution count's, heap textures'
+    /// moves), the two around each side of the copies between a texture over a buffer and its
+    /// image of its own in a command buffer, heap textures' moves before a command or ahead of a
+    /// segment, and each release of a block or a surface to another API.
+    pub other_barriers: u64,
     /// Bytes the runtime copied for a call: `replace_region` and `get_bytes` staging, the copies
     /// between a texture over a buffer and its image of its own
     /// ([`over_copy_bytes`](Self::over_copy_bytes)), the copies of attachments' images into their

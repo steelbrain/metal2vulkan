@@ -424,7 +424,7 @@ impl Upload {
             // is the device's and held by the upload, and holds the import whose buffer an
             // acquire names, a dma-buf's, whose foreign family is enabled (`check_over`).
             unsafe { device.cmd_pipeline_barrier2(self.command, &dependency) };
-            core.counters.count(Metric::Barriers);
+            core.counters.count(Metric::UploadBarriers);
         };
         let firsts: Vec<_> = homes.iter().map(|home| home.first).collect();
         let acquires: Vec<_> = homes.iter().filter_map(|home| home.buffer).collect();
@@ -471,7 +471,7 @@ impl Upload {
         let device = &core.device;
         if acquire {
             record::barrier(device, upload.command, Reach::Commands);
-            core.counters.count(Metric::Barriers);
+            core.counters.count(Metric::UploadBarriers);
         }
         let barriers: Vec<_> = (planes.iter())
             .map(|image| image.handed(core.family, acquire))
@@ -481,7 +481,7 @@ impl Upload {
         // each image is the device's, held by the submission until it retires, and general
         // between commands.
         unsafe { device.cmd_pipeline_barrier2(upload.command, &dependency) };
-        core.counters.count(Metric::Barriers);
+        core.counters.count(Metric::UploadBarriers);
         core.counters.count(match acquire {
             true => Metric::ExternalAcquires,
             false => Metric::ExternalReleases,
@@ -1291,7 +1291,7 @@ impl Work {
             let meets = |&(filled, from, to): &Filled| filled == buffer && from < end && start < to;
             if upload.filled.iter().any(meets) {
                 record::barrier(device, upload.command, Reach::Commands);
-                core.counters.count(Metric::Barriers);
+                core.counters.count(Metric::UploadBarriers);
                 if upload.leading.is_none() {
                     upload.leading = Some(upload.filled.clone());
                 }
@@ -2564,7 +2564,7 @@ fn order_fills(core: &Core, uploads: &[Upload]) {
         };
         if let (Some(before), true) = (index.checked_sub(1), first.iter().any(meets)) {
             record::barrier(&core.device, uploads[before].command, Reach::Commands);
-            core.counters.count(Metric::Barriers);
+            core.counters.count(Metric::UploadBarriers);
             open.clear();
         }
         if upload.leading.is_some() {
@@ -2653,12 +2653,13 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
         // retires, and each image is in its home layout, any move there recorded before.
         unsafe {
             let copies: Vec<OverCopy> = backs.iter().map(|(_, copy, _)| *copy).collect();
-            over::record_side(device, last.command, &copies, false, &core.counters);
-            over::record_side(device, last.command, &overs, true, &core.counters);
+            let (cause, counters) = (Metric::UploadBarriers, &core.counters);
+            over::record_side(device, last.command, &copies, false, cause, counters);
+            over::record_side(device, last.command, &overs, true, cause, counters);
         }
         (last.held).extend(backs.into_iter().map(|(_, _, image)| Held::Texture(image)));
         record::barrier(device, last.command, Reach::Host);
-        core.counters.count(Metric::Barriers);
+        core.counters.count(Metric::UploadBarriers);
         times::end_own(device, last.command, last.stamps);
         // SAFETY: as above.
         let ended = unsafe { device.end_command_buffer(last.command) };

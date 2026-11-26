@@ -1031,25 +1031,39 @@ mod on_device {
         });
     }
 
-    /// Every `vkCmdPipelineBarrier2` rt records is counted in [`crate::Metrics::barriers`]: a
-    /// texture's move home in an upload, a replace and a read of a texture's image through the
-    /// staging region (each a barrier away from home and one back), and a command buffer's blit
-    /// between two textures, counted against the barrier commands the device's table saw.
+    /// Every `vkCmdPipelineBarrier2` rt records is counted in [`crate::Metrics::barriers`], each
+    /// in its cause: textures' moves home in an upload, a replace and a read of a texture's image
+    /// through the staging region (each a barrier away from home and one back) and each upload's
+    /// end, all upload barriers; a command buffer's blit between two textures, two blit barriers;
+    /// a pass that renders a texture whose home is the shader-read layout, its start and its move
+    /// home; and the segment's end. Counted against the barrier commands the device's table saw.
     #[test]
     fn every_barrier_rt_records_is_counted() {
         let _recording = Recording::start();
         each_device("barrier count", |name, _, device| {
             let handle = device.core().device.handle();
-            let counted = || device.counters().metrics().barriers;
-            let before = (counted(), barriers(handle));
-            let d =
+            let causes = |m: &crate::Metrics| {
+                [
+                    m.pass_start_barriers,
+                    m.pass_home_barriers,
+                    m.blit_barriers,
+                    m.dispatch_hazard_barriers,
+                    m.segment_end_barriers,
+                    m.upload_barriers,
+                    m.other_barriers,
+                ]
+            };
+            let before = (device.counters().metrics(), barriers(handle));
+            let mut d =
                 TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, WIDTH, HEIGHT);
             let first = IndexClass::Texture.range().start;
-            (device.grant_indices(IndexClass::Texture, first, 2)).expect("a grant");
-            let new = |index| {
-                (device.new_texture(&d, Some(index))).unwrap_or_else(|e| panic!("{name}: {e}"))
+            (device.grant_indices(IndexClass::Texture, first, 3)).expect("a grant");
+            let new = |d: &TextureDescriptor, index| {
+                (device.new_texture(d, Some(index))).unwrap_or_else(|e| panic!("{name}: {e}"))
             };
-            let (a, b) = (new(first), new(first + 1));
+            let (a, b) = (new(&d, first), new(&d, first + 1));
+            d.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+            let target = new(&d, first + 2);
             let size = [WIDTH, HEIGHT, 1];
             let whole = Region {
                 origin: [0; 3],
@@ -1065,6 +1079,14 @@ mod on_device {
             (blit.copy_from_texture(&a, at, size, &b, at))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             blit.end_encoding();
+            let mut pass = RenderPassDescriptor::default();
+            let color = &mut pass.color_attachments[0];
+            color.texture = Some(target.clone());
+            color.load_action = LoadAction::Clear;
+            color.store_action = StoreAction::Store;
+            let encoder = (command_buffer.render_command_encoder(&pass))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            encoder.end_encoding();
             command_buffer.commit().expect("a commit");
             finished(name, &command_buffer);
             assert_eq!(command_buffer.error(), None, "{name}");
@@ -1072,17 +1094,38 @@ mod on_device {
             (b.get_bytes(&mut read, ROW, 0, whole, 0, 0))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             assert_eq!(read, written, "{name}: the bytes through the copy");
-            let after = (counted(), barriers(handle));
+            let after = (device.counters().metrics(), barriers(handle));
             let recorded = after.1 - before.1;
-            // At least: a move home, two for the replace, two for the blit, two for the read.
+            // At least: a move home, two for the replace, an upload's end, two for the blit, two
+            // for the pass, the segment's end, two for the read and its upload's end.
             assert!(
-                recorded >= 7,
+                recorded >= 12,
                 "{name}: {recorded} barrier commands recorded"
             );
             assert_eq!(
-                after.0 - before.0,
+                after.0.barriers - before.0.barriers,
                 recorded,
                 "{name}: barriers counted, against the barrier commands recorded"
+            );
+            let grown: Vec<u64> = (causes(&after.0).into_iter())
+                .zip(causes(&before.0))
+                .map(|(after, before)| after - before)
+                .collect();
+            assert_eq!(
+                grown.iter().sum::<u64>(),
+                recorded,
+                "{name}: the causes, against the barriers"
+            );
+            let uploads = grown[5];
+            assert!(uploads >= 6, "{name}: {uploads} upload barriers");
+            assert_eq!(
+                grown,
+                [1, 1, 2, 0, 1, uploads, 0],
+                "{name}: pass start, pass home, blit, dispatch hazard, segment end, upload, other"
+            );
+            println!(
+                "layouts: {name}: {recorded} barriers recorded, each counted in its cause: \
+                 {grown:?}"
             );
         });
     }

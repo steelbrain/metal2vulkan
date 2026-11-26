@@ -1585,7 +1585,7 @@ impl Surface {
             // is enabled.
             unsafe { device.cmd_pipeline_barrier2(command, &dependency) };
         })?;
-        core.counters.count(Metric::Barriers);
+        core.counters.count(Metric::UploadBarriers);
         core.counters.count(Metric::ExternalAcquires);
         let unit = Some(Arc::clone(&view.unit));
         let buffer = self.device.buffer(block, 0, view.len, None, None, unit);
@@ -1699,7 +1699,7 @@ impl Surface {
             // foreign family is enabled.
             unsafe { device.cmd_pipeline_barrier2(command, &dependency) };
         })?;
-        core.counters.count(Metric::Barriers);
+        core.counters.count(Metric::UploadBarriers);
         core.counters.count(Metric::ExternalAcquires);
         Ok(())
     }

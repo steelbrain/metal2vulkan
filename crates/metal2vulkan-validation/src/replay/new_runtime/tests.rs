@@ -313,3 +313,50 @@ fn sample_positions_differ_from_metal_s_defaults_of_the_pass_s_count() {
          Vulkan's standard locations; the first: -"
     );
 }
+
+/// The `over copies by frame` line: each frame's over-copy bytes by the buffer's memory class and
+/// by cause, as the calls are located, their mean and the largest frame's, with the textures in
+/// an image of their own that frame's calls named, a view as its texture and a released one no
+/// more; the open frame counts once a call of it is located.
+#[test]
+fn over_copies_by_frame_give_the_mean_and_the_largest_frame() {
+    let mut frames = super::over_frames::OverFrames::default();
+    let mut m = rt::Metrics::default();
+    assert_eq!(frames.line(&m), "over copies by frame: no frame");
+    frames.made(5);
+    frames.made(6);
+    frames.viewed(5, 7);
+    // 9 is in no image of its own, nor its view 10.
+    frames.viewed(9, 10);
+    // Frame 0: a pitch copy of a Shared buffer's, of texture 5, named itself and through its view.
+    frames.located();
+    frames.named(&[5, 7, 9, 10]);
+    m.over_copy_bytes = 100;
+    m.over_copy_bytes_shared = 100;
+    m.over_copy_bytes_pitch = 100;
+    frames.ended(&m);
+    // Frame 1: a Private buffer's whose linear image the device does not make, and a dma-buf's,
+    // of textures 5 and 6; 6 is released.
+    frames.located();
+    frames.named(&[6, 5]);
+    m.over_copy_bytes = 400;
+    m.over_copy_bytes_private = 200;
+    m.over_copy_bytes_shared = 200;
+    m.over_copy_bytes_linear = 200;
+    m.over_copy_bytes_dma_buf = 100;
+    frames.released(6);
+    frames.ended(&m);
+    // Frame 2, open: host memory's, and 6 named once released.
+    frames.located();
+    frames.named(&[6]);
+    m.over_copy_bytes = 420;
+    m.over_copy_bytes_shared = 220;
+    m.over_copy_bytes_host_memory = 20;
+    assert_eq!(
+        frames.line(&m),
+        "over copies by frame, 3 frames as the calls played: mean bytes=140 private=66 shared=73 \
+         pitch=33 dma_buf=33 host_memory=6 own_image=66; largest, frame 1 bytes=300 private=200 \
+         shared=100 pitch=0 dma_buf=100 host_memory=0 own_image=200, 2 textures in an image of \
+         their own its calls named"
+    );
+}

@@ -1394,6 +1394,7 @@ field	metal2vulkan-runtime::Metrics.attachment_loop_reads	pub attachment_loop_re
 field	metal2vulkan-runtime::Metrics.attachment_read_copies	pub attachment_read_copies: u64
 field	metal2vulkan-runtime::Metrics.attachment_read_copy_bytes	pub attachment_read_copy_bytes: u64
 field	metal2vulkan-runtime::Metrics.barriers	pub barriers: u64
+field	metal2vulkan-runtime::Metrics.blit_barriers	pub blit_barriers: u64
 field	metal2vulkan-runtime::Metrics.block_bytes_made	pub block_bytes_made: u64
 field	metal2vulkan-runtime::Metrics.block_zero_fill_bytes	pub block_zero_fill_bytes: u64
 field	metal2vulkan-runtime::Metrics.block_zero_fills	pub block_zero_fills: u64
@@ -1413,6 +1414,7 @@ field	metal2vulkan-runtime::Metrics.consumer_allocation_nanos	pub consumer_alloc
 field	metal2vulkan-runtime::Metrics.consumer_allocations	pub consumer_allocations: u64
 field	metal2vulkan-runtime::Metrics.creations_before_seed	pub creations_before_seed: u64
 field	metal2vulkan-runtime::Metrics.d3d11_plane_submissions	pub d3d11_plane_submissions: u64
+field	metal2vulkan-runtime::Metrics.dispatch_hazard_barriers	pub dispatch_hazard_barriers: u64
 field	metal2vulkan-runtime::Metrics.dispatches_without_effects	pub dispatches_without_effects: u64
 field	metal2vulkan-runtime::Metrics.emulated_simdgroup_dispatches	pub emulated_simdgroup_dispatches: u64
 field	metal2vulkan-runtime::Metrics.event_holds	pub event_holds: [u64; STAGE_BUCKETS]
@@ -1478,6 +1480,7 @@ field	metal2vulkan-runtime::Metrics.maker_waits	pub maker_waits: u64
 field	metal2vulkan-runtime::Metrics.maker_yield_nanos	pub maker_yield_nanos: u64
 field	metal2vulkan-runtime::Metrics.maker_yields	pub maker_yields: u64
 field	metal2vulkan-runtime::Metrics.managed_bytes_captured	pub managed_bytes_captured: u64
+field	metal2vulkan-runtime::Metrics.other_barriers	pub other_barriers: u64
 field	metal2vulkan-runtime::Metrics.over_copies	pub over_copies: u64
 field	metal2vulkan-runtime::Metrics.over_copies_alignment	pub over_copies_alignment: u64
 field	metal2vulkan-runtime::Metrics.over_copies_dedicated	pub over_copies_dedicated: u64
@@ -1512,6 +1515,8 @@ field	metal2vulkan-runtime::Metrics.over_copy_bytes_surface	pub over_copy_bytes_
 field	metal2vulkan-runtime::Metrics.overlapping_copies_refused	pub overlapping_copies_refused: u64
 field	metal2vulkan-runtime::Metrics.partial_variant_ragged_grids	pub partial_variant_ragged_grids: u64
 field	metal2vulkan-runtime::Metrics.partial_variant_whole_grids	pub partial_variant_whole_grids: u64
+field	metal2vulkan-runtime::Metrics.pass_home_barriers	pub pass_home_barriers: u64
+field	metal2vulkan-runtime::Metrics.pass_start_barriers	pub pass_start_barriers: u64
 field	metal2vulkan-runtime::Metrics.passes	pub passes: u64
 field	metal2vulkan-runtime::Metrics.pipeline_cache_lock_wait_max_nanos	pub pipeline_cache_lock_wait_max_nanos: u64
 field	metal2vulkan-runtime::Metrics.pipeline_cache_lock_wait_nanos	pub pipeline_cache_lock_wait_nanos: u64
@@ -1550,6 +1555,7 @@ field	metal2vulkan-runtime::Metrics.sampler_element_writes	pub sampler_element_w
 field	metal2vulkan-runtime::Metrics.scheduled_to_gpu_start	pub scheduled_to_gpu_start: [u64; STAGE_BUCKETS]
 field	metal2vulkan-runtime::Metrics.scheduled_to_gpu_start_behind_nanos	pub scheduled_to_gpu_start_behind_nanos: u64
 field	metal2vulkan-runtime::Metrics.scheduled_to_gpu_start_nanos	pub scheduled_to_gpu_start_nanos: u64
+field	metal2vulkan-runtime::Metrics.segment_end_barriers	pub segment_end_barriers: u64
 field	metal2vulkan-runtime::Metrics.shared_coherence_failures	pub shared_coherence_failures: u64
 field	metal2vulkan-runtime::Metrics.shared_flushed_bytes	pub shared_flushed_bytes: u64
 field	metal2vulkan-runtime::Metrics.shared_flushes	pub shared_flushes: u64
@@ -1597,6 +1603,7 @@ field	metal2vulkan-runtime::Metrics.translations	pub translations: u64
 field	metal2vulkan-runtime::Metrics.translations_loaded	pub translations_loaded: u64
 field	metal2vulkan-runtime::Metrics.unslotted_attachment_reads	pub unslotted_attachment_reads: u64
 field	metal2vulkan-runtime::Metrics.untimed_command_buffers	pub untimed_command_buffers: u64
+field	metal2vulkan-runtime::Metrics.upload_barriers	pub upload_barriers: u64
 field	metal2vulkan-runtime::Metrics.upload_waits	pub upload_waits: u64
 field	metal2vulkan-runtime::Metrics.visibility_interrupts_refused	pub visibility_interrupts_refused: u64
 field	metal2vulkan-runtime::Metrics.waits_behind_counter	pub waits_behind_counter: u64

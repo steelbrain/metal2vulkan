@@ -479,7 +479,7 @@ pub(crate) fn stage(
         device.end_command_buffer(command)
     }
     .map_err(DeviceLoss::of("vkEndCommandBuffer"))?;
-    core.counters.count(Metric::Barriers);
+    core.counters.count(Metric::OtherBarriers);
     for _ in &moves {
         core.counters.count(Metric::HeapMoves);
     }
@@ -504,17 +504,21 @@ pub(crate) unsafe fn host_write(core: &Core, command: vk::CommandBuffer, place: 
         let counters = &core.counters;
         // SAFETY: the caller's contract.
         unsafe {
-            record(&core.device, command, &[moved.barrier()], &mut |m| {
-                counters.count(m)
-            })
+            record(
+                &core.device,
+                command,
+                &[moved.barrier()],
+                Metric::UploadBarriers,
+                &mut |m| counters.count(m),
+            )
         };
     }
     place.written();
 }
 
-/// Records `moves`, heap textures' moves from undefined ([`Marks::used`]), into `command`, the
-/// current segment's, in one barrier that orders every earlier command before them and every
-/// later one after, each counted (`Metrics::heap_moves`).
+/// Records `moves`, heap textures' moves from undefined ([`Marks::used`]), into `command`, in one
+/// barrier that orders every earlier command before them and every later one after, counted in
+/// `cause`, one of the barrier causes, and each move counted (`Metrics::heap_moves`).
 ///
 /// # Safety
 ///
@@ -523,6 +527,7 @@ pub(crate) unsafe fn record(
     device: &ash::Device,
     command: vk::CommandBuffer,
     moves: &[vk::ImageMemoryBarrier2<'_>],
+    cause: Metric,
     count: &mut impl FnMut(Metric),
 ) {
     let earlier = [memory_barrier(Reach::Commands)];
@@ -531,7 +536,7 @@ pub(crate) unsafe fn record(
         .image_memory_barriers(moves);
     // SAFETY: the caller's contract; a move from undefined names no layout the image must be in.
     unsafe { device.cmd_pipeline_barrier2(command, &dependency) };
-    count(Metric::Barriers);
+    count(cause);
     for _ in moves {
         count(Metric::HeapMoves);
     }

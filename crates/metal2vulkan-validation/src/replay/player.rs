@@ -6,6 +6,7 @@
 //! a dispatch compared.
 
 use super::addresses::AddressMap;
+use super::binds::{Binds, BINDS};
 use super::covers::{self, Covers, SlotStage};
 use super::dumps::{self, Part};
 use super::heaps::{placement_heap, placement_offset, places_texture, relay, Layout, Placements};
@@ -27,8 +28,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub type Counters = BTreeMap<&'static str, u64>;
 
 /// The counts the stream fixes, the same on every play of it on any runtime: the calls played,
-/// the command buffers committed, the encoders made, the draws and dispatches their calls issued,
-/// the address-looking words of the bytes it wrote and the 8-byte values at offsets 4 past a
+/// the command buffers committed, the encoders made, the draws, dispatches and blit commands
+/// their calls issued, the buffer slots their set-buffer calls set (`binds`), the address-looking
+/// words of the bytes it wrote and the 8-byte values at offsets 4 past a
 /// multiple of 8 that lie in a live range, the words of those it moved as noted, and the bytes it
 /// wrote.
 const CALLS: &str = "calls";
@@ -36,6 +38,18 @@ const COMMITS: &str = "commits";
 const ENCODERS: &str = "encoders";
 const DRAWS: &str = "draws";
 const DISPATCHES: &str = "dispatches";
+/// An encoder's copies, fills, mipmap generations, synchronizes and indirect command buffer
+/// resets and optimizations (`BLIT_COMMANDS`).
+const BLITS: &str = "blits";
+/// The selectors' starts of the blit commands [`BLITS`] counts.
+const BLIT_COMMANDS: [&str; 6] = [
+    "copy",
+    "fill",
+    "generateMipmaps",
+    "synchronize",
+    "resetCommandsInBuffer",
+    "optimize",
+];
 /// The 8-byte words at a multiple of 8 from their target's start, in the bytes the player put
 /// into an object with a recorded range and in `set*Bytes` data, whose value lies in a live
 /// recorded range: counted as the stream holds them (`docs/REPLAY-STREAM.md`, section 5).
@@ -50,12 +64,19 @@ const ADDRESS_ARGUMENTS: &str = "address_arguments";
 /// The address arguments the address map moved: those in a live range whose object the runtime
 /// made at another address than the recorded one (none where the backend makes each at its own).
 const RELOCATED_WORDS: &str = "relocated_words";
-const FIXED: [&str; 11] = [
+const FIXED: [&str; 18] = [
     CALLS,
     COMMITS,
     ENCODERS,
     DRAWS,
     DISPATCHES,
+    BLITS,
+    BINDS[0],
+    BINDS[1],
+    BINDS[2],
+    BINDS[3],
+    BINDS[4],
+    BINDS[5],
     ADDRESS_LOOKING_WORDS,
     NOTED_WORDS,
     MISALIGNED_WORDS,
@@ -960,6 +981,8 @@ pub struct Player<'b, B: Backend> {
     baseline: Counters,
     /// The counts the stream fixes, since the last group.
     fixed: Counters,
+    /// What the live encoders' buffer slots hold, for the binds the stream fixes.
+    binds: Binds,
     frame: Counts,
     /// When the frame being played began: the first call played, or the frame before's end.
     frame_began: Option<std::time::Instant>,
@@ -1200,6 +1223,7 @@ impl<'b, B: Backend> Player<'b, B> {
             prepass: Prepass::default(),
             baseline,
             fixed,
+            binds: Binds::default(),
             frame: Counts::default(),
             frame_began: None,
             times: Times::default(),
@@ -1330,6 +1354,7 @@ impl<'b, B: Backend> Player<'b, B> {
                 return Ok(false);
             };
             let issued = self.issued(&call);
+            let bound = self.bound(&call);
             let (frame, skips) = (self.report.frames.len() as u64, self.backend.skips());
             self.backend.locate(frame, self.position);
             if self.ahead.remove(&self.position) {
@@ -1345,6 +1370,9 @@ impl<'b, B: Backend> Player<'b, B> {
             self.position += 1;
             for key in [Some(CALLS), issued].into_iter().flatten() {
                 *self.fixed.entry(key).or_default() += 1;
+            }
+            for (key, count) in BINDS.into_iter().zip(bound) {
+                *self.fixed.entry(key).or_default() += count;
             }
             self.dump_completed(left_out)?;
             if (self.last_frame).is_some_and(|last| self.report.frames.len() > last) {
@@ -1778,7 +1806,7 @@ impl<'b, B: Backend> Player<'b, B> {
         Ok(())
     }
 
-    /// The count `call` adds once played, where it is an encoder's draw or dispatch.
+    /// The count `call` adds once played, where it is an encoder's draw, dispatch or blit command.
     fn issued(&self, call: &Call) -> Option<&'static str> {
         if self.kinds.get(&call.receiver) != Some(&Kind::Encoder) {
             return None;
@@ -1786,8 +1814,27 @@ impl<'b, B: Backend> Player<'b, B> {
         match &*call.selector {
             selector if selector.starts_with("draw") => Some(DRAWS),
             selector if selector.starts_with("dispatch") => Some(DISPATCHES),
+            selector
+                if BLIT_COMMANDS
+                    .iter()
+                    .any(|start| selector.starts_with(start)) =>
+            {
+                Some(BLITS)
+            }
             _ => None,
         }
+    }
+
+    /// The buffer binds `call` adds once played, where it is an encoder's (`binds`), in the order
+    /// of [`BINDS`]; an encoder's end or release ends its slots.
+    fn bound(&mut self, call: &Call) -> [u64; 6] {
+        if self.kinds.get(&call.receiver) != Some(&Kind::Encoder) {
+            return [0; 6];
+        }
+        if matches!(&*call.selector, "endEncoding" | "release") {
+            self.binds.ended(call.receiver);
+        }
+        self.binds.bound(call)
     }
 
     /// Commit `command_buffer`, then wait for what can complete.

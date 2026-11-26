@@ -4025,8 +4025,8 @@ impl TextureInner {
             }
             device.cmd_pipeline_barrier2(command, &back);
         }
-        counters.count(Metric::Barriers);
-        counters.count(Metric::Barriers);
+        counters.count(Metric::UploadBarriers);
+        counters.count(Metric::UploadBarriers);
     }
 }
 

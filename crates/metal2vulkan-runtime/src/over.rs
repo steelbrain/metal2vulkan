@@ -399,10 +399,11 @@ impl Overs {
     }
 }
 
-/// Records `copies` into `command`, after every earlier command and before every later one:
-/// first each buffer's bytes back from its image, then each image's bytes in from its buffer, each
-/// set between a pair of barriers; counted. Whether a copy back wrote a Shared buffer, which the
-/// host reads, is the answer.
+/// Records `copies` into `command`, a command buffer's, after every earlier command and before
+/// every later one: first each buffer's bytes back from its image, then each image's bytes in from
+/// its buffer, each set between a pair of barriers; counted, the barriers in
+/// `Metrics::other_barriers`. Whether a copy back wrote a Shared buffer, which the host reads, is
+/// the answer.
 ///
 /// # Safety
 ///
@@ -416,14 +417,15 @@ pub(crate) unsafe fn record(
 ) -> bool {
     // SAFETY: the caller's contract.
     unsafe {
-        record_side(device, command, &copies.back, false, counters);
-        record_side(device, command, &copies.into, true, counters);
+        let cause = Metric::OtherBarriers;
+        record_side(device, command, &copies.back, false, cause, counters);
+        record_side(device, command, &copies.into, true, cause, counters);
     }
     copies.back.iter().any(|copy| copy.shared)
 }
 
 /// Records `copies` into `command`: each buffer's bytes into its image (`into`), or back, between
-/// one pair of barriers.
+/// one pair of barriers, counted in `cause`, one of the barrier causes.
 ///
 /// # Safety
 ///
@@ -433,6 +435,7 @@ pub(crate) unsafe fn record_side(
     command: vk::CommandBuffer,
     copies: &[OverCopy],
     into: bool,
+    cause: Metric,
     counters: &Counters,
 ) {
     use vk::AccessFlags2 as A;
@@ -521,8 +524,8 @@ pub(crate) unsafe fn record_side(
                 .image_memory_barriers(&back),
         );
     }
-    counters.count(Metric::Barriers);
-    counters.count(Metric::Barriers);
+    counters.count(cause);
+    counters.count(cause);
 }
 
 /// A copy back a reader of a Managed buffer's device copy takes ([`ManagedOvers::backs`]): the

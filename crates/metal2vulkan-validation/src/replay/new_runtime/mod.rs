@@ -17,6 +17,7 @@ mod imports;
 pub(super) mod indices;
 mod judged;
 mod makes;
+mod over_frames;
 pub(super) mod places;
 mod prepass;
 mod render;
@@ -640,6 +641,9 @@ pub struct NewRuntime {
     textures_over: [u64; 2],
     /// Of those in an image of their own, how many of each pixel format and usage.
     copied_over_kinds: BTreeMap<String, u64>,
+    /// The over copies by frame, and the textures in an image of their own each frame's calls
+    /// named: the report's `over copies by frame` line.
+    over_frames: over_frames::OverFrames,
     /// The textures over a surface's plane, and the entries under them.
     surfaces: surfaces::Surfaces,
     /// The video surfaces, made through the surface call.
@@ -993,6 +997,7 @@ impl NewRuntime {
             no_copies: imports::NoCopies::default(),
             textures_over: [0; 2],
             copied_over_kinds: BTreeMap::new(),
+            over_frames: over_frames::OverFrames::default(),
             surfaces: surfaces::Surfaces::default(),
             videos: videos::Videos::new(VideoHandle::DmaBuf),
             device,
@@ -2449,6 +2454,7 @@ impl NewRuntime {
                     if in_image {
                         let kind = format!("{:?} {:?}", descriptor.pixel_format, descriptor.usage);
                         *self.copied_over_kinds.entry(kind).or_default() += 1;
+                        self.over_frames.made(call.result);
                     }
                 }
                 Ok(made)
@@ -2641,6 +2647,7 @@ impl Backend for NewRuntime {
             self.videos.released(call.receiver);
             self.substitutes.live.remove(&call.receiver);
             self.tiled.released(call.receiver);
+            self.over_frames.released(call.receiver);
             self.unrecorded_tessellation.released(call.receiver);
             self.skips.roots.remove(&call.receiver);
             match self.objects.remove(&call.receiver) {
@@ -2697,6 +2704,7 @@ impl Backend for NewRuntime {
                 self.substitutes.live.insert(call.result, false);
             }
         }
+        self.over_named(call);
         if !self.tiled.is_empty() {
             // Skipped encoders too: the copy is taken at their use.
             self.tiled_named(call)?;
@@ -3095,6 +3103,13 @@ impl Backend for NewRuntime {
             ("pushes_held", metrics.pushes_held),
             ("passes", metrics.passes),
             ("barriers", metrics.barriers),
+            ("pass_start_barriers", metrics.pass_start_barriers),
+            ("pass_home_barriers", metrics.pass_home_barriers),
+            ("blit_barriers", metrics.blit_barriers),
+            ("dispatch_hazard_barriers", metrics.dispatch_hazard_barriers),
+            ("segment_end_barriers", metrics.segment_end_barriers),
+            ("upload_barriers", metrics.upload_barriers),
+            ("other_barriers", metrics.other_barriers),
             ("bytes_copied", metrics.bytes_copied),
             ("heap_moves", metrics.heap_moves),
             ("over_copies", metrics.over_copies),
@@ -3457,6 +3472,7 @@ impl Backend for NewRuntime {
                 kinds.join(", ")
             ));
         }
+        lines.push(self.over_frames.line(&metrics));
         lines.push(self.surfaces.line());
         lines.push(self.videos.line());
         lines.extend(self.substitutes.lines());
@@ -3489,7 +3505,9 @@ impl Backend for NewRuntime {
         while (self.frame_stages.len() as u64) < frame {
             let metrics = self.device.counters().metrics();
             self.frame_stages.push(stages(&metrics));
+            self.over_frames.ended(&metrics);
         }
+        self.over_frames.located();
     }
 
     fn announced_bytes_recorded(&mut self) {

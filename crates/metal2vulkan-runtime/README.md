@@ -183,7 +183,9 @@ and a call that needs a runtime thread after `Device::quiesce` (`Error::Quiesced
 ### Counters
 
 `Device::counters` returns a handle that stays readable after the device is gone. `metrics()` are
-cumulative counts (submissions, passes, barriers, bytes copied, pipelines created, blocks made,
+cumulative counts (submissions, passes, barriers, each counted in one cause: a pass's start, a
+pass's move home, a blit, a dispatch's hazard, a segment's end, an upload or another, bytes
+copied, pipelines created, blocks made,
 first-use waits, kernels lowered, kernels read from the cache directory, upload waits, pushes,
 and the draws and dispatches whose push bytes the command buffer already held), and times in
 nanoseconds, in total and longest: among them each `vkQueueSubmit2` call's time inside the

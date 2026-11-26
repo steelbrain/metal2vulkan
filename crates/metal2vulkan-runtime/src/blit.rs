@@ -299,7 +299,7 @@ impl BlitCommandEncoder {
                 if n > 0 {
                     let dependency = vk::DependencyInfo::default().memory_barriers(&between);
                     device.cmd_pipeline_barrier2(command, &dependency);
-                    building.count(Metric::Barriers);
+                    building.count(Metric::BlitBarriers);
                 }
                 device.cmd_copy_image(
                     command,
@@ -312,8 +312,8 @@ impl BlitCommandEncoder {
             }
             close(core, command, back);
         }
-        building.count(Metric::Barriers);
-        building.count(Metric::Barriers);
+        building.count(Metric::BlitBarriers);
+        building.count(Metric::BlitBarriers);
         Ok(())
     }
 
@@ -512,8 +512,8 @@ impl BlitCommandEncoder {
                 &vk::DependencyInfo::default().memory_barriers(&written),
             );
         }
-        building.count(Metric::Barriers);
-        building.count(Metric::Barriers);
+        building.count(Metric::BlitBarriers);
+        building.count(Metric::BlitBarriers);
         Ok(())
     }
 
@@ -676,7 +676,7 @@ impl BlitCommandEncoder {
                     if n > 0 {
                         let dependency = vk::DependencyInfo::default().memory_barriers(&between);
                         device.cmd_pipeline_barrier2(command, &dependency);
-                        building.count(Metric::Barriers);
+                        building.count(Metric::BlitBarriers);
                     }
                     for region in slab {
                         match into_image {
@@ -700,8 +700,8 @@ impl BlitCommandEncoder {
             }
             close(core, command, back);
         }
-        building.count(Metric::Barriers);
-        building.count(Metric::Barriers);
+        building.count(Metric::BlitBarriers);
+        building.count(Metric::BlitBarriers);
         Ok(())
     }
 
@@ -768,8 +768,8 @@ impl BlitCommandEncoder {
                 &vk::DependencyInfo::default().memory_barriers(&written),
             );
         }
-        building.count(Metric::Barriers);
-        building.count(Metric::Barriers);
+        building.count(Metric::BlitBarriers);
+        building.count(Metric::BlitBarriers);
         Ok(())
     }
 
@@ -823,8 +823,8 @@ impl BlitCommandEncoder {
                 &vk::DependencyInfo::default().memory_barriers(&written),
             );
         }
-        building.count(Metric::Barriers);
-        building.count(Metric::Barriers);
+        building.count(Metric::BlitBarriers);
+        building.count(Metric::BlitBarriers);
         Ok(())
     }
 
@@ -1009,7 +1009,7 @@ impl BlitCommandEncoder {
         }
         // The chain's barriers: before it, between each level and the next, and after it.
         for _ in 0..levels {
-            building.count(Metric::Barriers);
+            building.count(Metric::BlitBarriers);
         }
         Ok(())
     }
@@ -1140,8 +1140,8 @@ impl BlitCommandEncoder {
                     &vk::DependencyInfo::default().memory_barriers(&written),
                 );
             }
-            building.count(Metric::Barriers);
-            building.count(Metric::Barriers);
+            building.count(Metric::BlitBarriers);
+            building.count(Metric::BlitBarriers);
         }
         Ok(())
     }
@@ -1211,7 +1211,7 @@ impl BlitCommandEncoder {
         // block, until it retires; the barrier spans the block's own allocation, its buffer's,
         // and a dma-buf's foreign family is enabled (`Device::new_exported_block`).
         unsafe { core.device.cmd_pipeline_barrier2(command, &dependency) };
-        building.count(Metric::Barriers);
+        building.count(Metric::OtherBarriers);
         building.count(Metric::ExternalReleases);
         Ok(())
     }
@@ -1302,7 +1302,7 @@ impl BlitCommandEncoder {
         // buffer until it retires; each image is in its home layout, general, between commands,
         // the buffer spans the surface's memory, and a dma-buf's foreign family is enabled.
         unsafe { core.device.cmd_pipeline_barrier2(command, &dependency) };
-        building.count(Metric::Barriers);
+        building.count(Metric::OtherBarriers);
         building.count(Metric::ExternalReleases);
         Ok(())
     }

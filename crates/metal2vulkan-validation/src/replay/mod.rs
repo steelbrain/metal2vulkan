@@ -3,6 +3,7 @@
 
 mod addresses;
 mod args;
+mod binds;
 mod compare;
 mod covers;
 mod dumps;

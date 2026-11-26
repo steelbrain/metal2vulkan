@@ -2046,7 +2046,7 @@ impl Building {
         // In either kind of encoder: the barriers since a write may have left indirect argument
         // reads out.
         if conflict || (indirect && self.args_unordered()) {
-            self.barrier(command, reach);
+            self.barrier(command, reach, Metric::DispatchHazardBarriers);
             self.hazards().clear();
         }
         let hazards = self.hazards();

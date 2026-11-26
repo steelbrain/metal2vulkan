@@ -618,7 +618,15 @@ records as text, and
   own, by whether the runtime's `textures_copied_over` gauge rose across the making (a copied
   texture freed on another thread in that moment hides one), and its `textures over buffers in an
   image of their own, by pixel format and usage` line those in an image of their own by the
-  descriptor's pixel format and usage, most first.
+  descriptor's pixel format and usage, most first. Its `over copies by frame, N frames as the
+  calls played` line gives the over-copy bytes a frame, the frames cut where the play locates
+  each frame's first call (the last counts where any call of it played), as their mean and as
+  the largest frame's (the first of a tie), each split into `bytes` (every copy's),
+  `private` and `shared` (`over_copy_bytes_private` and `over_copy_bytes_shared`), and by
+  cause `pitch`, `dma_buf`, `host_memory` and `own_image` (every other cause's), then the
+  number of those textures in an image of their own, each counted once and a view as its
+  texture, that the largest frame's calls named: an encoder's call's arguments and a render
+  pass's attachments. A texture an argument buffer or a heap holds is named by no call.
 - **Announced bytes.** On a stream whose header has bit 0 set (section 6), a
   `synchronizeResource:` of a buffer played with two copies leaves the CPU's copy as the stream's
   writes made it, so the next `didModifyRange:` puts the stream's bytes into the GPU's copy: it
@@ -703,9 +711,17 @@ records as text, and
   for each frame and in total, two sets of counts:
   - **Fixed by the stream** (`stream`), the same on every play of the stream: the
     calls played (`calls`), the command buffers committed (`commits`, a host's split included),
-    the encoders made (`encoders`: the objects a command buffer or an encoder makes), the draws
-    and dispatches their calls issued (`draws` and `dispatches`: an encoder's calls whose
-    selectors begin `draw` and `dispatch`), the written words that look like addresses
+    the encoders made (`encoders`: the objects a command buffer or an encoder makes), the draws,
+    dispatches and blit commands their calls issued (`draws`, `dispatches` and `blits`: an
+    encoder's calls whose selectors begin `draw`, `dispatch`, and `copy`, `fill`,
+    `generateMipmaps`, `synchronize`, `resetCommandsInBuffer` or `optimize`), the buffer slots
+    their set-buffer calls set (`setBuffer:offset:atIndex:`, `setBufferOffset:atIndex:` and
+    `setBuffers:offsets:withRange:`, and their `Vertex` and `Fragment` forms), on render encoders
+    (`render_buffer_binds`) and on compute encoders (`compute_buffer_binds`), and of those the
+    buffer changes (`render_buffer_changes`, `compute_buffer_changes`: another buffer than the
+    slot held in the encoder, or the slot's first set) and the offset-only changes
+    (`render_offset_changes`, `compute_offset_changes`: the buffer the slot held, at another
+    offset); a set of the buffer and offset the slot holds is neither. The written words that look like addresses
     (`address_looking_words`) and the 8-byte values at offsets 4 past a multiple of 8 that lie in
     a live range (`misaligned_address_words`), both played as recorded (section 5), but those of
     the first in a noted buffer's range, moved (`noted_words`), the address
@@ -715,7 +731,10 @@ records as text, and
     the call that waited for it counts in the next.
   - **As executed** (`executed`): the runtime's metrics (`Device::counters`): its submissions,
     passes, barriers, bytes copied, copies of textures over buffers, pipelines made, allocations
-    and the rest. They differ between commits, and between plays of one commit where what the
+    and the rest. The barriers are counted in their causes too, which sum to `barriers`:
+    `pass_start_barriers`, `pass_home_barriers`, `blit_barriers`, `dispatch_hazard_barriers`,
+    `segment_end_barriers`, `upload_barriers` and `other_barriers` (`Metrics::pass_start_barriers`
+    and the rest). They differ between commits, and between plays of one commit where what the
     runtime records depends on timing. Only the stream's counts are compared between plays.
 
   Its own readbacks are not counted. The backend reads a Private buffer, which has no CPU

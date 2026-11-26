@@ -342,7 +342,9 @@ pub(crate) mod on_device {
     }
 
     /// A serial encoder places a barrier at each hazard and none between independent dispatches;
-    /// a concurrent encoder places one only on request. The values show the order held.
+    /// a concurrent encoder places one only on request. Each is a dispatch's hazard barrier
+    /// (`Metrics::dispatch_hazard_barriers`), and the segment's end its own
+    /// (`Metrics::segment_end_barriers`). The values show the order held.
     #[test]
     fn every_device_places_barriers_at_hazards_only() {
         each_device("compute_barriers", |name, _, device| {
@@ -371,6 +373,13 @@ pub(crate) mod on_device {
             let after = device.counters().metrics();
             // A barrier before each dispatch but the first, and the segment's end.
             assert_eq!(after.barriers - before.barriers, count, "{name}: dependent");
+            let causes = |after: &crate::Metrics, before: &crate::Metrics| {
+                [
+                    after.dispatch_hazard_barriers - before.dispatch_hazard_barriers,
+                    after.segment_end_barriers - before.segment_end_barriers,
+                ]
+            };
+            assert_eq!(causes(&after, &before), [count - 1, 1], "{name}: dependent");
             let chained = |start: u32| (0..count).fold(start, |x, _| x * 2 + 1);
             let expected: Vec<u32> = (0..WORDS as u32).map(chained).collect();
             assert_eq!(words(&x), expected, "{name}: dependent");
@@ -396,6 +405,7 @@ pub(crate) mod on_device {
             run(name, &command_buffer);
             let after = device.counters().metrics();
             assert_eq!(after.barriers - before.barriers, 1, "{name}: independent");
+            assert_eq!(causes(&after, &before), [0, 1], "{name}: independent");
             let expected: Vec<u32> = (0..WORDS as u32).map(|x| x * 2 + 1).collect();
             for buffer in &buffers {
                 assert_eq!(words(buffer), expected, "{name}: independent");
@@ -424,6 +434,12 @@ pub(crate) mod on_device {
             assert_eq!(
                 after.barriers - before.barriers,
                 count,
+                "{name}: concurrent"
+            );
+            // Each memory barrier is owed, and paid by the dispatch after it.
+            assert_eq!(
+                causes(&after, &before),
+                [count - 1, 1],
                 "{name}: concurrent"
             );
             let expected: Vec<u32> = (0..WORDS as u32).map(chained).collect();
