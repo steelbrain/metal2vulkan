@@ -76,14 +76,14 @@ order, and a lower one never overrides a higher one.
    stencil operations, then once for each of those bits, and, where the draw writes depth under a
    depth compare other than always or never, once more for the depth; those draws, and the note
    that fragments of one draw that overlap leave the OR of their values, are recorded as a known
-   gap), bound buffers (a device that enables the pipeline-robustness feature and reports
-   robustBufferAccess2 and robustBufferAccessUpdateAfterBind, with the limits its layout reaches,
-   binds a kernel's buffer arguments, each contained by its pipeline's robust buffer access 2; a
-   device without them reaches them at their device addresses with each access checked in the
-   shader, and that check's cost is recorded as a known gap, as is the check that stays, by
-   structure, on a slot a wide pointer, a typed atomic or the stage-in fetch reaches, on a slot
-   bound below its argument's alignment, and on every render stage), and Shared memory's host
-   coherence (decided by the host-coherent flag of the memory type
+   gap), bound buffers (a device with the pipeline-robustness feature, robustBufferAccess2,
+   robustBufferAccessUpdateAfterBind and the limits the bound layout needs binds a compute
+   function's buffer arguments, each contained by its pipeline's robust buffer access 2; a device
+   without them reaches them at their device addresses with each access checked in the shader, and
+   that check's cost is recorded as a known gap, as is the check that stays by structure on a slot a
+   wide pointer, a typed atomic or the stage-in fetch reaches, on a slot bound below its argument's
+   alignment, and on every render stage), and Shared memory's host coherence (decided by the
+   host-coherent flag of the memory type
    Shared takes, the first host-visible, host-cached type a buffer can use, a host-coherent one
    first: a device whose type has it makes no flush or invalidate call; on a device whose type is
    the cached type without coherence, the Shared memory a submission's command buffers and Managed
@@ -95,8 +95,8 @@ order, and a lower one never overrides a higher one.
    flush's cost grows with the Shared bytes a submission reaches, are recorded as a known gap). A
    second form chosen by anything else is not allowed.
 3. **Native-like speed.** Structure decides speed: driver-owned memory, optimal images in real
-   layouts, direct addresses (a kernel's bound buffers in their place where rule 2's query takes
-   them), nothing copied that Metal would not copy. Optimal images have two
+   layouts, direct addresses (for a compute function's buffer arguments, bound buffers where
+   rule 2's query takes them), nothing copied that Metal would not copy. Optimal images have two
    exceptions. A texture over a Shared buffer: a linear image on that buffer's memory, in the
    device's own layout, created so its first use keeps the bytes, with the alignment the guest
    reads from Metal's minimum linear texture alignment, and where a format query offers no linear
