@@ -41,6 +41,10 @@ mod on_device {
     /// A thread's mark.
     const MARK: u32 = 0xa5a5_0000;
 
+    /// A dispatch's threads: each one's word index and the target word it reaches (None outside
+    /// the target).
+    type Reaches = &'static [(i32, Option<usize>)];
+
     fn write(buffer: &Buffer, word: impl Fn(usize) -> u32) {
         let contents = buffer.contents().expect("a Shared buffer").cast::<u32>();
         for index in 0..WORDS {
@@ -66,9 +70,8 @@ mod on_device {
         let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
             FunctionDescriptor::new(function),
         ));
-        // Each dispatch: the target's bind offset, then each thread's word index and the target
-        // word it reaches (None outside the target).
-        let dispatches: [(u64, &[(i32, Option<usize>)]); 2] = [
+        // Each dispatch: the target's bind offset, then its threads' reaches.
+        let dispatches: [(u64, Reaches); 2] = [
             (
                 0,
                 &[

@@ -61,7 +61,7 @@ pub const TIME_DOMAINS: [vk::TimeDomainKHR; 2] =
 /// report is read once, at its first loss ([`DeviceLoss::fault`](crate::DeviceLoss::fault)),
 /// `VK_EXT_pipeline_robustness`, with its `pipelineRobustness` feature where the device reports it,
 /// through which a kernel's pipeline contains its buffer arguments' storage buffers by robust
-/// buffer access 2 ([`PIPELINE_ROBUSTNESS`]), and `VK_KHR_maintenance8` ([`MAINTENANCE8`]), for the
+/// buffer access 2, and `VK_KHR_maintenance8` ([`MAINTENANCE8`]), for the
 /// optional feature of its own.
 pub const OPTIONAL_EXTENSIONS: &[&CStr] = &[
     ash::khr::shader_maximal_reconvergence::NAME,
@@ -427,7 +427,7 @@ pub struct Features {
     /// read and enabled only where the device lists it, and then only `maintenance8`.
     pub maintenance8: Maintenance8Features,
     /// `VkPhysicalDevicePipelineRobustnessFeaturesEXT`, of `VK_EXT_pipeline_robustness`: read and
-    /// enabled only where the device lists it ([`OPTIONAL_EXTENSIONS`], [`PIPELINE_ROBUSTNESS`]).
+    /// enabled only where the device lists it ([`OPTIONAL_EXTENSIONS`]).
     pub pipeline_robustness: vk::PhysicalDevicePipelineRobustnessFeaturesEXT<'static>,
 }
 
