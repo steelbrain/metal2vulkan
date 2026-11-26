@@ -1268,7 +1268,8 @@ impl<'b, B: Backend> Player<'b, B> {
     /// The player that, once each command buffer whose stream id `command_buffers` holds
     /// completed, writes every buffer its encoders named into `dir`, with the ranges of it the
     /// cover rule held covered then, and every colour attachment its render passes stored, the
-    /// parts of it they stored (`dumps.rs`): the per-command-buffer compare of two plays
+    /// parts of it they stored, covered whole where the rule held any byte of it covered then
+    /// (`dumps.rs`): the per-command-buffer compare of two plays
     /// ([`compare_dumps`](super::compare_dumps)) reads them. A listed command buffer's buffers are
     /// read after the wait that saw it complete, before the next call plays.
     pub fn dumping(mut self, command_buffers: dumps::CommandBufferList, dir: PathBuf) -> Self {
@@ -1728,7 +1729,8 @@ impl<'b, B: Backend> Player<'b, B> {
     /// Write out the listed command buffers that completed (`dumping`): each buffer they named,
     /// read now, and its covered ranges now; each colour attachment their render passes stored,
     /// the parts of it they stored, and each texture their compute encoders bound, its first
-    /// level and slice, read now.
+    /// level and slice, read now, covered whole where the cover rule holds any byte of it covered
+    /// now.
     fn dump_completed(&mut self, left_out: &mut Counters) -> Result<(), PlayError> {
         let Some(dump) = &mut self.dump else {
             return Ok(());
@@ -1764,7 +1766,13 @@ impl<'b, B: Backend> Player<'b, B> {
         for (command_buffer, texture, parts) in textures {
             let bytes = self.uncounted(left_out, |player| player.read_parts(texture, &parts));
             let bytes = bytes.as_deref().map_err(|error| error.to_string());
-            dumps::write(&dir, command_buffer, texture, bytes, &[], None)
+            // The rule's ranges are the texture's bytes in its heap, which its parts are not laid
+            // out as: a texture any byte of which is covered is covered whole.
+            let whole = match (&bytes, self.covers.covered(texture)) {
+                (Ok(bytes), true) => vec![(0, bytes.len() as u64)],
+                _ => Vec::new(),
+            };
+            dumps::write(&dir, command_buffer, texture, bytes, &whole, None)
                 .map_err(failed(command_buffer, texture))?;
         }
         Ok(())

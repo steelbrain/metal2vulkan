@@ -586,6 +586,9 @@ struct Kept {
     per_commit: Counters,
     /// The buffers it keeps two copies of, and which one its read takes.
     read_copies: HashMap<u64, ReadCopy>,
+    /// The word it reads first in each part of a texture here, in place of the texture's id; it
+    /// reads a part as that word, then the part's level, slice and plane.
+    texels: HashMap<u64, u64>,
 }
 
 impl Backend for Kept {
@@ -667,7 +670,8 @@ impl Backend for Kept {
     }
 
     fn read_texture_part(&mut self, object: u64, part: Part) -> Result<Vec<u8>, PlayError> {
-        let words = [object, part.level, part.slice, part.plane];
+        let first = self.texels.get(&object).copied().unwrap_or(object);
+        let words = [first, part.level, part.slice, part.plane];
         Ok(words.iter().flat_map(|word| word.to_le_bytes()).collect())
     }
 
@@ -3439,6 +3443,84 @@ fn the_dump_compare_reports_a_word_whose_cover_the_buffer_s_last_write_voided() 
     assert!(!comparison.agrees());
 }
 
+/// The dump tests' play of three textures of 0x1000 bytes placed in a heap, into `dir`, their
+/// parts read with `texels` ([`Kept::texels`]): #5 and #6 at offset 0, one over the other, and #7
+/// at 0x1000, apart. Command buffer #20 dispatches a state that writes texture slot 0 twice: the
+/// first time with #5 there, which covers #6, the second with #6, which covers #5 and is written
+/// again itself; #7, at slot 1, which the state does not write, is neither.
+fn play_covered_textures(dir: &std::path::Path, texels: &[(u64, u64)]) {
+    let mut kept = Kept::default();
+    kept.heap_answers.insert(4, (0x1000, 0x1000));
+    kept.kernel_writes.insert(9, vec![0]);
+    kept.texels.extend(texels.iter().copied());
+    let (_, ended) = dumped(&mut kept, dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newHeapWithDescriptor:", 1, 2, &heap_of(0x1_0000, 1), &[])?;
+        w.call("m2v.textureDescriptor", 0, 4, &[map(&[])], &[])?;
+        for (texture, offset) in [(5, 0), (6, 0), (7, 0x1000)] {
+            let placed = [Value::Object(4), Value::Uint(offset)];
+            w.call("newTextureWithDescriptor:offset:", 2, texture, &placed, &[])?;
+        }
+        w.call("newCommandQueue", 1, 8, &[], &[])?;
+        w.call("newComputePipelineStateWithFunction:error:", 1, 9, &[], &[])?;
+        w.call("commandBuffer", 8, 20, &[], &[])?;
+        w.call("computeCommandEncoder", 20, 21, &[], &[])?;
+        w.call("setComputePipelineState:", 21, 0, &[Value::Object(9)], &[])?;
+        let size = map(&[("width", Value::Uint(1)), ("height", Value::Uint(1))]);
+        let groups = [size.clone(), size];
+        let dispatch = "dispatchThreadgroups:threadsPerThreadgroup:";
+        let apart = [Value::Object(7), Value::Uint(1)];
+        w.call("setTexture:atIndex:", 21, 0, &apart, &[])?;
+        for written in [5, 6] {
+            let slot = [Value::Object(written), Value::Uint(0)];
+            w.call("setTexture:atIndex:", 21, 0, &slot, &[])?;
+            w.call(dispatch, 21, 0, &groups, &[])?;
+        }
+        w.call("endEncoding", 21, 0, &[], &[])?;
+        w.call("commit", 20, 0, &[], &[])
+    });
+    ended.unwrap();
+}
+
+/// A texture the cover rule holds covered when its command buffer's dump reads it is covered
+/// whole, and the compare leaves it out; one it does not hold covered is compared: in the second
+/// play #5 (covered by #6's write after its own) and #7 (apart) read otherwise, each one part of
+/// 32 bytes whose first word differs, and only #7 is reported. #6, written last, is alike.
+#[test]
+fn the_dump_compare_leaves_out_a_covered_texture_and_reports_one_outside_every_cover() {
+    let (a, b) = (
+        ScratchDir::new("dumps-a").unwrap(),
+        ScratchDir::new("dumps-b").unwrap(),
+    );
+    play_covered_textures(a.path(), &[]);
+    play_covered_textures(b.path(), &[(5, 50), (7, 70)]);
+    let cover = |texture: u64| {
+        let name = format!("cb20-obj{texture}.cover");
+        std::fs::read_to_string(a.path().join(name)).unwrap()
+    };
+    assert_eq!([cover(5), cover(6), cover(7)], ["0..32", "-", "-"]);
+    let comparison = compare_dumps(a.path(), b.path()).unwrap();
+    assert_eq!(comparison.compared, 3);
+    let differs = |object, covered, first_uncovered| Difference {
+        command_buffer: 20,
+        object,
+        differing: 1,
+        covered,
+        first_uncovered,
+        lengths: (32, 32),
+    };
+    assert_eq!(
+        comparison.differences,
+        [differs(5, 1, None), differs(7, 0, Some(0))]
+    );
+    assert!(!comparison.agrees());
+    assert_eq!(
+        comparison.lines()[0],
+        "differs cb #20 obj #7: 1 words outside every cover, the first word 0; 0 covered; \
+         lengths 32 and 32"
+    );
+}
+
 /// A listed command buffer's dump holds every buffer its encoders named, whatever made it: a
 /// plain buffer, a buffer in a block and a host's padded buffer; and the texture its compute
 /// encoder binds, as such a texture
@@ -3502,7 +3584,8 @@ fn a_listed_command_buffer_dumps_every_buffer_it_names_whatever_made_it() {
 /// `MTLStoreActionDontCare`), the resolve texture #11's level 1 and slice 2 of multisample #10,
 /// not #10 itself (2, `MTLStoreActionMultisampleResolve`), #12's level 1 by the encoder's
 /// `setColorStoreAction:atIndex:` (3, `MTLStoreActionUnknown`), and no depth attachment (#13);
-/// the second stores #8's level 2 and depth plane 3. A texture's dump covers nothing.
+/// the second stores #8's level 2 and depth plane 3. No texture is placed in a heap, so no
+/// texture's dump has a cover.
 #[test]
 fn a_listed_command_buffer_dumps_the_colour_attachments_its_render_passes_store() {
     let dir = ScratchDir::new("dumps-stores").unwrap();

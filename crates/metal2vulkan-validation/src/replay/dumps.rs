@@ -9,20 +9,23 @@
 //!   renders), in the order of [`Part`], and a compute-bound texture's first level and slice,
 //!   each laid out as a check reads a texture's first level and slice;
 //! - `cb<C>-obj<O>.cover`: the ranges of it the player's cover rule (`covers.rs`) held covered
-//!   then, as `start..end` byte offsets joined by commas, or `-` for none (always `-` for a
-//!   texture);
+//!   then, as `start..end` byte offsets joined by commas, or `-` for none. A texture's is the
+//!   whole of its bytes, `0..N`, where the rule held any byte of it covered (`Covers::covered`),
+//!   and `-` otherwise: the rule's ranges are the texture's bytes in its heap, which its parts
+//!   here are not laid out as;
 //! - `cb<C>-obj<O>.unread`: where the backend could not read the buffer or texture, why, in place
 //!   of its bytes (a multisample texture a pass stores without resolving it, for one);
 //! - `cb<C>-obj<O>.copy`: for a buffer the play keeps two copies of, which one the bytes are
 //!   ([`ReadCopy::label`]): its CPU copy, or its device copy, read back.
 //!
 //! [`compare_dumps`] reads two plays' dumps and compares each buffer's bytes word by word (4 bytes).
-//! It leaves out a word that lies wholly inside a covered range of either play: the cover rule
-//! leaves those bytes undefined, and a backend that answers no texture writes covers less
-//! (`Backend::texture_writes`). Every other differing word is reported, and so is a dump that
-//! only one play has, a buffer that either play could not read, and a difference in length. So is
-//! a buffer the two plays read different copies of: the CPU's bytes of one and the device's of the
-//! other are no compare of either. The summary counts the buffers compared by the copy both read.
+//! It leaves out a word that lies wholly inside a covered range of either play, so all of a
+//! texture that either play's rule held covered: the cover rule leaves those bytes undefined, and
+//! a backend that answers no texture writes covers less (`Backend::texture_writes`). Every other
+//! differing word is reported, and so is a dump that only one play has, a buffer that either play
+//! could not read, and a difference in length. So is a buffer the two plays read different copies
+//! of: the CPU's bytes of one and the device's of the other are no compare of either. The summary
+//! counts the buffers compared by the copy both read.
 //! A whole-object checksum is no such compare: one word under a cover would make a buffer differ,
 //! and one word outside it would hide behind a cover elsewhere in the buffer.
 //!
