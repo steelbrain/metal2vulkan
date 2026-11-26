@@ -239,6 +239,8 @@ pub(super) enum Structure {
     Robustness2,
     /// `VkPhysicalDeviceImageRobustnessFeatures` (`robustImageAccess`, core only from 1.3).
     ImageRobustness,
+    /// `VkPhysicalDevicePipelineRobustnessFeaturesEXT` (`pipelineRobustness`, core from 1.4).
+    PipelineRobustness,
     PortabilitySubset,
 }
 
@@ -288,6 +290,7 @@ impl Structure {
         Structure::FeedbackLoop,
         Structure::Robustness2,
         Structure::ImageRobustness,
+        Structure::PipelineRobustness,
         Structure::PortabilitySubset,
     ];
 
@@ -351,6 +354,7 @@ impl Structure {
             // One structure type serves both (vk.xml aliases the `EXT` type to the `KHR` one).
             Structure::Robustness2 => &[c"VK_EXT_robustness2", c"VK_KHR_robustness2"],
             Structure::ImageRobustness => &[c"VK_EXT_image_robustness"],
+            Structure::PipelineRobustness => &[c"VK_EXT_pipeline_robustness"],
             Structure::PortabilitySubset => &[c"VK_KHR_portability_subset"],
         }
     }
@@ -392,7 +396,8 @@ impl Structure {
             | Structure::LocalRead
             | Structure::Divisor
             | Structure::Maintenance5
-            | Structure::FloatControls2 => Some(ApiVersion { major: 1, minor: 4 }),
+            | Structure::FloatControls2
+            | Structure::PipelineRobustness => Some(ApiVersion { major: 1, minor: 4 }),
             _ => None,
         }
     }
@@ -565,6 +570,7 @@ pub(super) struct FeatureChain {
     pub(super) feedback_loop: vk::PhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT<'static>,
     pub(super) robustness2: vk::PhysicalDeviceRobustness2FeaturesEXT<'static>,
     pub(super) image_robustness: vk::PhysicalDeviceImageRobustnessFeatures<'static>,
+    pub(super) pipeline_robustness: vk::PhysicalDevicePipelineRobustnessFeaturesEXT<'static>,
     /// A portable implementation reports here everything it CANNOT do, and the structure
     /// defaults to all-false: enabling `VK_KHR_portability_subset` without chaining it asks for
     /// none of it.
@@ -619,6 +625,7 @@ macro_rules! link_extensions {
             FeedbackLoop => feedback_loop,
             Robustness2 => robustness2,
             ImageRobustness => image_robustness,
+            PipelineRobustness => pipeline_robustness,
             PortabilitySubset => portability_subset
         )
     };
@@ -685,6 +692,7 @@ impl FeatureChain {
             feedback_loop,
             robustness2,
             image_robustness,
+            pipeline_robustness,
             portability_subset
         );
     }
@@ -1121,6 +1129,7 @@ members! {
     Robustness2.robustness2.robust_image_access2 => Some(F::RobustImageAccess2);
     Robustness2.robustness2.null_descriptor => Some(F::NullDescriptor);
     ImageRobustness.image_robustness.robust_image_access => Some(F::RobustImageAccess);
+    PipelineRobustness.pipeline_robustness.pipeline_robustness => Some(F::PipelineRobustness);
     PortabilitySubset.portability_subset.constant_alpha_color_blend_factors =>
         Some(F::ConstantAlphaColorBlendFactors);
     PortabilitySubset.portability_subset.vertex_attribute_access_beyond_stride =>
@@ -1304,6 +1313,10 @@ const EXTENSIONS: &[ExtensionName] = {
         e(c"VK_EXT_mesh_shader", Some(X::ExtMeshShader)),
         e(c"VK_KHR_shader_float_controls2", None),
         e(c"VK_KHR_maintenance5", Some(X::KhrMaintenance5)),
+        e(
+            c"VK_EXT_pipeline_robustness",
+            Some(X::ExtPipelineRobustness),
+        ),
         e(c"VK_KHR_dynamic_rendering", Some(X::KhrDynamicRendering)),
         e(c"VK_KHR_portability_subset", Some(X::KhrPortabilitySubset)),
         e(

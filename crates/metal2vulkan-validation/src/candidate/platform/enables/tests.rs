@@ -1157,6 +1157,7 @@ fn promoted_structure_type(structure: Structure) -> vk::StructureType {
         Structure::Divisor => chain.divisor.s_type,
         Structure::Maintenance5 => chain.maintenance5.s_type,
         Structure::FloatControls2 => chain.float_controls2.s_type,
+        Structure::PipelineRobustness => chain.pipeline_robustness.s_type,
         other => panic!("{other:?} is not a promoted structure"),
     }
 }

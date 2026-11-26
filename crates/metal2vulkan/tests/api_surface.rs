@@ -224,6 +224,8 @@ surface! {
         struct StageSimd N;
         struct DevicePolicy N;
         struct DeviceProfile O;
+        const KERNEL_BUFFER_BINDINGS;
+        const IDENTITY_BUFFER_BYTES;
         struct SpirvValidation N;
         struct EnabledCaps N;
         struct FragmentCaps N;

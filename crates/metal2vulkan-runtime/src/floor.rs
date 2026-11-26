@@ -230,6 +230,8 @@ pub(crate) fn shader_extension(name: &CStr) -> Option<VkExtension> {
         Some(VkExtension::ExtCustomBorderColor)
     } else if name == ash::ext::external_memory_host::NAME {
         Some(VkExtension::ExtExternalMemoryHost)
+    } else if name == ash::ext::pipeline_robustness::NAME {
+        Some(VkExtension::ExtPipelineRobustness)
     } else {
         None
     }

@@ -362,6 +362,8 @@ const	metal2vulkan::bind::indirect_commands::THREADGROUP_BUFFER_ARGUMENT_COUNT	p
 const	metal2vulkan::cache::ARTIFACT_FORMAT_VERSION	pub const ARTIFACT_FORMAT_VERSION: u32
 const	metal2vulkan::cache::RUNTIME_VERSION	pub const RUNTIME_VERSION: u32
 const	metal2vulkan::cache::SEMANTICS_VERSION	pub const SEMANTICS_VERSION: u32
+const	metal2vulkan::device::IDENTITY_BUFFER_BYTES	pub const IDENTITY_BUFFER_BYTES: u64
+const	metal2vulkan::device::KERNEL_BUFFER_BINDINGS	pub const KERNEL_BUFFER_BINDINGS: u32
 const	metal2vulkan::metal::format::BICUBIC_TEXELS_UNBOUND	pub const BICUBIC_TEXELS_UNBOUND: u32
 const	metal2vulkan::metal::sampler::NOT_MIPMAPPED_MAX_LOD	pub const NOT_MIPMAPPED_MAX_LOD: f32
 const	metal2vulkan::metal::vertex::MAX_VERTEX_ALIGNMENT	pub const MAX_VERTEX_ALIGNMENT: u32
@@ -411,7 +413,7 @@ const-value	metal2vulkan-runtime::floor::DEVICE_EXTENSIONS	&[ash::khr::swapchain
 const-value	metal2vulkan-runtime::floor::INDIRECT_COMMANDS	&[crate::dgc::NAME, ash::khr::maintenance5::NAME]
 const-value	metal2vulkan-runtime::floor::INSTANCE_EXTENSIONS	&[ash::khr::surface::NAME]
 const-value	metal2vulkan-runtime::floor::MAINTENANCE8	c"VK_KHR_maintenance8"
-const-value	metal2vulkan-runtime::floor::OPTIONAL_EXTENSIONS	&[ash::khr::shader_maximal_reconvergence::NAME, ash::khr::shader_subgroup_uniform_control_flow::NAME, ash::khr::shader_quad_control::NAME, ash::ext::fragment_shader_interlock::NAME, ash::ext::shader_stencil_export::NAME, ash::khr::portability_subset::NAME, ash::khr::vertex_attribute_divisor::NAME, ash::ext::vertex_attribute_divisor::NAME, ash::ext::external_memory_host::NAME, ash::khr::external_memory_fd::NAME, ash::ext::external_memory_dma_buf::NAME, ash::khr::external_memory_win32::NAME, ash::ext::queue_family_foreign::NAME, ash::ext::image_drm_format_modifier::NAME, ash::nv::linear_color_attachment::NAME, ash::ext::device_fault::NAME, MAINTENANCE8]
+const-value	metal2vulkan-runtime::floor::OPTIONAL_EXTENSIONS	&[ash::khr::shader_maximal_reconvergence::NAME, ash::khr::shader_subgroup_uniform_control_flow::NAME, ash::khr::shader_quad_control::NAME, ash::ext::fragment_shader_interlock::NAME, ash::ext::shader_stencil_export::NAME, ash::khr::portability_subset::NAME, ash::khr::vertex_attribute_divisor::NAME, ash::ext::vertex_attribute_divisor::NAME, ash::ext::external_memory_host::NAME, ash::khr::external_memory_fd::NAME, ash::ext::external_memory_dma_buf::NAME, ash::khr::external_memory_win32::NAME, ash::ext::queue_family_foreign::NAME, ash::ext::image_drm_format_modifier::NAME, ash::nv::linear_color_attachment::NAME, ash::ext::device_fault::NAME, ash::ext::pipeline_robustness::NAME, MAINTENANCE8]
 const-value	metal2vulkan-runtime::floor::OPTIONAL_INSTANCE_EXTENSIONS	&[ash::khr::portability_enumeration::NAME]
 const-value	metal2vulkan-runtime::floor::TIME_DOMAINS	[vk::TimeDomainKHR::DEVICE, crate::times::HOST_DOMAIN]
 const-value	metal2vulkan-runtime::floor::VERSION	vk::API_VERSION_1_3
@@ -421,6 +423,8 @@ const-value	metal2vulkan::bind::indirect_commands::BINDING_COUNT	32
 const-value	metal2vulkan::bind::indirect_commands::COMMAND_BUFFER_HEADER_BYTES	16
 const-value	metal2vulkan::bind::indirect_commands::COMMAND_BYTES	((THREADGROUP_WORD + THREADGROUP_COUNT + 2) * 4).next_multiple_of(8)
 const-value	metal2vulkan::bind::indirect_commands::THREADGROUP_BUFFER_ARGUMENT_COUNT	31
+const-value	metal2vulkan::device::IDENTITY_BUFFER_BYTES	1 <<31
+const-value	metal2vulkan::device::KERNEL_BUFFER_BINDINGS	31
 const-value	metal2vulkan::metal::format::BICUBIC_TEXELS_UNBOUND	crate::metal::bicubic::BicubicTexels::NEUTRAL.0
 const-value	metal2vulkan::metal::sampler::NOT_MIPMAPPED_MAX_LOD	0.25
 const-value	metal2vulkan::metal::vertex::MAX_VERTEX_ALIGNMENT	4
@@ -1300,6 +1304,7 @@ field	metal2vulkan-runtime::FunctionDescriptor.linked	pub linked: LinkedFunction
 field	metal2vulkan-runtime::FunctionDescriptor.specialized	pub specialized: bool
 field	metal2vulkan-runtime::Gauges.attachment_views	pub attachment_views: u64
 field	metal2vulkan-runtime::Gauges.blocks	pub blocks: u64
+field	metal2vulkan-runtime::Gauges.buffer_set_pools	pub buffer_set_pools: u64
 field	metal2vulkan-runtime::Gauges.buffers	pub buffers: u64
 field	metal2vulkan-runtime::Gauges.command_buffers	pub command_buffers: u64
 field	metal2vulkan-runtime::Gauges.descriptor_slots	pub descriptor_slots: u64
@@ -1386,6 +1391,7 @@ field	metal2vulkan-runtime::LinkedFunction.precompiled	pub precompiled: bool
 field	metal2vulkan-runtime::LinkedFunction.specialized	pub specialized: bool
 field	metal2vulkan-runtime::LinkedFunction.specialized_name	pub specialized_name: Option<String>
 field	metal2vulkan-runtime::Metrics.accumulated_visibility_refused	pub accumulated_visibility_refused: u64
+field	metal2vulkan-runtime::Metrics.address_dispatches	pub address_dispatches: u64
 field	metal2vulkan-runtime::Metrics.allocation_map_refusals	pub allocation_map_refusals: u64
 field	metal2vulkan-runtime::Metrics.allocations_freed	pub allocations_freed: u64
 field	metal2vulkan-runtime::Metrics.allocations_mapped	pub allocations_mapped: u64
@@ -1399,6 +1405,9 @@ field	metal2vulkan-runtime::Metrics.block_bytes_made	pub block_bytes_made: u64
 field	metal2vulkan-runtime::Metrics.block_zero_fill_bytes	pub block_zero_fill_bytes: u64
 field	metal2vulkan-runtime::Metrics.block_zero_fills	pub block_zero_fills: u64
 field	metal2vulkan-runtime::Metrics.blocks_made	pub blocks_made: u64
+field	metal2vulkan-runtime::Metrics.bound_dispatches	pub bound_dispatches: u64
+field	metal2vulkan-runtime::Metrics.buffer_sets_held	pub buffer_sets_held: u64
+field	metal2vulkan-runtime::Metrics.buffer_sets_written	pub buffer_sets_written: u64
 field	metal2vulkan-runtime::Metrics.bytes_copied	pub bytes_copied: u64
 field	metal2vulkan-runtime::Metrics.bytes_zeroed	pub bytes_zeroed: u64
 field	metal2vulkan-runtime::Metrics.cache_bytes_written	pub cache_bytes_written: u64
@@ -1844,6 +1853,7 @@ field	metal2vulkan-runtime::floor::Features.linear_attachment	pub linear_attachm
 field	metal2vulkan-runtime::floor::Features.maintenance5	pub maintenance5: vk::PhysicalDeviceMaintenance5FeaturesKHR<'static>
 field	metal2vulkan-runtime::floor::Features.maintenance8	pub maintenance8: Maintenance8Features
 field	metal2vulkan-runtime::floor::Features.maximal_reconvergence	pub maximal_reconvergence: vk::PhysicalDeviceShaderMaximalReconvergenceFeaturesKHR<'static>
+field	metal2vulkan-runtime::floor::Features.pipeline_robustness	pub pipeline_robustness: vk::PhysicalDevicePipelineRobustnessFeaturesEXT<'static>
 field	metal2vulkan-runtime::floor::Features.portability	pub portability: vk::PhysicalDevicePortabilitySubsetFeaturesKHR<'static>
 field	metal2vulkan-runtime::floor::Features.quad_control	pub quad_control: vk::PhysicalDeviceShaderQuadControlFeaturesKHR<'static>
 field	metal2vulkan-runtime::floor::Features.robustness2	pub robustness2: vk::PhysicalDeviceRobustness2FeaturesEXT<'static>
@@ -2080,6 +2090,7 @@ field	metal2vulkan::device::Limits.max_descriptor_set_storage_images	pub max_des
 field	metal2vulkan::device::Limits.max_descriptor_set_uniform_buffers	pub max_descriptor_set_uniform_buffers: u32
 field	metal2vulkan::device::Limits.max_descriptor_set_update_after_bind_sampled_images	pub max_descriptor_set_update_after_bind_sampled_images: u32
 field	metal2vulkan::device::Limits.max_descriptor_set_update_after_bind_samplers	pub max_descriptor_set_update_after_bind_samplers: u32
+field	metal2vulkan::device::Limits.max_descriptor_set_update_after_bind_storage_buffers	pub max_descriptor_set_update_after_bind_storage_buffers: u32
 field	metal2vulkan::device::Limits.max_descriptor_set_update_after_bind_storage_images	pub max_descriptor_set_update_after_bind_storage_images: u32
 field	metal2vulkan::device::Limits.max_draw_indexed_index_value	pub max_draw_indexed_index_value: u32
 field	metal2vulkan::device::Limits.max_fragment_combined_output_resources	pub max_fragment_combined_output_resources: u32
@@ -2109,6 +2120,7 @@ field	metal2vulkan::device::Limits.max_per_stage_descriptor_storage_images	pub m
 field	metal2vulkan::device::Limits.max_per_stage_descriptor_uniform_buffers	pub max_per_stage_descriptor_uniform_buffers: u32
 field	metal2vulkan::device::Limits.max_per_stage_descriptor_update_after_bind_sampled_images	pub max_per_stage_descriptor_update_after_bind_sampled_images: u32
 field	metal2vulkan::device::Limits.max_per_stage_descriptor_update_after_bind_samplers	pub max_per_stage_descriptor_update_after_bind_samplers: u32
+field	metal2vulkan::device::Limits.max_per_stage_descriptor_update_after_bind_storage_buffers	pub max_per_stage_descriptor_update_after_bind_storage_buffers: u32
 field	metal2vulkan::device::Limits.max_per_stage_descriptor_update_after_bind_storage_images	pub max_per_stage_descriptor_update_after_bind_storage_images: u32
 field	metal2vulkan::device::Limits.max_per_stage_resources	pub max_per_stage_resources: u32
 field	metal2vulkan::device::Limits.max_per_stage_update_after_bind_resources	pub max_per_stage_update_after_bind_resources: u32
@@ -2140,6 +2152,9 @@ field	metal2vulkan::device::Limits.min_texel_offset	pub min_texel_offset: i32
 field	metal2vulkan::device::Limits.min_uniform_buffer_offset_alignment	pub min_uniform_buffer_offset_alignment: u64
 field	metal2vulkan::device::Limits.min_vertex_input_binding_stride_alignment	pub min_vertex_input_binding_stride_alignment: Option<u32>
 field	metal2vulkan::device::Limits.non_strict_wide_lines_use_parallelogram	pub non_strict_wide_lines_use_parallelogram: bool
+field	metal2vulkan::device::Limits.robust_buffer_access2	pub robust_buffer_access2: bool
+field	metal2vulkan::device::Limits.robust_buffer_access_update_after_bind	pub robust_buffer_access_update_after_bind: bool
+field	metal2vulkan::device::Limits.robust_storage_buffer_access_size_alignment	pub robust_storage_buffer_access_size_alignment: u64
 field	metal2vulkan::device::Limits.storage_image_sample_counts	pub storage_image_sample_counts: vk::SampleCountFlags
 field	metal2vulkan::device::Limits.strict_lines	pub strict_lines: bool
 field	metal2vulkan::device::Limits.sub_pixel_precision_bits	pub sub_pixel_precision_bits: u32
@@ -6290,6 +6305,8 @@ method	metal2vulkan::device::DeviceDescription::recommended_enables	pub fn recom
 method	metal2vulkan::device::DeviceDescription::required_enables	pub fn required_enables(&self, requirements: &Requirements) -> Result<EnableSet, Capability>
 method	metal2vulkan::device::DeviceDescription::with_enabled	pub fn with_enabled(mut self, enabled: &EnableSet) -> Result<DeviceDescription, Error>
 method	metal2vulkan::device::DeviceProfile::addressed_needs	pub fn addressed_needs(&self) -> Vec<Capability>
+method	metal2vulkan::device::DeviceProfile::binds_kernel_buffers	pub fn binds_kernel_buffers(&self) -> bool
+method	metal2vulkan::device::DeviceProfile::buffer_base_alignment	pub fn buffer_base_alignment(&self) -> u64
 method	metal2vulkan::device::DeviceProfile::check	pub fn check(&self, req: &Requirements) -> Result<(), Capability>
 method	metal2vulkan::device::DeviceProfile::compile_entry	pub fn compile_entry(&self, d: &EntryDescriptor<'_>, inputs: &LoweringInputs, budget: &Budget) -> (Result<CompiledFunction, Error>, CompileReport)
 method	metal2vulkan::device::DeviceProfile::descriptors	pub fn descriptors(&self) -> &DescriptorCaps
@@ -8965,6 +8982,7 @@ variant	metal2vulkan::device::VkExtension::ExtLineRasterization	ExtLineRasteriza
 variant	metal2vulkan::device::VkExtension::ExtMeshShader	ExtMeshShader
 variant	metal2vulkan::device::VkExtension::ExtMultiDraw	ExtMultiDraw
 variant	metal2vulkan::device::VkExtension::ExtMutableDescriptorType	ExtMutableDescriptorType
+variant	metal2vulkan::device::VkExtension::ExtPipelineRobustness	ExtPipelineRobustness
 variant	metal2vulkan::device::VkExtension::ExtPostDepthCoverage	ExtPostDepthCoverage
 variant	metal2vulkan::device::VkExtension::ExtPrimitiveTopologyListRestart	ExtPrimitiveTopologyListRestart
 variant	metal2vulkan::device::VkExtension::ExtProvokingVertex	ExtProvokingVertex
@@ -9068,6 +9086,7 @@ variant	metal2vulkan::device::VkFeature::MultiviewTessellationShader	MultiviewTe
 variant	metal2vulkan::device::VkFeature::MutableComparisonSamplers	MutableComparisonSamplers
 variant	metal2vulkan::device::VkFeature::NullDescriptor	NullDescriptor
 variant	metal2vulkan::device::VkFeature::OcclusionQueryPrecise	OcclusionQueryPrecise
+variant	metal2vulkan::device::VkFeature::PipelineRobustness	PipelineRobustness
 variant	metal2vulkan::device::VkFeature::PointPolygons	PointPolygons
 variant	metal2vulkan::device::VkFeature::PrimitiveTopologyListRestart	PrimitiveTopologyListRestart
 variant	metal2vulkan::device::VkFeature::PrimitiveTopologyPatchListRestart	PrimitiveTopologyPatchListRestart
@@ -9783,6 +9802,7 @@ variant	metal2vulkan::pipeline::Mechanism::DynamicState	DynamicState
 variant	metal2vulkan::pipeline::Mechanism::DynamicStateOrPushConstant	DynamicStateOrPushConstant
 variant	metal2vulkan::pipeline::Mechanism::KeyProjection	KeyProjection
 variant	metal2vulkan::pipeline::Mechanism::None	None
+variant	metal2vulkan::pipeline::Mechanism::PipelineState	PipelineState
 variant	metal2vulkan::pipeline::Mechanism::PipelineStateOrPushConstant	PipelineStateOrPushConstant
 variant	metal2vulkan::pipeline::Mechanism::PlanTimeCheck	PlanTimeCheck
 variant	metal2vulkan::pipeline::Mechanism::PushConstant	PushConstant
@@ -9999,6 +10019,7 @@ variant	metal2vulkan::pipeline::RuntimeFact::RegionViewports	RegionViewports
 variant	metal2vulkan::pipeline::RuntimeFact::RenderTargetArrayLength	RenderTargetArrayLength { layer_dropped: bool }
 variant	metal2vulkan::pipeline::RuntimeFact::ReplayBindings	ReplayBindings
 variant	metal2vulkan::pipeline::RuntimeFact::ResourcePresence	ResourcePresence { slot: SlotRef }
+variant	metal2vulkan::pipeline::RuntimeFact::RobustStorageBuffers	RobustStorageBuffers
 variant	metal2vulkan::pipeline::RuntimeFact::RotatedWeights	RotatedWeights
 variant	metal2vulkan::pipeline::RuntimeFact::RowLockstep	RowLockstep
 variant	metal2vulkan::pipeline::RuntimeFact::SampleCount	SampleCount
