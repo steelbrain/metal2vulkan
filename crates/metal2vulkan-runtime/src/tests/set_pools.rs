@@ -13,7 +13,9 @@
 //!   and destroys the one past them; a command buffer of `(FREE_POOLS + 1) * POOL_SETS` then takes
 //!   those and makes none; and none is left once the device drops;
 //! - two threads encoding a command buffer each at once take runs from the same pools, under the
-//!   validation layer, whose thread-safety checks report two threads at one pool or one set.
+//!   validation layer, whose thread-safety checks report two threads at one pool or one set;
+//! - a loop of 200 command buffers, each retired before the next, keeps the pools alive flat
+//!   between iterations 100 and 200, and none is left once the device drops.
 //!
 //! Each command buffer's outputs are checked. A device that keeps its kernels' buffers at their
 //! addresses writes no set and holds no pool. `llvm-as` assembles the fixture; without it the
@@ -252,6 +254,63 @@ mod on_device {
                 "{name}: two threads encoding {DISPATCHES} dispatches each at once wrote {sets} \
                  sets from {pools} pool(s)"
             );
+        });
+    }
+
+    /// A loop that encodes, retires and encodes again: 200 iterations, each one command buffer of
+    /// half a pool's sets and one more, retired before the next, so the pool the device hands out
+    /// from runs out every other iteration and a pool's sets come back while another serves. The
+    /// pools alive read the same after iterations 100 and 200, and none once the device is gone.
+    #[test]
+    fn every_device_s_set_pools_hold_flat_across_an_encode_and_retire_loop() {
+        each_device("set_pools_loop", |name, _, device| {
+            let Some(state) = state(name, &device) else {
+                return;
+            };
+            let bound = device.translator().profile().binds_kernel_buffers();
+            let counters = device.counters();
+            let pools = || counters.gauges().buffer_set_pools;
+            let queue = device.new_command_queue(4).expect("a queue");
+            let mut arena = Arena::new(&device);
+            let work = Work::new(&mut arena, [2.0, 3.0, 5.0]);
+            let dispatches = POOL_SETS as usize / 2 + 1;
+            let mut read = Vec::new();
+            for iteration in 1..=200 {
+                let command_buffer = work.encode(name, &queue, &state, dispatches);
+                run(name, &command_buffer);
+                drop(command_buffer);
+                within("the command buffer's retirement", || {
+                    counters.gauges().command_buffers == 0
+                });
+                if iteration % 100 == 0 {
+                    read.push(pools());
+                }
+            }
+            work.check(
+                &format!("{name}: the loop's last command buffer"),
+                dispatches,
+            );
+            println!(
+                "set_pools_loop: {name}: pools alive after iterations 100 and 200 of {dispatches} \
+                 dispatches each: {read:?}"
+            );
+            match bound {
+                true => {
+                    assert_eq!(
+                        read[0], read[1],
+                        "{name}: the pools at iterations 100 and 200"
+                    );
+                    assert!(
+                        (1..=FREE_POOLS as u64 + 1).contains(&read[1]),
+                        "{name}: {} pools alive, past the {} kept",
+                        read[1],
+                        FREE_POOLS + 1
+                    );
+                }
+                false => assert_eq!(read, [0, 0], "{name}: pools"),
+            }
+            drop((state, work, arena, queue, device));
+            assert_eq!(pools(), 0, "{name}: the pools at the device's drop");
         });
     }
 }
