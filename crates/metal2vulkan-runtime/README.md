@@ -2724,7 +2724,8 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   budget holds, its region carrying its first threadgroup, as a count past
   `maxComputeWorkGroupCount` does. Each piece is ordered after the commands before it by a
   barrier, but the first in a block the dispatch took new, which nothing reached before; a
-  dispatch of a kernel without an arena takes no such barrier.
+  dispatch of a kernel without an arena takes no such barrier. Those barriers leave the dispatch
+  in the hazard sets, so a later dispatch that depends on it takes its barrier as after any other.
   `Metrics::private_arena_dispatches`, `private_arena_pieces` and `private_arena_blocks` count
   them, and `private_arena_allocations` the takes that allocated. An indirect dispatch of such a kernel
   is `Gap::IndirectPrivateArena`: the GPU reads its counts, so the runtime can neither size its

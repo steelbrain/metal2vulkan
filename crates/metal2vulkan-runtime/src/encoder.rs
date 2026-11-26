@@ -1284,18 +1284,18 @@ impl ComputeCommandEncoder {
                 }
             }
         }
+        let accesses = Accesses {
+            slots: &self.slots,
+            textures: &self.textures,
+            declared: &self.declared,
+            indirect: match grid {
+                Grid::Indirect(buffer, _) => {
+                    Some(([buffer.id(), buffer.tracked_id()], buffer.span()))
+                }
+                Grid::Direct(_) => None,
+            },
+        };
         let wrote = {
-            let accesses = Accesses {
-                slots: &self.slots,
-                textures: &self.textures,
-                declared: &self.declared,
-                indirect: match grid {
-                    Grid::Indirect(buffer, _) => {
-                        Some(([buffer.id(), buffer.tracked_id()], buffer.span()))
-                    }
-                    Grid::Direct(_) => None,
-                },
-            };
             let building = recording(&mut self.building);
             // Heap textures it writes that an alias's write left stale move from undefined first
             // (`crate::alias`).
@@ -1411,6 +1411,11 @@ impl ComputeCommandEncoder {
                         }
                     }
                 }
+                // The barriers before its pieces started the hazard sets again, and its later
+                // pieces come after them: what the dispatch touches goes back in the sets.
+                if arena.is_some() {
+                    recording(&mut self.building).mark_dispatch(interface, &accesses);
+                }
                 Ok(())
             }
             (None, Grid::Indirect(buffer, offset)) => {
@@ -1428,6 +1433,11 @@ impl ComputeCommandEncoder {
             }
             (None, Grid::Direct(_)) => return Ok(()),
         };
+        if recorded.is_ok() && self.serial && interface.writes_unbound {
+            // A write through an address outside its resources conflicts with everything after
+            // it: the barrier is owed once the dispatch is recorded, to the next command.
+            recording(&mut self.building).owe(Owed::Unbound);
+        }
         if recorded.is_ok() && module == Module::Emulated {
             recording(&mut self.building).count(Metric::EmulatedSimdgroupDispatches);
         }
@@ -2112,6 +2122,12 @@ impl Building {
             self.barrier(command, reach, cause);
             self.hazards().clear();
         }
+        Ok(self.mark_dispatch(interface, accesses))
+    }
+
+    /// Adds what a dispatch of a kernel of `interface` touches to the hazard sets. True where it
+    /// writes.
+    fn mark_dispatch(&mut self, interface: &Interface, accesses: &Accesses<'_>) -> bool {
         let hazards = self.hazards();
         let mut wrote = false;
         for ([tracked, own], access) in accesses.each(interface) {
@@ -2127,15 +2143,11 @@ impl Building {
         if interface.writes_unbound {
             hazards.mark_wild_write();
             wrote = true;
-            if serial {
-                // Such a write conflicts with everything after it.
-                self.owe(Owed::Unbound);
-            }
         }
         if wrote {
             self.wrote();
         }
-        Ok(wrote)
+        wrote
     }
 
     /// Binds `pipeline` where it is not bound, writes the parameters' ring block and its address,
