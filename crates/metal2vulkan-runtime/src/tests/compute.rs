@@ -41,6 +41,7 @@ pub(crate) mod on_device {
     fn interface(buffers: Vec<(u32, Access)>, fields: Vec<Field>, push_len: u32) -> Interface {
         Interface {
             buffers,
+            views: Vec::new(),
             textures: Vec::new(),
             storage_reads: Vec::new(),
             formatless: Vec::new(),
