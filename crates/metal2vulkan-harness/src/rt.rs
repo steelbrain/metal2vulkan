@@ -454,7 +454,10 @@ impl crate::Device for Device {
         self.device.counters().metrics().pipelines_created
     }
 
-    /// `Metrics`' passes (encoders), barriers, bytes copied and resolves.
+    /// `Metrics`' passes (encoders), barriers, bytes copied and resolves, and its dispatches by
+    /// the form their kernel reaches its buffers in: through set 0's storage buffers
+    /// (`Metrics::bound_dispatches`) or at their device addresses
+    /// (`Metrics::address_dispatches`).
     fn counts(&self) -> Vec<(&'static str, u64)> {
         let metrics = self.device.counters().metrics();
         vec![
@@ -462,6 +465,8 @@ impl crate::Device for Device {
             ("barriers", metrics.barriers),
             ("bytes_copied", metrics.bytes_copied),
             ("resolves", metrics.resolves),
+            ("bound_dispatches", metrics.bound_dispatches),
+            ("address_dispatches", metrics.address_dispatches),
         ]
     }
 

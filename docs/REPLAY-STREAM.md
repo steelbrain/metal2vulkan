@@ -739,7 +739,10 @@ records as text, and
     `dispatch_write_after_read_barriers`, `dispatch_encoder_end_barriers`,
     `dispatch_pass_end_barriers`, `dispatch_indirect_barriers`, `dispatch_unbound_barriers`,
     `dispatch_arena_piece_barriers`, `dispatch_heap_barriers` and `dispatch_other_barriers`
-    (`Metrics::dispatch_after_write_barriers` and the rest). They differ between commits, and
+    (`Metrics::dispatch_after_write_barriers` and the rest), and the dispatches by the form their
+    kernel reaches its buffers in: through storage buffers of set 0 (`bound_dispatches`, with the
+    sets written for them, `buffer_sets_written`, and those that kept the set written last,
+    `buffer_sets_held`) or at their device addresses (`address_dispatches`). They differ between commits, and
     between plays of one commit where what the runtime records depends on timing. Only the
     stream's counts are compared between plays.
 
