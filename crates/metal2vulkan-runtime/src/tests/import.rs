@@ -9,8 +9,8 @@
 //! dma-buf is imported where its first offered type is host-visible and host-coherent and refused
 //! at the query, with nothing imported, everywhere else; and, on every device the floor opens
 //! through the refused device's memory view, that a dma-buf is refused for the Shared type's
-//! coherence, alone and several behind one buffer, with nothing imported, and host memory of the
-//! same length is imported.
+//! coherence, alone and several behind one buffer, with nothing imported, while host memory of
+//! the same length takes the host-memory rule's answer.
 
 use crate::import::host_type;
 #[cfg(unix)]
@@ -954,15 +954,18 @@ pub(crate) mod on_device {
     /// is not host-coherent, so the device holds a coherence state: a dma-buf is refused with
     /// `Limit::ImportCoherence` before any allocation, alone (`import_dma_buf`) and three behind
     /// one buffer (`import_dma_bufs`, where the device offers the granule), with nothing imported
-    /// and no release run; and host memory of the same length is imported by its pointer
-    /// (`import_host_memory`) into a host-visible, host-coherent type, where the device imports
-    /// host memory. Each device prints the fd's offer and what the rule answers it without the
-    /// state: a type there is one the rule took before it was keyed by the state. A device that
-    /// imports no dma-buf refuses it with `Limit::NoImport`.
+    /// and no release run; and host memory of the same length, by its pointer
+    /// (`import_host_memory`), takes the host-memory rule's answer, which the state does not key:
+    /// imported into a type host-visible and host-coherent through the view, or refused with
+    /// `Limit::ImportType` where the pointer's query offers only types the view reads as not
+    /// coherent (the Radeon 780M under RADV offers its cached type alone). Each device prints the
+    /// fd's offer and what the rule answers it without the state: a type there is one the rule
+    /// took before it was keyed by the state. A device that imports no dma-buf refuses it with
+    /// `Limit::NoImport`.
     #[cfg(target_os = "linux")]
     #[test]
-    fn every_device_under_the_view_refuses_a_dma_buf_and_imports_host_memory() {
-        use crate::import::dma_buf_type;
+    fn every_device_under_the_view_refuses_a_dma_buf_and_keeps_the_pointer_rule() {
+        use crate::import::{dma_buf_type, host_type};
         use crate::tests::command::on_device::each_device_under_the_view;
         use std::os::fd::AsRawFd;
         const LEN: u64 = 64 << 10;
@@ -1026,15 +1029,21 @@ pub(crate) mod on_device {
                 }
                 None => "no granule, so no several dma-bufs".to_string(),
             };
-            let host = match device.core().imports.host.as_ref() {
-                Some(&(_, alignment)) => {
-                    let len = LEN.next_multiple_of(alignment);
-                    let (pointer, mapping) = host_memory(len, alignment);
-                    let (release, host_released) = releasing();
-                    // SAFETY: the memory is the test's, mapped until it unmaps it below.
-                    let (block, memory_type) =
-                        unsafe { device.import_host_memory(pointer, len, release) }
-                            .unwrap_or_else(|error| panic!("{name}: host memory: {error}"));
+            println!(
+                "import_coherence: {name}: the fd's query offers {offered:#x} (the buffer lists \
+                 {listed:#x}), which the rule without the state answers {unkeyed:?}; one \
+                 dma-buf refused for the Shared type's coherence, nothing imported; {several}"
+            );
+            let Some(&(_, alignment)) = device.core().imports.host.as_ref() else {
+                println!("import_coherence: {name}: imports no host memory");
+                return;
+            };
+            let len = LEN.next_multiple_of(alignment);
+            let (pointer, mapping) = host_memory(len, alignment);
+            let (release, host_released) = releasing();
+            // SAFETY: the memory is the test's, mapped until it unmaps it below.
+            match unsafe { device.import_host_memory(pointer, len, release) } {
+                Ok((block, memory_type)) => {
                     let flags = memory.memory_types[memory_type as usize].property_flags;
                     let wanted = vk::MemoryPropertyFlags::HOST_VISIBLE
                         | vk::MemoryPropertyFlags::HOST_COHERENT;
@@ -1047,17 +1056,27 @@ pub(crate) mod on_device {
                     wait_until(&device, "the release", || {
                         host_released.load(Ordering::SeqCst)
                     });
-                    free(mapping);
-                    format!("host memory of {len} bytes imported into type {memory_type}")
+                    println!(
+                        "import_coherence: {name}: host memory of {len} bytes imported into \
+                         type {memory_type}"
+                    );
                 }
-                None => "imports no host memory".to_string(),
-            };
-            println!(
-                "import_coherence: {name}: the fd's query offers {offered:#x} (the buffer lists \
-                 {listed:#x}), which the rule without the state answers {unkeyed:?}; one \
-                 dma-buf refused for the Shared type's coherence, nothing imported; {several}; \
-                 {host}"
-            );
+                Err(Error::Limit(Limit::ImportType {
+                    handle: ImportHandle::HostMemory,
+                    offered,
+                    listed,
+                })) => {
+                    assert_eq!(host_type(offered, listed, coherent), None, "{name}");
+                    assert_eq!(counters.gauges(), before, "{name}: nothing imported");
+                    println!(
+                        "import_coherence: {name}: host memory refused by the host-memory rule: \
+                         the pointer's query offers {offered:#x}, none host-coherent through \
+                         the view"
+                    );
+                }
+                Err(error) => panic!("{name}: host memory: {error}"),
+            }
+            free(mapping);
         });
     }
 
