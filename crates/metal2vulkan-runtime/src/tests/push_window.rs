@@ -15,6 +15,13 @@
 //! with a block writes one block a dispatch, whose new address each dispatch pushes. All answer
 //! the fold of their inputs.
 //!
+//! On a device whose translator binds a kernel's buffers (`DeviceProfile::binds_kernel_buffers`)
+//! the same kernels push no address and no check: each buffer is a view of set 0 whose bind
+//! offset is the field (`FieldValue::BindOffset`), and the robust buffer access 2 of its pipeline
+//! contains it. A kernel whose fields fit the window writes no block and pushes once for its
+//! three dispatches, which write one set and hold it twice; one with bind offsets past the window
+//! writes one block a dispatch and pushes each.
+//!
 //! `llvm-as` assembles the kernels; without it the test skips visibly.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
@@ -137,9 +144,13 @@ define void @wide({}) {{\nentry:\n{body}  %out = getelementptr inbounds i32, ptr
 
     /// Kernel `wide` of `buffers` buffers on `device`, its push window `window` bytes: its
     /// addresses and check fields in the block, its blocks a dispatch and its pushes over the
-    /// dispatches are as the case gives, and it answers the fold of its inputs.
+    /// dispatches are as the case gives, and it answers the fold of its inputs. On a device that
+    /// binds kernel buffers, each buffer is a view with no address and no check, its blocks a
+    /// dispatch and pushes as its bind offsets in the block give, and its sets as the module's
+    /// doc says.
     fn wide(name: &str, device: &crate::Device, window: u32, case: Case) {
         let (buffers, (addresses, checks), blocks, pushes) = case;
+        let bound = device.translator().profile().binds_kernel_buffers();
         let bitcode = llvm_assemble_text(&kernel(buffers)).expect("wide");
         let library = Library::from_air(&bitcode).expect("the library");
         let function = library.function("wide").expect("the kernel");
@@ -152,18 +163,40 @@ define void @wide({}) {{\nentry:\n{body}  %out = getelementptr inbounds i32, ptr
             .new_compute_pipeline_state(&descriptor, crate::tests::no_constexpr_samplers)
             .unwrap_or_else(|error| panic!("{what}: {error}"));
         // The fields in the block: addresses, and the check's (the zero range's address
-        // and the bounds); nothing else goes there.
-        let mut ringed = (0, 0);
-        for field in &state.inner.compiled.whole.interface.fields {
+        // and the bounds), or, bound, bind offsets; nothing else goes there.
+        let interface = &state.inner.compiled.whole.interface;
+        let (mut ringed, mut offsets) = ((0, 0), 0);
+        for field in &interface.fields {
             match (field.place, &field.value) {
+                (_, FieldValue::BufferAddress { .. } | FieldValue::BufferBounds(_))
+                | (_, FieldValue::ZeroAddress)
+                    if bound =>
+                {
+                    panic!("{what}: an address or a check of a bound kernel")
+                }
                 (Place::Push(_), _) => {}
                 (Place::Block(_), FieldValue::BufferAddress { .. }) => ringed.0 += 1,
                 (Place::Block(_), FieldValue::BufferBounds(_) | FieldValue::ZeroAddress) => {
                     ringed.1 += 1
                 }
+                (Place::Block(_), FieldValue::BindOffset { .. }) if bound => offsets += 1,
                 (Place::Block(_), _) => panic!("{what}: another field in the block"),
             }
         }
+        let (addresses, checks, blocks, pushes) = match bound {
+            true => {
+                assert_eq!(
+                    interface.views.len(),
+                    buffers as usize,
+                    "{what}: a view for each buffer"
+                );
+                match offsets {
+                    0 => (0, 0, 0, 1),
+                    _ => (0, 0, 1, DISPATCHES),
+                }
+            }
+            false => (addresses, checks, blocks, pushes),
+        };
         assert_eq!(
             ringed,
             (addresses, checks),
@@ -220,6 +253,12 @@ define void @wide({}) {{\nentry:\n{body}  %out = getelementptr inbounds i32, ptr
             (pushes, DISPATCHES - pushes),
             "{what}: pushes, held"
         );
+        let sets = (
+            after.buffer_sets_written - before.buffer_sets_written,
+            after.buffer_sets_held - before.buffer_sets_held,
+        );
+        let want = if bound { (1, DISPATCHES - 1) } else { (0, 0) };
+        assert_eq!(sets, want, "{what}: sets written, held");
         let inputs = buffers - 1;
         let contents = bound[inputs as usize].contents().expect("a Shared buffer");
         for gid in 0..THREADS {
@@ -236,6 +275,10 @@ define void @wide({}) {{\nentry:\n{body}  %out = getelementptr inbounds i32, ptr
             };
             assert_eq!(got, want, "{what}: thread {gid}");
         }
-        println!("{what}: {writes} ring writes and {pushed} pushes over {DISPATCHES} dispatches");
+        let form = if bound { "bound" } else { "at their addresses" };
+        println!(
+            "{what}: {writes} ring writes and {pushed} pushes over {DISPATCHES} dispatches, \
+             its buffers {form} ({offsets} bind offsets in the block)"
+        );
     }
 }

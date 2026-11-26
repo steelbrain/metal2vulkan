@@ -2692,7 +2692,9 @@ attributes #1 = { convergent nounwind willreturn }
     /// the device's translator (`Device::translator`), under `LoweringInputs::kernel_variant` of
     /// the inputs `kernel_inputs_read` gives: for the observing kernel, whose plain module checks
     /// its one store at a computed index against its buffer (`PushField::SlotBounds` of buffer 1)
-    /// and leaves its two loads at constant offsets unchecked (none of buffer 0), and for a kernel
+    /// and leaves its two loads at constant offsets unchecked (none of buffer 0), and checks
+    /// neither on a device that binds kernel buffers, whose pipeline's robust buffer access 2
+    /// contains them (`DeviceProfile::binds_kernel_buffers`), and for a kernel
     /// of SIMD-group products. Each lowering a first device kept in its cache directory is found
     /// under the key of one variant's inputs, its artifact the public compile's byte for byte, and
     /// as many are found as the states made modules.
@@ -2778,9 +2780,12 @@ attributes #1 = { convergent nounwind willreturn }
                     _ => None,
                 })
                 .collect();
+            let want: &[u32] = match translator.profile().binds_kernel_buffers() {
+                true => &[],
+                false => &[1],
+            };
             assert_eq!(
-                checked,
-                [1],
+                checked, want,
                 "{name}: the buffers whose accesses are checked"
             );
             drop(second);
