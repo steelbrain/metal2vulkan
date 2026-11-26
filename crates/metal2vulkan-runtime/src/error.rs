@@ -2261,8 +2261,10 @@ pub enum Limit {
     /// device then lacks a dma-buf import coherent with the host's cached mappings. The consumer
     /// writes the pages through its own cached mapping, which no Vulkan flush reaches, and no
     /// Vulkan query says whether the driver's GPU mapping of a dma-buf from another driver sees the
-    /// host's caches: on such a device (a Meteor Lake GPU under Mesa's Intel driver and the i915
-    /// kernel driver) it does not. A pointer import of the same pages
+    /// host's caches, so the Shared type's flag is a proxy and the refusal its safe side: on one
+    /// such device (a Meteor Lake GPU under Mesa's Intel driver and the i915 kernel driver) the
+    /// kernel driver's source maps such a dma-buf with no cache coherency. A pointer import of the
+    /// same pages
     /// ([`Device::import_host_memory`](crate::Device::import_host_memory)) takes a host-coherent
     /// type by its flag. Metal's counterpart,
     /// `newBufferWithBytesNoCopy:length:options:deallocator:`, takes any page-aligned memory.

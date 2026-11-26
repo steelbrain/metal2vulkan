@@ -46,16 +46,16 @@ fn a_dma_buf_takes_only_the_first_type_offered() {
     }
 }
 
-/// On a device whose Shared type is not host-coherent, the dma-buf rule refuses whatever the fd's
-/// query offers, and the host-memory rule still takes the pointer's type. Meteor Lake's types
-/// under Mesa's Intel driver and the i915 kernel driver (src/intel/vulkan/i915/anv_device.c, a GPU
-/// without the shared last-level cache): 0 device-local, host-visible and host-coherent
-/// (write-combined), 1 device-local, host-visible and host-cached, not coherent. The floor's
-/// choice puts Shared in type 1, so the device holds a coherence state, and the fd's offer of
-/// type 0, which the rule took before, is refused; the pointer's offer of type 0 is taken. On the
-/// Iris Xe's types (i915 with the last-level cache: 0 device-local, 1 that and host-visible and
-/// host-coherent, 2 that and host-cached), Shared is coherent, no state is held, and the fd's offer
-/// of type 1 is taken as before.
+/// The dma-buf rule over Meteor Lake's types under Mesa's Intel driver and the i915 kernel driver
+/// (src/intel/vulkan/i915/anv_device.c, a GPU without the shared last-level cache): 0 device-local,
+/// host-visible and host-coherent (write-combined), 1 device-local, host-visible and host-cached,
+/// not coherent. The floor's choice puts Shared in type 1, so the device holds a coherence state.
+/// The fd's query offers types 0 and 1 (0b11), the buffer lists both (0b11), and the coherent
+/// types are 0b01: the rule as it stood took type 0 (its body is the rule's without the state),
+/// and keyed by the state it refuses, for one dma-buf and for several; the pointer's offer of
+/// type 0 is still taken. On the Iris Xe's types (i915 with the last-level cache: 0 device-local,
+/// 1 that and host-visible and host-coherent, 2 that and host-cached), Shared is coherent, no state
+/// is held, and the fd's offer of type 1 is taken as before.
 #[cfg(unix)]
 #[test]
 fn a_dma_buf_is_refused_where_the_shared_type_is_not_host_coherent() {
@@ -86,29 +86,32 @@ fn a_dma_buf_is_refused_where_the_shared_type_is_not_host_coherent() {
     );
     let coherent = coherent_bits(&meteor_lake);
     assert_eq!(coherent, 0b01);
-    for offered in [0b01, 0b11, 0b10] {
+    let (offered, listed) = (0b11, 0b11);
+    // The rule without the state, as it stood: type 0.
+    assert_eq!(
+        dma_buf_type(ImportHandle::DmaBuf, true, offered, listed, coherent),
+        Ok(0)
+    );
+    // Keyed by the state: refused, for one dma-buf and for several.
+    for handle in [ImportHandle::DmaBuf, ImportHandle::DmaBufs] {
         assert_eq!(
-            dma_buf_type(ImportHandle::DmaBuf, !held, offered, 0b11, coherent),
+            dma_buf_type(handle, !held, offered, listed, coherent),
+            Err(Limit::ImportCoherence { handle }),
+            "{handle:?}"
+        );
+    }
+    // Whatever the fd offers.
+    for offered in [0b01, 0b10] {
+        assert_eq!(
+            dma_buf_type(ImportHandle::DmaBuf, !held, offered, listed, coherent),
             Err(Limit::ImportCoherence {
                 handle: ImportHandle::DmaBuf
             }),
             "offered {offered:#x}"
         );
-        assert_eq!(
-            dma_buf_type(ImportHandle::DmaBufs, !held, offered, 0b11, coherent),
-            Err(Limit::ImportCoherence {
-                handle: ImportHandle::DmaBufs
-            }),
-            "offered {offered:#x}"
-        );
     }
-    // The rule before the state keyed it took the fd's offer of type 0.
-    assert_eq!(
-        dma_buf_type(ImportHandle::DmaBuf, true, 0b01, 0b11, coherent),
-        Ok(0)
-    );
     // The pointer's offer of type 0 is taken.
-    assert_eq!(host_type(0b01, 0b11, coherent), Some(0));
+    assert_eq!(host_type(0b01, listed, coherent), Some(0));
 
     let iris = memory(&[
         local,
@@ -954,7 +957,13 @@ pub(crate) mod on_device {
     /// is not host-coherent, so the device holds a coherence state: a dma-buf is refused with
     /// `Limit::ImportCoherence` before any allocation, alone (`import_dma_buf`) and three behind
     /// one buffer (`import_dma_bufs`, where the device offers the granule), with nothing imported
-    /// and no release run; and host memory of the same length, by its pointer
+    /// and no release run. It shows the refusal's kind and its path through both calls on a
+    /// device, not that the rule refuses an import it took before: on every lab card the rule
+    /// without the state also refuses these under the view (`Limit::ImportType`, printed), since
+    /// the first type their fd's query offers is a cached type the view reads as not coherent or
+    /// is not host-visible; the rule's own proof is
+    /// `a_dma_buf_is_refused_where_the_shared_type_is_not_host_coherent`. Host memory of the same
+    /// length, by its pointer
     /// (`import_host_memory`), takes the host-memory rule's answer, which the state does not key:
     /// imported into a type host-visible and host-coherent through the view, or refused with
     /// `Limit::ImportType` where the pointer's query offers only types the view reads as not

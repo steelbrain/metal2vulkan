@@ -674,9 +674,10 @@ host-cached memory is coherent. Where it is not, the rule refuses every dma-buf
 Mesa's Intel driver and the i915 kernel driver (read in the sources of Mesa 26.3.1 and Linux 7.3,
 not run), the fd's query offers a write-combined, host-coherent type first, and the kernel driver
 maps a dma-buf from another driver with no cache coherency, so the GPU can read bytes older than
-host writes still in the CPU's cache; its pointer import is snooped. Where the Shared type is
-coherent, as on every device of ours, the proxy refuses nothing, and a dma-buf's coherence there
-rests on the driver.
+host writes still in the CPU's cache; its pointer import is snooped. The rule is verified by its
+unit test over that device's memory types; on a device of that shape the refusal is expected, and
+no device of ours has that shape, so none meets it. Where the Shared type is coherent, as on every
+device of ours, the proxy refuses nothing, and a dma-buf's coherence there rests on the driver.
 
 The host-memory rule takes the first host-visible, host-coherent type offered:
 where RADV (Mesa 26.2, an RX 7900 XTX) refused the pages of a shared mapping of a memfd at the
