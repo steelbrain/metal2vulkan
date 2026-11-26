@@ -150,7 +150,7 @@ define void @wide({}) {{\nentry:\n{body}  %out = getelementptr inbounds i32, ptr
     /// doc says.
     fn wide(name: &str, device: &crate::Device, window: u32, case: Case) {
         let (buffers, (addresses, checks), blocks, pushes) = case;
-        let bound = device.translator().profile().binds_kernel_buffers();
+        let binds = device.translator().profile().binds_kernel_buffers();
         let bitcode = llvm_assemble_text(&kernel(buffers)).expect("wide");
         let library = Library::from_air(&bitcode).expect("the library");
         let function = library.function("wide").expect("the kernel");
@@ -170,7 +170,7 @@ define void @wide({}) {{\nentry:\n{body}  %out = getelementptr inbounds i32, ptr
             match (field.place, &field.value) {
                 (_, FieldValue::BufferAddress { .. } | FieldValue::BufferBounds(_))
                 | (_, FieldValue::ZeroAddress)
-                    if bound =>
+                    if binds =>
                 {
                     panic!("{what}: an address or a check of a bound kernel")
                 }
@@ -179,11 +179,11 @@ define void @wide({}) {{\nentry:\n{body}  %out = getelementptr inbounds i32, ptr
                 (Place::Block(_), FieldValue::BufferBounds(_) | FieldValue::ZeroAddress) => {
                     ringed.1 += 1
                 }
-                (Place::Block(_), FieldValue::BindOffset { .. }) if bound => offsets += 1,
+                (Place::Block(_), FieldValue::BindOffset { .. }) if binds => offsets += 1,
                 (Place::Block(_), _) => panic!("{what}: another field in the block"),
             }
         }
-        let (addresses, checks, blocks, pushes) = match bound {
+        let (addresses, checks, blocks, pushes) = match binds {
             true => {
                 assert_eq!(
                     interface.views.len(),
@@ -257,7 +257,7 @@ define void @wide({}) {{\nentry:\n{body}  %out = getelementptr inbounds i32, ptr
             after.buffer_sets_written - before.buffer_sets_written,
             after.buffer_sets_held - before.buffer_sets_held,
         );
-        let want = if bound { (1, DISPATCHES - 1) } else { (0, 0) };
+        let want = if binds { (1, DISPATCHES - 1) } else { (0, 0) };
         assert_eq!(sets, want, "{what}: sets written, held");
         let inputs = buffers - 1;
         let contents = bound[inputs as usize].contents().expect("a Shared buffer");
@@ -275,7 +275,7 @@ define void @wide({}) {{\nentry:\n{body}  %out = getelementptr inbounds i32, ptr
             };
             assert_eq!(got, want, "{what}: thread {gid}");
         }
-        let form = if bound { "bound" } else { "at their addresses" };
+        let form = if binds { "bound" } else { "at their addresses" };
         println!(
             "{what}: {writes} ring writes and {pushed} pushes over {DISPATCHES} dispatches, \
              its buffers {form} ({offsets} bind offsets in the block)"
