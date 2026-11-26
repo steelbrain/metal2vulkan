@@ -8,7 +8,7 @@
 //! [`Device::new`](crate::Device::new) makes that last choice on the device.
 
 use ash::vk;
-use metal2vulkan::device::{EnableSet, VkExtension, VkFeature};
+use metal2vulkan::device::{EnableSet, VkExtension, VkFeature, KERNEL_BUFFER_BINDINGS};
 use std::ffi::{CStr, CString};
 use std::fmt;
 
@@ -800,7 +800,8 @@ pub(crate) const LINEAR_ATTACHMENTS: &[Feature] =
 pub(crate) const FAULT_REPORTS: &[Feature] = &[feature!(fault.device_fault)];
 
 /// The feature of `VK_EXT_pipeline_robustness` (one of [`OPTIONAL_EXTENSIONS`]): enabled where the
-/// device lists the extension and reports it. With it, where the translator's profile binds a
+/// device lists the extension and reports it, and its per-stage update-after-bind resources hold
+/// set 0's kernel storage buffers beside set 1 ([`kernel_buffers_fit`]). With it, where the translator's profile binds a
 /// kernel's buffer arguments (`DeviceProfile::binds_kernel_buffers`: robust buffer access 2
 /// supported, though never enabled for the device, and its other terms), a kernel reaches each
 /// buffer argument through a storage buffer of set 0 that its pipeline's robust buffer access 2
@@ -1466,7 +1467,7 @@ pub(crate) fn decide(device: &Queried) -> Result<Capabilities, BelowFloor> {
             *(feature.field)(&mut features) = *(feature.field)(&mut reported);
         }
     }
-    if listed(ash::ext::pipeline_robustness::NAME) {
+    if listed(ash::ext::pipeline_robustness::NAME) && kernel_buffers_fit(device, attachment_reads) {
         for feature in PIPELINE_ROBUSTNESS {
             *(feature.field)(&mut features) = *(feature.field)(&mut reported);
         }
@@ -1670,6 +1671,19 @@ fn second_elements_fit(device: &Queried) -> bool {
             >= sampled + storage + limits.max_color_attachments
         && descriptors.max_update_after_bind_descriptors_in_all_pools
             >= sampled + storage + SAMPLER_ARRAYS * SAMPLER_ELEMENTS
+}
+
+/// Whether `maxPerStageUpdateAfterBindResources` holds the compute stage's descriptors with set 0's
+/// kernel storage buffers (`crate::arrays::buffer_bindings`): set 1's arrays, `seconds` their
+/// second elements' (a uniform texel buffer counting as a sampled image, a storage one as a
+/// storage image), and [`KERNEL_BUFFER_BINDINGS`]. It is the one limit of that layout the
+/// translator's query (`DeviceProfile::binds_kernel_buffers`) cannot count, as set 1 is the
+/// runtime's: [`PIPELINE_ROBUSTNESS`] is enabled only where it holds.
+fn kernel_buffers_fit(device: &Queried, seconds: bool) -> bool {
+    let sampled = crate::arrays::sampled_images(seconds) + TEXTURES;
+    let storage = 2 * TEXTURES + LEVEL_ELEMENTS;
+    device.vulkan12.max_per_stage_update_after_bind_resources
+        >= sampled + storage + KERNEL_BUFFER_BINDINGS
 }
 
 /// Each limit the floor sets: its Vulkan name, the device's value, and the least value the runtime

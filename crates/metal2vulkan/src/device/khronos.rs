@@ -876,6 +876,10 @@ fn limits(p: &Props<'_>, api: ApiVersion, extensions: &BTreeSet<String>) -> Resu
             true => p.u64_or("robustStorageBufferAccessSizeAlignment", 0)?,
             false => 0,
         },
+        max_per_stage_descriptor_update_after_bind_storage_buffers: p
+            .u32("maxPerStageDescriptorUpdateAfterBindStorageBuffers")?,
+        max_descriptor_set_update_after_bind_storage_buffers: p
+            .u32("maxDescriptorSetUpdateAfterBindStorageBuffers")?,
     })
 }
 

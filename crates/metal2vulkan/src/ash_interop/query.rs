@@ -1338,6 +1338,10 @@ fn limits(l: &avk::PhysicalDeviceLimits, p: &PropertyChain, chained: &Properties
         robust_storage_buffer_access_size_alignment: p
             .robustness2
             .robust_storage_buffer_access_size_alignment,
+        max_per_stage_descriptor_update_after_bind_storage_buffers: v12
+            .max_per_stage_descriptor_update_after_bind_storage_buffers,
+        max_descriptor_set_update_after_bind_storage_buffers: v12
+            .max_descriptor_set_update_after_bind_storage_buffers,
     }
 }
 

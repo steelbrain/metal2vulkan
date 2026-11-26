@@ -120,23 +120,35 @@ impl DeviceProfile {
     /// storage buffers, each bound over its buffer (`docs/API.md` section 5), its pipeline made
     /// with robust buffer access 2 for storage buffers (`RuntimeFact::RobustStorageBuffers`), in
     /// place of their device addresses with each access at a run-time offset checked in the
-    /// shader. It is the device's answer to five queries, under the identity domains alone:
-    /// `pipelineRobustness` enabled, `robustBufferAccess2` supported (it is not enabled:
-    /// [`Limits::robust_buffer_access2`]), `robustBufferAccessUpdateAfterBind`,
-    /// `maxPerStageDescriptorStorageBuffers` of [`KERNEL_BUFFER_BINDINGS`] or more, and a
-    /// `maxStorageBufferRange` that holds a buffer of [`IDENTITY_BUFFER_BYTES`] with the bytes a
-    /// descriptor starts before it, `max(minStorageBufferOffsetAlignment, 16) - 1`. Every other
-    /// stage, and a kernel on a device that answers any of them otherwise, reaches each argument
-    /// at its device address.
+    /// shader. It is the device's answer to one query, under the identity domains alone: the
+    /// features, `pipelineRobustness` enabled, `robustBufferAccess2` supported (it is not
+    /// enabled: [`Limits::robust_buffer_access2`]) and `robustBufferAccessUpdateAfterBind`; then
+    /// the limits set 0's [`KERNEL_BUFFER_BINDINGS`] storage buffers reach, each of
+    /// `maxPerStageDescriptorStorageBuffers`, `maxPerStageDescriptorUpdateAfterBindStorageBuffers`,
+    /// `maxDescriptorSetStorageBuffers`, `maxDescriptorSetUpdateAfterBindStorageBuffers` and
+    /// `maxPerStageResources` holding them, and a `maxStorageBufferRange` that holds a buffer of
+    /// [`IDENTITY_BUFFER_BYTES`] with the bytes a descriptor starts before it,
+    /// [`buffer_base_alignment`](Self::buffer_base_alignment) less 1. The last limit the layout
+    /// reaches, `maxPerStageUpdateAfterBindResources`, counts set 1's arrays beside them, which the
+    /// consumer sizes: it enables `pipelineRobustness` only where that limit holds its set 1's
+    /// descriptors of the compute stage and the storage buffers. Every other stage, and a kernel
+    /// on a device that answers otherwise, reaches each argument at its device address.
     pub fn binds_kernel_buffers(&self) -> bool {
         let f = &self.fields;
         let l = &f.limits;
         let ahead = self.buffer_base_alignment() - 1;
+        let buffers = [
+            l.max_per_stage_descriptor_storage_buffers,
+            l.max_per_stage_descriptor_update_after_bind_storage_buffers,
+            l.max_descriptor_set_storage_buffers,
+            l.max_descriptor_set_update_after_bind_storage_buffers,
+            l.max_per_stage_resources,
+        ];
         f.pointer_domain == PointerDomain::Identity
             && f.enabled.features.contains(&VkFeature::PipelineRobustness)
             && l.robust_buffer_access2
             && l.robust_buffer_access_update_after_bind
-            && l.max_per_stage_descriptor_storage_buffers >= KERNEL_BUFFER_BINDINGS
+            && buffers.iter().all(|&limit| limit >= KERNEL_BUFFER_BINDINGS)
             && u64::from(l.max_storage_buffer_range) >= IDENTITY_BUFFER_BYTES.saturating_add(ahead)
     }
 
@@ -844,6 +856,12 @@ pub struct Limits {
     /// up to that many bytes less 1 past a range read as inside it. 0 where `VK_EXT_robustness2`
     /// is not exposed.
     pub robust_storage_buffer_access_size_alignment: u64,
+    /// `maxPerStageDescriptorUpdateAfterBindStorageBuffers` (Vulkan 1.2): the storage buffers one
+    /// stage's layout holds, counting those of sets made with and without update-after-bind.
+    pub max_per_stage_descriptor_update_after_bind_storage_buffers: u32,
+    /// `maxDescriptorSetUpdateAfterBindStorageBuffers` (Vulkan 1.2): the storage buffers a
+    /// pipeline layout's sets hold, counting those made with and without update-after-bind.
+    pub max_descriptor_set_update_after_bind_storage_buffers: u32,
 }
 
 /// The limits of `VK_EXT_mesh_shader` (`VkPhysicalDeviceMeshShaderPropertiesEXT`) the task and mesh
