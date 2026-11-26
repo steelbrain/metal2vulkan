@@ -44,7 +44,9 @@ pub fn selected(names: &[String]) -> Result<Vec<Box<dyn Case>>, String> {
 /// venue's surfaces took, and a case whose whole grids ran an observing kernel's
 /// partial-threadgroups variant prints how many (`Metrics::partial_variant_whole_grids`), and a
 /// case whose dispatches and draws pushed a storage texture's level fields prints how many
-/// (`Metrics::level_field_commands`): nothing in a verdict reads any of them.
+/// (`Metrics::level_field_commands`), and each pass prints its dispatches by the form their kernels
+/// reached their buffers in (`Metrics::bound_dispatches`, `Metrics::address_dispatches`): nothing
+/// in a verdict reads any of them.
 pub fn replay_rt_on_under(
     venues: Venues,
     cases: &[Box<dyn Case>],
@@ -54,6 +56,7 @@ pub fn replay_rt_on_under(
     let counters = device.device().counters();
     let pass = || {
         let mut report = Report::new();
+        let start = counters.metrics();
         for case in cases {
             let before = counters.metrics();
             let mut side = crate::rt_side::RtSide::new(&device);
@@ -86,6 +89,13 @@ pub fn replay_rt_on_under(
                 );
             }
         }
+        let end = counters.metrics();
+        println!(
+            "buffer forms on {}: {} dispatches bound, {} at their device addresses",
+            device.venue().device,
+            end.bound_dispatches - start.bound_dispatches,
+            end.address_dispatches - start.address_dispatches
+        );
         report
     };
     let report = pass();

@@ -381,6 +381,10 @@ pub(crate) mod on_device {
         println!("M2V-MATRIX metric {test}/stamps_not_available {unavailable}");
         let behind = metrics.waits_behind_counter;
         println!("M2V-MATRIX metric {test}/waits_behind_counter {behind}");
+        // The form the test's kernels reached their buffers in, for a leg that names which tests
+        // ran the bound form on its card.
+        let (bound, address) = (metrics.bound_dispatches, metrics.address_dispatches);
+        println!("M2V-FORM {test} {name}: {bound} dispatches bound, {address} at their addresses");
     }
 
     /// Buffers of 256 bytes in one Shared block, each zeroed.
