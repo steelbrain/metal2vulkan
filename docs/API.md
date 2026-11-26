@@ -300,6 +300,35 @@ and so do the command line, the compile worker and every validation tool. It hol
   into the parameter block `pipeline::ExecutionCounts` lays out, where each part's
   `sequenceCountAddress` reads it. Its interface is a compiled function's: the one push range,
   holding the block's device address at offset 0, and no descriptor.
+- **A kernel's bound buffers** (`DeviceProfile::binds_kernel_buffers`). Under the identity
+  domains, on a device that answers this query, a kernel reaches each buffer argument through a
+  storage buffer of set 0 bound over that buffer, not at its address. The descriptor covers the
+  buffer's own bytes in the `VkBuffer` that holds them, from its first byte rounded down to the
+  device's buffer base alignment (`DeviceProfile::buffer_base_alignment`,
+  `max(minStorageBufferOffsetAlignment, 16)`) to its last, and the slot's bytes from there to its
+  bind address are pushed (`PushField::SlotBindOffset`, section 5). The pipeline is made with
+  `VkPipelineRobustnessCreateInfo` naming robust buffer access 2 for its storage buffers
+  (`RuntimeFact::RobustStorageBuffers`): a load outside the descriptor's range reads zero and a
+  store there does nothing, so no access is checked in the shader (no `PushField::SlotBounds`, no
+  `PushField::ZeroAddress`) but an atomic, which keeps its check against the view's length and
+  answers 0 outside it (Vulkan states an atomic outside the checked range a write with an
+  undefined answer). The function requires `VkFeature::PipelineRobustness`, and states each
+  slot's `RuntimeFact::AddressAlignment` as an address slot does. The query is Vulkan's alone:
+  the features `pipelineRobustness` (enabled), `robustBufferAccess2` (supported, and not enabled)
+  and `robustBufferAccessUpdateAfterBind`; then the limits set 0's layout reaches:
+  `maxPerStageDescriptorStorageBuffers`, `maxPerStageDescriptorUpdateAfterBindStorageBuffers`,
+  `maxDescriptorSetStorageBuffers`, `maxDescriptorSetUpdateAfterBindStorageBuffers` and
+  `maxPerStageResources`, each at least its 31 bindings (`KERNEL_BUFFER_BINDINGS`), and
+  `maxStorageBufferRange` at least `IDENTITY_BUFFER_BYTES` (2^31) plus the base alignment less
+  1. The last limit that layout reaches, `maxPerStageUpdateAfterBindResources`, counts the set 1
+  a runtime makes beside it, which the runtime checks before it enables `pipelineRobustness`.
+  Four kinds of slot keep their device address by structure, on every device: a slot a wide
+  pointer may reach (a pointer the function stores, converts to an integer, or merges with one
+  loaded from memory or made from an integer), a slot a typed atomic reaches, a slot the
+  stage-in fetch reads, and a slot the dispatch binds at a multiple of 4 below its argument's
+  alignment (`LoweringInputs::word_bound_buffers`), as a view's `uvec4` and `uvec2` units take
+  the bind offset to be a multiple of that alignment. Every render stage keeps addresses. Of the
+  committed profiles, lavapipe's (a `maxStorageBufferRange` of 128 MiB) answers no.
 - **The resident-table domains** (`DevicePolicy::RESIDENT_TABLES`: `PointerDomain::ResidentTable`
   with `HandleDomain::Table`) exist for the validation executor alone, which builds the resident
   root and the handle table itself. Besides it, only the translator's own tests of that lowering
@@ -1119,6 +1148,16 @@ for dependency in &pipeline.dependencies {
   device-replay variant (`VariantKey::replay_bindings`, section 6) reads each buffer slot's
   address from its replayed command's root entry, at `PushField::RootTableAddress`, which the
   identity domains do not read: it is refused, `Unsupported{IdentityDomains}` naming that field.
+- A kernel's bound buffer slot (section 1, `DeviceProfile::binds_kernel_buffers`) is one
+  storage buffer of set 0, its binding the slot's place among the kernel's bound slots in slot
+  order, and pushes `PushField::SlotBindOffset`, a `u32`: the bytes from the descriptor's first
+  byte to the slot's bind address (the buffer's first byte's distance past the descriptor's start,
+  below the base alignment, plus the bind offset), or 0 for a `setBytes` copy, whose descriptor
+  starts at its first byte, and for nothing bound, a null descriptor. An access through the slot
+  reads its view at that word plus its 32-bit byte offset, read as signed. Its descriptor's bytes
+  are congruent to their Metal addresses modulo 16, as the view's `uvec4` and `uvec2` units take
+  them. A consumer writes a descriptor only where a slot's buffer changes: a changed bind offset
+  alone is a new push word.
 - Under the identity domains, a buffer slot that an access may reach at a
   byte offset that is not a translation-time constant (an index the memory plan does not prove
   one value, a looping `memcpy` or `memset`, a pulled fetch) also reads
@@ -2770,6 +2809,30 @@ named states the rule in full.
   variant of the kernel that reaches them there (section 1, `LoweringInputs::word_bound_buffers`),
   though Metal's API validation refuses that bind offset too. Such a buffer that a 64-bit atomic
   may reach off a multiple of 8, a draw's, and a consumer-compiled kernel's are still refused.
+- **A bound kernel buffer's out-of-bounds reach is its descriptor's, a few bytes wider than the
+  buffer** on a device that binds a kernel's buffers (section 1,
+  `DeviceProfile::binds_kernel_buffers`). Out-of-bounds accesses of a buffer are undefined in
+  Metal; the runtime's contract elsewhere is zero for a read and nothing for a write outside the
+  buffer. Under robust buffer access 2 that holds outside the descriptor's range, which is wider
+  than the buffer on two sides, from the queries:
+  - before the buffer: its first byte rounded down to the buffer base alignment, up to that
+    alignment less 1 bytes (15 at 16, the alignment on every lab device). Only a buffer whose
+    first byte is not a multiple of 16 has such bytes, which only a buffer over memory the
+    consumer brought can be (Metal's no-copy buffer, which Apple's page asks for at a page-aligned
+    pointer): a buffer the consumer places as `Device::heap_buffer_size_and_align` answers starts
+    at a multiple of 256 of its block, and every block at a multiple of 64 KiB of its allocation;
+  - past the buffer: its length rounded up to the device's `robustStorageBufferAccessSizeAlignment`,
+    up to 3 bytes past a length that is not a multiple of 4 where that alignment is 4 (RADV, ANV,
+    KosmicKrisp), and none where it is 1 (NVIDIA's driver). Apple's page asks a no-copy buffer
+    for a length that ends on a page.
+  A read of those bytes reads them and a write there lands in them. They are the same process's
+  memory, its own or shared with it by name: memory the consumer brought lies on the pages it
+  maps or was given; past a buffer the consumer placed in one of its blocks they are that block's,
+  the padding before the next buffer at a multiple of 256, which no zeroing of the buffer
+  reaches, so they read zero or the same device's earlier bytes there, never another device's (a
+  device's blocks are ranges of its own allocations). A kernel on a device that does not bind
+  its buffers, a render stage, and every slot that keeps its address (section 1) read zero and
+  write nothing outside the buffer exactly.
 - **A recursive call past the call stack yields zero**: the stack holds what Metal's byte model
   holds for the pipeline's `max_call_stack_depth`; a call that finds it full returns zero, where
   Metal's answer is corrupt.

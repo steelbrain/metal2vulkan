@@ -35,6 +35,10 @@ pub const MAX_BUFFER_LENGTH: u64 = 1 << 31;
 /// `minUniformBufferOffsetAlignment`, `minStorageBufferOffsetAlignment` and
 /// `minTexelBufferOffsetAlignment` at 256. So it is a constant, not a device query: an answer
 /// that moved with the host would buy nothing. A placement rule added later changes it here.
+/// A kernel's bound buffer is described from its first byte rounded down to the device's buffer
+/// base alignment (`DeviceProfile::buffer_base_alignment`, at most 256), so a buffer placed at a
+/// multiple of 256 is bound from its own first byte, and its descriptor reaches no byte before
+/// it (`encoder::view`).
 const HEAP_BUFFER_ALIGNMENT: u64 = 256;
 
 /// [`Device::heap_buffer_size_and_align`]'s answer for `length` bytes.

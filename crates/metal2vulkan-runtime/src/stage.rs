@@ -97,7 +97,7 @@ const ENABLES: u32 = 3;
 /// version is a miss and removed, so a fix of ours to a helper that ended asks the helper again.
 /// Bump it with every change to that code that changes what the helper does; a driver's fix needs
 /// none, as the stage key holds the driver's header.
-pub(crate) const HELPER_VERSION: u32 = 2;
+pub(crate) const HELPER_VERSION: u32 = 3;
 
 /// No Metal counterpart: what ended a helper's compile of a kernel past the stage bound, kept as
 /// the pipeline's entry ([`Device::record_stage_breach`], [`Device::fill_stage`]) so its makes are

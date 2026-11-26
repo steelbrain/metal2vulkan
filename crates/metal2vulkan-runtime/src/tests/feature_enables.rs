@@ -13,6 +13,7 @@ use crate::floor::{
 use ash::vk;
 use metal2vulkan::device::{
     Device, DeviceDescription, DevicePolicy, DeviceProfile, EnableSet, VkExtension, VkFeature,
+    KERNEL_BUFFER_BINDINGS,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -133,8 +134,9 @@ fn every_feature_creation_enables_reaches_the_translator() {
 
 /// The enable set is what the translator's description states as enabled on a device that
 /// reports every feature of creation's tables, lists every extension creation may enable and has
-/// the descriptor room of the attachment reads: it holds nothing creation never enables, and
-/// leaves out nothing creation enables that the translator names.
+/// the descriptor room of the attachment reads and of set 0's kernel storage buffers: it holds
+/// nothing creation never enables, and leaves out nothing creation enables that the translator
+/// names.
 #[test]
 fn the_enable_set_is_what_creation_enables_on_a_device_with_everything() {
     let mut device = at_the_floor();
@@ -147,8 +149,9 @@ fn the_enable_set_is_what_creation_enables_on_a_device_with_everything() {
     descriptors.max_descriptor_set_update_after_bind_sampled_images = 3 * TEXTURES;
     // The sampled array with its second elements, and the storage array with its level elements.
     let images = 3 * TEXTURES + 2 * TEXTURES + LEVEL_ELEMENTS;
+    // The fragment stage's attachments, or the compute stage's kernel storage buffers.
     descriptors.max_per_stage_update_after_bind_resources =
-        images + device.limits.max_color_attachments;
+        images + (device.limits.max_color_attachments).max(KERNEL_BUFFER_BINDINGS);
     descriptors.max_update_after_bind_descriptors_in_all_pools =
         images + SAMPLER_ARRAYS * SAMPLER_ELEMENTS;
     let capabilities = decide(&device).unwrap_or_else(|below| panic!("{below}"));

@@ -973,9 +973,10 @@ fn bound(path: &[String]) -> Option<Bound> {
     })
 }
 
-/// A limit's [`Bound`], from Vulkan's naming: `max*` limits are maxima, `min*Alignment` limits and
-/// the negative minimum offsets are minima, sample counts and resolve modes are flags, and the
-/// boolean properties are implications.
+/// A limit's [`Bound`], from Vulkan's naming: `max*` limits are maxima, `min*Alignment` limits,
+/// the negative minimum offsets and the robust storage buffer access granule are minima, sample
+/// counts and resolve modes are flags, and the boolean properties (the robust buffer access 2
+/// features the profile reads as limits among them) are implications.
 fn limit_bound(name: &str) -> Option<Bound> {
     Some(match name {
         "min_interpolation_offset_bits" => Bound::FloatAtLeast,
@@ -986,9 +987,14 @@ fn limit_bound(name: &str) -> Option<Bound> {
         | "early_fragment_multisample_coverage_after_sample_counting"
         | "sub_pixel_precision_bits" => Bound::Execution,
         "min_texel_offset" | "min_texel_gather_offset" => Bound::AtLeast,
-        "supports_non_zero_first_instance" | "independent_resolve_none" | "independent_resolve" => {
-            Bound::Implies
-        }
+        "supports_non_zero_first_instance"
+        | "independent_resolve_none"
+        | "independent_resolve"
+        | "robust_buffer_access2"
+        | "robust_buffer_access_update_after_bind" => Bound::Implies,
+        // The granule robust buffer access rounds a storage buffer's range up to: like an
+        // alignment, a minimum.
+        "robust_storage_buffer_access_size_alignment" => Bound::AtLeast,
         "framebuffer_color_sample_counts"
         | "framebuffer_depth_sample_counts"
         | "framebuffer_integer_color_sample_counts"

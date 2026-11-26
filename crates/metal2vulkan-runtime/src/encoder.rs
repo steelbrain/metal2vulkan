@@ -1944,7 +1944,17 @@ struct Parameters {
 ///   may be any byte of a buffer over memory the consumer brought; every `VkBuffer` of the device
 ///   starts at a multiple of 16 in the Metal address space (its memory requirements' alignment
 ///   on every lab driver: 16, 64 or 256), so the descriptor's bytes are congruent to their Metal
-///   addresses modulo 16, as a view's `uvec4` and `uvec2` units take them;
+///   addresses modulo 16, as a view's `uvec4` and `uvec2` units take them. Every other placement
+///   keeps the start on `align` by construction, so the descriptor's first byte is the buffer's
+///   own: a buffer placed as `Device::heap_buffer_size_and_align` answers starts at a multiple of
+///   256 of its block (`HEAP_BUFFER_ALIGNMENT`, no less than any device's `align`), and a block at
+///   a multiple of 64 KiB of its allocation (`Device::take_block`). Only a buffer at another byte
+///   of memory the consumer brought (a no-copy buffer) has bytes before it in its descriptor, up
+///   to `align - 1`, that memory's own. Past its end the device's
+///   `robustStorageBufferAccessSizeAlignment` rounds the range up (up to 3 bytes past a length
+///   off 4 where it is 4): the block's bytes past the buffer, padding before the next buffer at a
+///   multiple of 256 that no zeroing of the buffer reaches, which hold zero or the same device's
+///   earlier bytes (a device's blocks are ranges of its own allocations), never another device's;
 /// - a `set_bytes` copy: its bytes, from its own first byte, at a multiple of `align` in the
 ///   ring's buffer (`crate::ring`), with 0;
 /// - nothing bound, or a buffer or a copy of no bytes: a null descriptor, with 0.

@@ -231,7 +231,11 @@ states' main pipelines their `finish_pipeline` calls made, with their time, and 
 make failed (`finished_pipelines`, `finished_pipeline_nanos`, `failed_finishes`, Compute pipeline
 states below); the compiled contents a state's make dropped because an equal one landed in the
 device's map first (`kernel_makes_dropped`); the copies of resolve images into the buffers their
-textures lie over (`resolve_copies` and `resolve_copy_bytes`, Render encoders below);
+textures lie over (`resolve_copies` and `resolve_copy_bytes`, Render encoders below); the
+dispatches by the form their kernel reaches its buffers in, through storage buffers of set 0
+(`bound_dispatches`) or at their device addresses (`address_dispatches`), with the sets written
+for the bound ones and those that kept the set written last (`buffer_sets_written`,
+`buffer_sets_held`, Bound kernel buffers below);
 `gauges()` are live counts per kind of resource, every one zero after teardown, and
 `handles_out`, 1 while a handle of the device is out (Teardown). They are relaxed atomics, always
 on. What an encoder's commands count arrives when the encoder ends.
@@ -2661,7 +2665,14 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   where nothing maps there that is a fault, which loses the device on NVIDIA's driver and on RADV
   (above). An access through a pointer loaded from memory or made from an integer is not checked
   either: no binding bounds it. The check's measured cost, in GPU time and in cold pipeline
-  makes, is in docs/API.md, section 5 (`PushField::SlotBounds`).
+  makes, is in docs/API.md, section 5 (`PushField::SlotBounds`). A kernel on a device that binds
+  its buffers (Bound kernel buffers) carries no such check on its views, which its pipeline's
+  robust buffer access 2 contains; the check stays, by structure and not by device, on four kinds
+  of its slots, which keep their addresses: one a wide pointer may reach, one a typed atomic
+  reaches, one the stage-in fetch reads, and one the dispatch binds at a multiple of 4 below its
+  argument's alignment, and on its views' atomics. Every render stage pays it, and so does every
+  kernel on a device without the form: lavapipe, MoltenVK, the UHD 630's Windows driver and the
+  780M under AMDVLK 2025.Q2.1 among the lab's.
 - A dispatch's threadgroup memory, the kernel's own and the lengths set, each rounded up to 16
   bytes, is at most the device's `maxComputeSharedMemorySize` (`Limit::ThreadgroupMemory`), where
   Metal's is its `maxThreadgroupMemoryLength`, which `Device::max_threadgroup_memory_length`
@@ -5351,6 +5362,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `VK_EXT_image_drm_format_modifier` | device, where listed | a dma-buf surface's planes in place, as `DRM_FORMAT_MOD_LINEAR` images (`Device::new_exported_surface`) |
 | `VK_NV_linear_color_attachment` | device, where listed | an opaque handle's surface planes in place whose `LINEAR` tiling renders as a linear colour attachment alone, through the linear-attachment feature below |
 | `VK_EXT_device_fault` | device, where listed | a lost device's fault report, read once at its first loss (`DeviceLoss::fault`), through the fault-report feature below |
+| `VK_EXT_pipeline_robustness` | device, where listed | a kernel's buffers bound as storage buffers of set 0, contained by its pipeline's robust buffer access 2, through the pipeline-robustness feature below (Bound kernel buffers) |
 | `VK_KHR_maintenance8` | device, where listed | a sample at a texel offset the shader computes, with the offset as the sample's own `Offset` operand, through the optional feature `maintenance8` below |
 | `VK_EXT_custom_border_color` | device, where reported from the image | Vulkan requires it of a device that enables the border swizzle below; none of its features is enabled |
 | `VK_EXT_border_color_swizzle` | device, where reported from the image | an opaque-black border sampled through a view whose component mapping is not the identity, defined and read through that mapping (Border swizzle, below) |
@@ -5646,7 +5658,9 @@ Six features choose between two forms by the device's answer: 16-bit floats, sto
 without a format, 64-bit atomics, 64-bit floats, SIMD groups and run-time texel offsets. Beside
 them, a device without the
 attachment feedback loop reads attachments through a copy, the one form left there, which is a
-known gap (Known gaps of render encoders). `floor::Capabilities` holds each answer the floor
+known gap (Known gaps of render encoders), and a kernel reaches its buffers through storage
+buffers of set 0 where the device answers that form's query and at their addresses elsewhere
+(Bound kernel buffers below). `floor::Capabilities` holds each answer the floor
 reads, and the features and extensions to enable: the floor's, and each optional one the device
 has.
 
@@ -5691,6 +5705,60 @@ is expected to take the loop, not verified in the lab (public reports of it list
 | Attachment-read feature | Structure | Used for |
 |---|---|---|
 | `attachmentFeedbackLoopLayout` | `VkPhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT` | the feedback layout and usage |
+
+### Bound kernel buffers
+
+Where the device lists `VK_EXT_pipeline_robustness`, reports the feature below, and its
+`maxPerStageUpdateAfterBindResources` holds set 1's arrays of the compute stage with set 0's 31
+storage buffers (`floor::kernel_buffers_fit`), device creation enables the feature, and none of
+it otherwise. The translator's profile then answers its query from the rest
+(`DeviceProfile::binds_kernel_buffers`, docs/API.md section 1): `robustBufferAccess2` and
+`robustBufferAccessUpdateAfterBind` supported (`robustBufferAccess2` is not enabled), the
+storage-buffer limits of set 0 at 31 or more, and `maxStorageBufferRange` at least
+`MAX_BUFFER_LENGTH` plus the buffer base alignment less 1. Where it answers yes:
+
+- every pipeline layout of the device has set 0 of 31 storage buffers, for the compute stage
+  (`arrays::buffer_bindings`), which render pipelines share and read none of;
+- a kernel reaches each buffer argument through its binding there, but the four kinds of slot that
+  keep their address by structure (docs/API.md section 1: a slot a wide pointer, a typed atomic
+  or the stage-in fetch reaches, and one bound at a multiple of 4 below its argument's
+  alignment). Its compute pipeline is made with `VkPipelineRobustnessCreateInfo` naming robust
+  buffer access 2 for storage buffers, under which a load outside a descriptor's range reads
+  zero and a store does nothing, so its accesses carry no check in the shader but an atomic's;
+- a dispatch describes each bound slot's buffer by its block's `VkBuffer`, from the buffer's
+  first byte rounded down to the buffer base alignment through its last (no `VkBuffer` of its
+  own, and no copy), and pushes the slot's bytes from there to its bind address
+  (`PushField::SlotBindOffset`). A dispatch whose slots' descriptors begin those of the set its
+  command buffer wrote last writes none and binds that set only where the Vulkan command buffer
+  does not hold it, so a changed bind offset alone is a push word; any other takes the next set
+  of its command buffer's pools, writes it and binds it. A command buffer takes its sets in order
+  from pools the device lends it, 256 sets a pool allocated as the pool is made, and gives them
+  back as it retires or drops uncommitted; the device keeps at most 16 pools free and destroys
+  the rest, and counts every pool alive (the `buffer_set_pools` gauge). A set is written only
+  while no pending work names it.
+
+The dispatches by form, and the sets written and held, are counted (Counters). The containment
+differs from the address form's by bytes the queries state: before a buffer whose first byte is
+not a multiple of 16 (a no-copy buffer), up to 15; past a length that is not a multiple of 4, up
+to 3 where `robustStorageBufferAccessSizeAlignment` is 4 (RADV, ANV, AMDVLK, KosmicKrisp), none
+where it is 1 (NVIDIA). A read there reads those bytes and a write lands in them: the same
+process's memory, its own or shared with it by name; past a buffer the consumer placed in a block
+as `Device::heap_buffer_size_and_align` answers, the block's padding before the next buffer, zero
+or the same device's earlier bytes, never another device's (docs/API.md section 10). The test
+`pool_reach` reads and writes before and past a buffer between two neighbours of one block, past
+those bytes, and finds zero and no write on the Iris Xe (ANV), the Radeon 780M and RX 7900 XTX
+(RADV) and the RTX 3090 (NVIDIA 620.70.06) in this form (jobs m3-max-75037, 75038, 75039, 75040),
+and on the 780M under AMDVLK in the address form (m3-max-75041).
+
+The Radeon 780M under AMDVLK 2025.Q2.1 reports Vulkan 1.4, where the feature is core, and lists
+no `VK_EXT_pipeline_robustness`; the runtime's instance asks Vulkan 1.3, so the device keeps
+addresses there (m3-max-75042). lavapipe (`maxStorageBufferRange` 128 MiB), MoltenVK (no
+`robustBufferAccess2`) and the UHD 630's Windows driver (no `pipelineRobustness`) keep
+addresses too.
+
+| Pipeline-robustness feature | Structure | Used for |
+|---|---|---|
+| `pipelineRobustness` | `VkPhysicalDevicePipelineRobustnessFeaturesEXT` | a compute pipeline's robust buffer access 2 for its storage buffers, whatever the device enables |
 
 ### Border swizzle
 
