@@ -5747,8 +5747,9 @@ as `Device::heap_buffer_size_and_align` answers, the block's padding before the 
 or the same device's earlier bytes, never another device's (docs/API.md section 10). The test
 `pool_reach` reads and writes before and past a buffer between two neighbours of one block, past
 those bytes, and finds zero and no write on the Iris Xe (ANV), the Radeon 780M and RX 7900 XTX
-(RADV) and the RTX 3090 (NVIDIA 620.70.06) in this form (jobs m3-max-75037, 75038, 75039, 75040),
-and on the 780M under AMDVLK in the address form (m3-max-75041).
+(RADV), the RTX 3090 (NVIDIA 620.70.06) and the M3 Max (KosmicKrisp 26.3.1) in this form (jobs
+m3-max-75037, 75038, 75039, 75040, 75048), and on the 780M under AMDVLK in the address form
+(m3-max-75041).
 
 The Radeon 780M under AMDVLK 2025.Q2.1 reports Vulkan 1.4, where the feature is core, and lists
 no `VK_EXT_pipeline_robustness`; the runtime's instance asks Vulkan 1.3, so the device keeps
