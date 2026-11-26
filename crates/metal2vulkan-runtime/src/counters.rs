@@ -3191,9 +3191,11 @@ pub struct Gauges {
     /// `VkPipeline`s.
     pub pipelines: u64,
     /// Compiled kernels: each the translation of one compute pipeline content (its descriptor's
-    /// kernel, constant values, linked functions and compile fields), with its shader modules and
-    /// their `VkPipeline`s, shared by every state of that content. One lives while a state or
-    /// the device's map of kernels holds it.
+    /// kernel, constant values, linked functions and compile fields), or of a content with the
+    /// texture slots a dispatch bound to an 8-bit sRGB texture's UNORM twin, whose writes it
+    /// encodes, with its shader modules and their `VkPipeline`s, shared by every state of that
+    /// content. One lives while a state, the device's map of kernels, or a command buffer not yet
+    /// retired that dispatched it holds it.
     pub kernels: u64,
     /// `VkPipeline`s of compiled kernels' modules, each of one workgroup size, threadgroup memory
     /// lengths, imageblock size and tiles: the 8 each module made first, the 56 dispatched last

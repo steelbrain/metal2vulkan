@@ -15,7 +15,7 @@ use crate::hazard::{Access, Hazards};
 use crate::kept::{Lent, Objects};
 use crate::memory::Block;
 use crate::over::{self, Overs, Reached};
-use crate::pipeline::{ComputePipelineState, Listed};
+use crate::pipeline::{Compiled, ComputePipelineState, Listed};
 use crate::queue::QueueInner;
 use crate::record::{self, Reach, Recorder};
 use crate::render::RenderPipelineState;
@@ -1478,6 +1478,12 @@ impl Building {
     /// buffer retires: one count at the recording's first dispatch of it, none at a later one.
     pub(crate) fn hold_variant(&mut self, variant: &Arc<Listed>) {
         self.gpu.kept.variants.hold(variant);
+    }
+
+    /// Keeps `content`, a kernel's sRGB variant that a dispatch runs, until the command buffer
+    /// retires: no state holds it (`PipelineInner::srgb_variant`).
+    pub(crate) fn hold_content(&mut self, content: &Arc<Compiled>) {
+        self.gpu.kept.contents.hold(content);
     }
 
     /// Keeps `state` until the command buffer retires, and lends it to the encoder that set it.

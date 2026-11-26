@@ -1,11 +1,12 @@
-//! A texture with no storage element in kernels, under a device cfg on every device of the cfg's
-//! kind, through the owned fixture `rrp_swizzled_storage` over a 2 by 2 `RGBA8Unorm_sRGB` texture
-//! of shader-read and shader-write usage, a format Vulkan requires no device to store:
+//! A texture with no storage element of its own format in kernels, under a device cfg on every
+//! device of the cfg's kind, through the owned fixture `rrp_swizzled_storage` over a 2 by 2
+//! `RGBA8Unorm_sRGB` texture of shader-read and shader-write usage, whose storage element is its
+//! `RGBA8Unorm` twin's on every device that stores the twin (`tests::srgb_twin`):
 //!
-//! - an `access::write` slot and an `access::read_write` slot bound to it are
-//!   `Gap::StorageElement`, found at the dispatch, exactly where the device's optimal tiling holds
-//!   neither the format's storage nor its storage writes without a format, and dispatch where it
-//!   holds both;
+//! - an `access::write` slot bound to it dispatches exactly where the device's optimal tiling
+//!   holds the twin's storage and its storage writes without a format, and is
+//!   `Gap::StorageElement`, found at the dispatch, elsewhere; an `access::read_write` slot bound
+//!   to it is `Gap::StorageElement` on every device;
 //! - an `access::read` slot bound to it dispatches on every device.
 //!
 //! And a texture an argument buffer reaches by its resource ID, through an owned kernel that writes
@@ -31,7 +32,8 @@
 //! the fixture's `access::read_write` kernel on every device: where the device's image format query
 //! takes the texture's image with `VK_IMAGE_CREATE_EXTENDED_USAGE_BIT` and the storage usage, the
 //! texture's bytes hold the view's unorm codes and its own read decodes them; elsewhere the dispatch
-//! is `Gap::StorageElement`, `StorageElementCase::Unextended`.
+//! is `Gap::StorageElement`, `StorageElementCase::Unextended`. No device stores the texture's own
+//! format.
 //!
 //! `llvm-as` assembles the functions; without it the tests skip visibly.
 
@@ -110,7 +112,7 @@ pub(crate) mod on_device {
             return;
         };
         each_device("storage elements", |name, _, device| {
-            let (_, optimal) = device.core().format_features(vk::Format::R8G8B8A8_SRGB);
+            let (_, optimal) = device.core().format_features(vk::Format::R8G8B8A8_UNORM);
             let stores = optimal.contains(
                 vk::FormatFeatureFlags2::STORAGE_IMAGE
                     | vk::FormatFeatureFlags2::STORAGE_WRITE_WITHOUT_FORMAT,
@@ -125,9 +127,9 @@ pub(crate) mod on_device {
                 (device.new_texture(&d, Some(1))).unwrap_or_else(|error| panic!("{name}: {error}"));
             let mut arena = Arena::new(&device);
             let out = arena.buffer();
-            for kernel in ["rrp_sw_write_f", "rrp_sw_rwread_f"] {
+            for (kernel, written) in [("rrp_sw_write_f", stores), ("rrp_sw_rwread_f", false)] {
                 let stored = state(&device, &library, kernel);
-                match (stores, dispatch(&device, &stored, &texture, &out)) {
+                match (written, dispatch(&device, &stored, &texture, &out)) {
                     (true, Ok(())) => {}
                     (
                         false,
@@ -138,17 +140,15 @@ pub(crate) mod on_device {
                             backing: TextureBacking::Texture,
                         })),
                     ) => {}
-                    (stores, other) => {
-                        panic!(
-                            "{name}: {kernel}, the device storing the format {stores}: {other:?}"
-                        )
+                    (written, other) => {
+                        panic!("{name}: {kernel}, written through the twin {written}: {other:?}")
                     }
                 }
             }
             let read = state(&device, &library, "rrp_sw_read_f");
             (dispatch(&device, &read, &texture, &out)).unwrap_or_else(|e| panic!("{name}: {e}"));
             drop(texture);
-            println!("{name}: the device stores 8-bit sRGB {stores}; stored slots answered so");
+            println!("{name}: the device stores the 8-bit twin {stores}; stored slots answered so");
         });
     }
 
@@ -552,17 +552,16 @@ declare void @air.write_texture_2d.v4f32(ptr addrspace(1), <2 x i32>, <4 x float
 
     /// A 2 by 2 `RGBA8Unorm_sRGB` texture of shader-read and shader-write usage, Shared, made
     /// plainly and over a Shared buffer, written through its `RGBA8Unorm` view by
-    /// `rrp_sw_rwwrite_f`, on every device. Where the device does not store the texture's own
-    /// format, its image takes the storage usage exactly where the device's image format query
-    /// takes the image with `VK_IMAGE_CREATE_EXTENDED_USAGE_BIT`, its usage and the storage usage,
-    /// in the image's tiling (and, linear, where the view format's linear tiling holds what storage
-    /// keeps of its optimal tiling). With it, the dispatch writes the view's unorm codes, which the
+    /// `rrp_sw_rwwrite_f`, on every device. No device stores the texture's own format, so its
+    /// image takes the storage usage exactly where the device's image format query takes the
+    /// image with `VK_IMAGE_CREATE_EXTENDED_USAGE_BIT`, its usage and the storage usage, in the
+    /// image's tiling (and, linear, where the view format's linear tiling holds what storage keeps
+    /// of its optimal tiling). With it, the dispatch writes the view's unorm codes, which the
     /// texture's bytes hold and its own read decodes; without it, the dispatch is
-    /// `Gap::StorageElement`, `StorageElementCase::Unextended`. Where the device stores the
-    /// texture's own format, its image takes the storage usage for that format, unextended, and
-    /// the write runs through it. The write that ran through the extended usage, and no other
-    /// dispatch, adds one to `Metrics::extended_view_dispatches`. Prints the query's answer for the
-    /// extended image, optimal and linear.
+    /// `Gap::StorageElement`, `StorageElementCase::Unextended`. The write that ran through the
+    /// extended usage, and no other dispatch, adds one to `Metrics::extended_view_dispatches`.
+    /// Prints the query's answer for the extended image, optimal and linear, and whether the
+    /// device's features store the texture's own format, which the runtime does not use.
     #[test]
     fn every_device_writes_an_srgb_texture_through_its_unorm_view() {
         let Some(library) = library() else {
@@ -640,11 +639,11 @@ declare void @air.write_texture_2d.v4f32(ptr addrspace(1), <2 x i32>, <4 x float
                     && (tiling == vk::ImageTiling::OPTIMAL || linear_kept)
                     && unorm;
                 println!(
-                    "{name}: {kind} ({form}): the image's usage {:#x}; the device stores the \
-                     texture's format {own}, its query takes it extended {takes}",
+                    "{name}: {kind} ({form}): the image's usage {:#x}; the device's features \
+                     store the texture's format {own}, its query takes it extended {takes}",
                     usage.as_raw()
                 );
-                assert_eq!(extended, own || takes, "{name}: {kind}: the storage usage");
+                assert_eq!(extended, takes, "{name}: {kind}: the storage usage");
                 let values = arena.buffer();
                 let contents = values.contents().expect("a Shared buffer");
                 // SAFETY: the buffer is alive, Shared and 256 bytes long, and no work uses it.
@@ -655,7 +654,7 @@ declare void @air.write_texture_2d.v4f32(ptr addrspace(1), <2 x i32>, <4 x float
                 let added = counted() - before;
                 assert_eq!(
                     added,
-                    u64::from(written.is_ok() && !own),
+                    u64::from(written.is_ok()),
                     "{name}: {kind}: the count"
                 );
                 match (extended, written) {

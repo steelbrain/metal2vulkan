@@ -1543,12 +1543,13 @@ made, with no lock, and never rewritten for layouts.
   storage, else it stays in place plain. Its home is then the general layout, and its own
   format's views take the usage that format holds. So its view of the stored format has a storage
   element, and `Metrics::extended_view_dispatches` counts the dispatches that write such a view at
-  a slot; with no such image it has none (`StorageElementCase::Unextended`).
+  a slot; with no such image it has none (`StorageElementCase::Unextended`). An 8-bit sRGB
+  texture's own storage element is then its unorm sibling's view (Known gaps of textures).
 - The sampled element's view is the format's, through its component mapping with the
   descriptor's swizzle composed over it; a depth or stencil format's view takes its depth, else
   its stencil. The storage element is written where the usage has shader write and the device
-  stores the format through a storage image declared without a format; its view maps each
-  channel to itself. A cube's or a cube array's storage view is the 2D array of its faces,
+  stores the format through a storage image declared without a format, which no sRGB format is
+  on any device; its view maps each channel to itself. A cube's or a cube array's storage view is the 2D array of its faces,
   layer `6 · cube + face`, which a kernel's storage cube writes and reads by face. A multisampled
   texture has no storage element on any device, as Metal's shaders only read one (the Metal
   Shading Language: "Multisampled textures only support the read attribute"). Its image takes no
@@ -1872,10 +1873,10 @@ made, with no lock, and never rewritten for layouts.
   where that image's region does ("Copy regions for each image must be aligned to a multiple of
   the texel block extent in each dimension, except at the edges of the image").
 - A texture made for shader writes whose format the device does not store through a storage
-  image without a format (the 8-bit sRGB formats, `RGB9E5Float` or `BGR10A2Unorm` where the
-  device lacks their storage), or holds through a view of another (an `A8Unorm` held in red, the
-  extended-range formats), has no storage element; its view of a format the device stores has one
-  where its image is extended for it (above). A draw or dispatch whose function writes such
+  image without a format (`RGB9E5Float` or `BGR10A2Unorm` where the device lacks their storage,
+  an 8-bit sRGB format whose image is not extended for its unorm twin), or holds through a view
+  of another (an `A8Unorm` held in red, the extended-range formats), has no storage element; its
+  view of a format the device stores has one where its image is extended for it (above). A draw or dispatch whose function writes such
   a texture bound to a slot, or reads it there through its storage image (`access::read_write`),
   is `Gap::StorageElement`. So is, with no slot, a dispatch whose kernel, or a draw whose vertex
   or fragment function, may reach a texture through its storage image beyond its slots (an
@@ -1884,6 +1885,27 @@ made, with no lock, and never rewritten for layouts.
   A write through a resource ID with no such declaration is outside documented Metal
   (`useHeap:` declares its heap's resources read only) and is dropped, and a storage read there
   answers zeros.
+- An 8-bit sRGB texture (`RGBA8Unorm_sRGB`, `BGRA8Unorm_sRGB` and the other 8-bit sRGB formats)
+  made for shader writes, whose image is extended for its unorm twin (above), has the twin's
+  storage view for its storage element, on every device, as no device stores an sRGB format
+  through its own view here. A dispatch whose kernel writes it at a slot the kernel does not read
+  runs the kernel's sRGB variant, lowered at the first such dispatch from the state's function
+  with those slots and kept in the device's map of contents (1,024 entries, the least recently
+  used forgotten past them): the variant encodes each write there by the Metal Shading Language's
+  transfer (8.7.7, alpha linear) through the device's conversion, under the static note
+  `PrecisionNote::DevicePackConversion`, which a state whose kernel is a function writing a
+  texture slot it does not read announces from its creation. Its other uses:
+  - a draw whose vertex or fragment function writes it at a slot, and a draw or dispatch that
+    reads it at a slot through its storage image (`access::read_write`; Metal's read-write tiers
+    list no sRGB format), are `Gap::StorageElement`, and so is, with no slot, a draw or dispatch
+    after `use_resource` declared a write of it (above);
+  - a write that reaches it through an argument buffer or a resource ID with no such declaration
+    (after `use_heap` alone) is not encoded: the format of the texture such a write reaches is
+    unknown when its function is compiled, so the write stores each channel's linear code
+    (`round(255 · v)`) in the twin's bytes, where Metal stores its sRGB encode, and a storage read
+    there answers the stored codes as linear values. It is not refused: nothing the runtime is
+    told names the textures such an argument reaches, and a refusal by the declarations of reads
+    or by the bindings would refuse programs Metal runs.
 - A texture whose storage element the device cannot read without a format (its format lacks
   `VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT`, which a device without
   `shaderStorageImageReadWithoutFormat` answers per format: on ANV before Gfx12.5, `BGRA8Unorm`,
@@ -3162,7 +3184,11 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   answers may differ from Metal's on this device, fixed per operation: those of the modules made
   with the state, its variants among them. A kernel compiled
   with fast math carries `FastMathRewrites`: a driver may fold its arithmetic differently per
-  `VkPipeline`, so its answers in a tile and at another size may differ in the last place.
+  `VkPipeline`, so its answers in a tile and at another size may differ in the last place. A
+  kernel that is a function writing a texture slot it does not read carries
+  `DevicePackConversion`, for an 8-bit sRGB texture a dispatch may bind there, whose writes its
+  sRGB variant encodes (the known gaps of textures): the note is fixed at creation and never
+  decided at dispatch.
 - `ComputePipelineState::texture_accesses` answers each texture slot the kernel uses, by index,
   with the access a dispatch of the state marks in its hazards for the texture bound there, read
   from the same interface, as a `BindingAccess` (`MTLBindingAccess`): `ReadOnly` where the

@@ -113,6 +113,7 @@ mod signed_zeros;
 mod sites;
 mod small_levels;
 mod spill;
+mod srgb_twin;
 mod stage;
 mod staging;
 #[cfg(m2v_gpu)]

@@ -63,7 +63,7 @@ use crate::counters::{FirstUse, Gauge, Metric, VariantMake, VariantStart};
 use crate::device::{lock, Core};
 use crate::encoder::{
     decide, imageblock_checked, size_checked, threadgroup_memory, Dispatch, Lengths, Module, Sizes,
-    BUFFER_SLOTS,
+    BUFFER_SLOTS, TEXTURE_SLOTS,
 };
 use crate::error::{Error, Gap, IndirectCommandsKind, KernelInputKind, Refusal, StageInKind};
 use crate::hazard::Access;
@@ -163,6 +163,10 @@ pub(crate) struct PipelineInner {
     pub(crate) compiled: Arc<Compiled>,
     /// The samplers the state numbers and the indices the consumer gave them.
     pub(crate) numbered: Numbered,
+    /// The descriptor of a state whose kernel is a function, and its content's key: what its
+    /// sRGB variants are lowered from and kept under ([`PipelineInner::srgb_variant`]). `None`
+    /// for a kernel the consumer compiled, which has none.
+    source: Option<(ComputePipelineDescriptor, KernelKey)>,
 }
 
 /// What one compute pipeline content ([`KernelKey`]) compiles to, shared by every state of it
@@ -170,7 +174,7 @@ pub(crate) struct PipelineInner {
 pub(crate) struct Compiled {
     core: Arc<Core>,
     /// Its number ([`CONTENTS`]).
-    id: u64,
+    pub(crate) id: u64,
     /// The module of whole grids, threadgroup dispatches and indirect dispatches of a kernel that
     /// observes its threadgroup partition; for a kernel that does not observe it, the module of
     /// indirect dispatches, and of every dispatch where it is the only one. Its interface numbers
@@ -1067,25 +1071,37 @@ impl crate::Device {
         let key = KernelKey {
             pipeline: core.translator.compute_pipeline_key(descriptor),
             required: descriptor.required_threads_per_threadgroup,
+            srgb: 0,
         };
         let compiled = match core.kernels.find(&key) {
             Some(compiled) => compiled,
             None => {
-                let compiled = Arc::new(Compiled::of(core, descriptor)?);
-                core.kernels.keep(key, compiled, &core.counters)
+                let compiled = Arc::new(Compiled::of(core, descriptor, 0)?);
+                core.kernels.keep(key.clone(), compiled, &core.counters)
             }
         };
         let numbered = number(core, &compiled.whole.interface, sampler_ids)?;
+        let source = matches!(descriptor.kernel, StageSource::Function(_))
+            .then(|| (descriptor.clone(), key));
         Ok(ComputePipelineState {
-            inner: Arc::new(PipelineInner { compiled, numbered }),
+            inner: Arc::new(PipelineInner {
+                compiled,
+                numbered,
+                source,
+            }),
         })
     }
 }
 
 impl Compiled {
     /// The translation of `descriptor`, every variant lowered, with the `VkPipeline`s whose key
-    /// the descriptor holds.
-    fn of(core: &Arc<Core>, descriptor: &ComputePipelineDescriptor) -> Result<Compiled, Error> {
+    /// the descriptor holds; a function kernel's under its texture slots of `srgb` (bit `i` slot
+    /// `i`) holding an 8-bit sRGB texture's UNORM twin (`LoweringInputs::srgb_storage`).
+    fn of(
+        core: &Arc<Core>,
+        descriptor: &ComputePipelineDescriptor,
+        srgb: u128,
+    ) -> Result<Compiled, Error> {
         let core = Arc::clone(core);
         let budget = Budget::standard();
         let translator = &core.translator;
@@ -1100,13 +1116,17 @@ impl Compiled {
         let (whole, notes, partial, image_only, source, answers) = match &descriptor.kernel {
             StageSource::Function(function) => {
                 let entries = &core.entries;
+                let mut inputs = descriptor.lowering_inputs();
+                inputs.srgb_storage = (0..TEXTURE_SLOTS)
+                    .filter(|&index| srgb >> index & 1 == 1)
+                    .map(|index| SlotRef {
+                        stage: Stage::Kernel,
+                        class: SlotClass::Texture,
+                        index,
+                    })
+                    .collect();
                 let plain = translating(&core, || {
-                    translator.kernel_inputs_read(
-                        function,
-                        &descriptor.lowering_inputs(),
-                        &budget,
-                        entries,
-                    )
+                    translator.kernel_inputs_read(function, &inputs, &budget, entries)
                 })
                 .map_err(Error::translation)?;
                 if let Some(kind) = unbuilt_stage_in(&plain) {
@@ -2226,10 +2246,19 @@ impl ComputePipelineState {
     /// through a constexpr sampler whose address mode reads an opaque-black border (decided by
     /// the sampler's own constants, as
     /// [`SamplerState::precision_note`](crate::SamplerState::precision_note) is by its
-    /// descriptor).
+    /// descriptor). [`PrecisionNote::DevicePackConversion`] is among them where its kernel is a
+    /// function that writes a texture slot it does not read: an 8-bit sRGB texture bound there is
+    /// written through its sRGB variant, which encodes by the device's conversion. The note is
+    /// fixed at creation, from its kernel's slots, and never decided at dispatch.
     pub fn precision_notes(&self) -> Vec<PrecisionNote> {
         let compiled = &self.inner.compiled;
         let mut notes = compiled.notes.clone();
+        let interface = &compiled.whole.interface;
+        let written = (interface.textures.iter())
+            .any(|&(slot, access)| access.writes() && !interface.storage_reads.contains(&slot));
+        if written && self.inner.source.is_some() {
+            notes.push(PrecisionNote::DevicePackConversion);
+        }
         for which in [Which::Emulated, Which::Partial] {
             if let Some(Lowered::Made(_, more)) = compiled.variant(which) {
                 notes.extend(more);
@@ -2264,6 +2293,7 @@ impl ComputePipelineState {
             inner: Arc::new(PipelineInner {
                 compiled: Arc::new(compiled),
                 numbered: Numbered::default(),
+                source: None,
             }),
         })
     }
@@ -2277,6 +2307,49 @@ impl ComputePipelineState {
 impl PipelineInner {
     pub(crate) fn core(&self) -> &Arc<Core> {
         &self.compiled.core
+    }
+
+    /// The content of the state's kernel under its texture slots of `srgb` (bit `i` slot `i`)
+    /// holding an 8-bit sRGB texture's UNORM twin, each write there encoded in the shader
+    /// (`LoweringInputs::srgb_storage`): the one the device's map of contents holds under the
+    /// state's key with `srgb`, else lowered now and kept there, so the map bounds how many live.
+    /// It numbers the state's samplers, as it lowers the same function. `None` for a kernel the
+    /// consumer compiled, which has no function to lower it from.
+    ///
+    /// Err: the translator's errors of its lowering, as the state's creation reports them;
+    /// [`Gap::KernelInput`] of a constexpr sampler where it samples one the state's module does
+    /// not.
+    pub(crate) fn srgb_variant(&self, srgb: u128) -> Option<Result<Arc<Compiled>, Error>> {
+        let core = self.core();
+        let (descriptor, key) = self.source.as_ref()?;
+        let key = KernelKey {
+            srgb,
+            ..key.clone()
+        };
+        if let Some(compiled) = core.kernels.find(&key) {
+            return Some(Ok(compiled));
+        }
+        let made = Compiled::of(core, descriptor, srgb).and_then(|compiled| {
+            match covers(&self.compiled.whole.interface, &compiled.whole.interface) {
+                true => Ok(core.kernels.keep(key, Arc::new(compiled), &core.counters)),
+                false => Err(gap(KernelInputKind::ConstexprSampler)),
+            }
+        });
+        Some(made)
+    }
+}
+
+impl crate::kept::Handle for Arc<Compiled> {
+    /// The content itself: a command buffer that dispatched an sRGB variant keeps it
+    /// ([`PipelineInner::srgb_variant`]), which no state holds.
+    type Kept = Arc<Compiled>;
+
+    fn object(&self) -> &Arc<Compiled> {
+        self
+    }
+
+    fn address_of(object: &Arc<Compiled>) -> usize {
+        Arc::as_ptr(object) as usize
     }
 }
 

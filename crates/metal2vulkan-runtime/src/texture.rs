@@ -219,6 +219,10 @@ pub(crate) struct TextureInner {
     format: vk::Format,
     /// Its views' format reads as storage without a format ([`Plan`]'s `storage_reads`).
     storage_reads: bool,
+    /// The UNORM twin format its storage element views, for an 8-bit sRGB texture made for
+    /// shader writes ([`Plan`]'s `twin`): a function writes it only through a slot of its sRGB
+    /// variant, which encodes ([`TextureObject::encodes`]).
+    twin: Option<vk::Format>,
     /// The usage its views take where their format is not the image's, or the image is extended
     /// for its views' storage ([`Plan`]'s `extended`) (`VkImageViewUsageCreateInfo`): the image's
     /// that the format's features hold. `None` where its views take the image's.
@@ -1532,6 +1536,7 @@ impl Device {
             body: Body::Image(image),
             format: plan.format,
             storage_reads: plan.storage_reads,
+            twin: plan.twin,
             views_usage: None,
             unit: plan.unit,
             index,
@@ -1805,6 +1810,7 @@ impl Device {
             body: Body::Image(image),
             format: plan.format,
             storage_reads: plan.storage_reads,
+            twin: plan.twin,
             views_usage,
             unit: plan.unit,
             index,
@@ -1868,6 +1874,11 @@ struct Plan {
     read: bool,
     /// Whether the texture has a storage view.
     storage: bool,
+    /// The format of an 8-bit sRGB texture's storage view: its UNORM twin's
+    /// (`metal::format::srgb_raw_twin`), which the image lists and is extended for, as no sRGB
+    /// format is stored through its own view ([`stores`]). Its writes encode in the shader
+    /// (`LoweringInputs::srgb_storage`).
+    twin: Option<vk::Format>,
     /// Whether a storage view of the plan's format reads without a format: the format's
     /// `VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT`, the format query a translator's
     /// storage read by the formats' own bits takes, which a device without
@@ -1988,6 +1999,7 @@ impl Plan {
             usage: SHADOW_USAGE,
             sampled: None,
             storage: false,
+            twin: None,
             attachment_reads: false,
             resolves: false,
             linear_resolves: false,
@@ -2018,6 +2030,7 @@ impl Plan {
         Plan {
             usage,
             extended: false,
+            twin: None,
             view_formats: self.view_formats.clone(),
             ..*self
         }
@@ -2636,6 +2649,7 @@ fn planned(
         && !multisampled(d.texture_type);
     if plan.extended {
         plan.usage |= vk::ImageUsageFlags::STORAGE;
+        plan.twin = srgb_twin(profile, pf, usage).filter(|twin| plan.view_formats.contains(twin));
     }
     // A square 2D array of six slices or more is made cube-compatible where the device's image
     // format query takes the flag (`Plan::cube`).
@@ -2816,11 +2830,30 @@ fn view_formats(
 }
 
 /// Whether the device stores a texture held as `mapping` through a storage image declared without
-/// a format: the format held directly, with the storage image and its writes without a format.
+/// a format: the format held directly, with the storage image and its writes without a format,
+/// and no sRGB format on any device, whatever its features: an 8-bit sRGB texture is stored
+/// through its UNORM twin's view ([`srgb_twin`]), one form on every device.
 fn stores(profile: &metal2vulkan::device::DeviceProfile, mapping: &formats::FormatMapping) -> bool {
+    let srgb = (mapping.format.block())
+        .is_some_and(|block| block.color == Some(metal2vulkan::vk::NumericFormat::Srgb));
     mapping.emulation == FormatEmulation::Direct
+        && !srgb
         && profile.supports_format(mapping.format, FormatUsage::StorageImage)
         && profile.supports_format(mapping.format, FormatUsage::StorageImageWriteWithoutFormat)
+}
+
+/// The format of the storage view of a texture of `pf` and `usage` made for shader writes where
+/// `pf` is an 8-bit sRGB format: its UNORM twin's (`metal::format::srgb_raw_twin`) where the
+/// device stores the twin ([`stores`]). A function writes it through the twin's codes, encoded in
+/// the shader (`LoweringInputs::srgb_storage`).
+fn srgb_twin(
+    profile: &metal2vulkan::device::DeviceProfile,
+    pf: PixelFormat,
+    usage: TextureUsage,
+) -> Option<vk::Format> {
+    let twin = formats::srgb_raw_twin(pf)?;
+    let mapping = formats::vk_format(twin, &formats::texture_usages(twin, usage), profile).ok()?;
+    stores(profile, &mapping).then(|| mapping.format.into())
 }
 
 /// Whether textures of `texture_type` are multisampled, which Metal's shaders only read (the
@@ -2950,6 +2983,7 @@ fn form(core: &Core, d: &TextureDescriptor, usage: TextureUsage) -> Result<Plan,
         sampled,
         read,
         storage,
+        twin: None,
         storage_reads,
         home,
         extended: false,
@@ -3456,7 +3490,8 @@ impl Made {
     /// # Safety
     ///
     /// `image` is the device's, bound, of the plan's format, and has `usage`, the storage usage
-    /// among it where the plan has a storage view.
+    /// among it where the plan has a storage view or an sRGB twin's (`Plan::twin`), whose format
+    /// the image lists.
     unsafe fn views(
         &mut self,
         core: &Core,
@@ -3466,8 +3501,7 @@ impl Made {
         usage: vk::ImageUsageFlags,
     ) -> Result<(Option<vk::ImageView>, Option<vk::ImageView>), Error> {
         let own = plan.own_views(usage);
-        let mut view = |view_type, components, aspect| {
-            let format = plan.format;
+        let mut view = |view_type, (format, own), components, aspect| {
             // SAFETY: the caller's contract.
             let range = whole(aspect);
             let view =
@@ -3476,18 +3510,21 @@ impl Made {
             Ok::<_, Error>(view)
         };
         let sampled = match plan.sampled {
-            Some((components, aspect)) if usage.contains(vk::ImageUsageFlags::SAMPLED) => {
-                Some(view(shape.view_type, components, aspect)?)
-            }
+            Some((components, aspect)) if usage.contains(vk::ImageUsageFlags::SAMPLED) => Some(
+                view(shape.view_type, (plan.format, own), components, aspect)?,
+            ),
             _ => None,
         };
-        let storage = match plan.storage {
-            true => Some(view(
+        // An sRGB texture's storage view is its UNORM twin's, of the storage usage alone.
+        let twin = (plan.twin).map(|twin| (twin, Some(vk::ImageUsageFlags::STORAGE)));
+        let storage = match plan.storage.then_some((plan.format, own)).or(twin) {
+            Some(format) => Some(view(
                 storage_view_type(shape.view_type),
+                format,
                 vk::ComponentMapping::default(),
                 vk::ImageAspectFlags::COLOR,
             )?),
-            false => None,
+            None => None,
         };
         Ok((sampled, storage))
     }
@@ -4034,7 +4071,12 @@ impl TextureInner {
         let view_type = storage_view_type(shape.view_type);
         let [level, layer] = self.base();
         let image = self.imaged().image;
-        let usage = (self.views_usage).map(|usage| usage & vk::ImageUsageFlags::STORAGE);
+        let storage = vk::ImageUsageFlags::STORAGE;
+        // An sRGB texture's level views are its UNORM twin's, as its storage element is.
+        let (format, usage) = match self.twin {
+            Some(twin) => (twin, Some(storage)),
+            None => (self.format, (self.views_usage).map(|usage| usage & storage)),
+        };
         let mut views = Vec::with_capacity(levels as usize);
         for at in level..level + levels {
             let range = vk::ImageSubresourceRange {
@@ -4049,13 +4091,7 @@ impl TextureInner {
             // view's format, and holds the range: the texture's levels and layers.
             let made = unsafe {
                 image_view(
-                    &self.core,
-                    image,
-                    view_type,
-                    self.format,
-                    components,
-                    range,
-                    usage,
+                    &self.core, image, view_type, format, components, range, usage,
                 )
             };
             match made {
@@ -4356,7 +4392,18 @@ impl Texture {
             && !plan.storage
             && image.view_formats.contains(&plan.format)
             && !image.surface();
-        let extended = plan.storage && image.storage.is_none();
+        // An 8-bit sRGB texture's storage view is its UNORM twin's, not of its own format.
+        let root = (inner.view.as_ref()).map_or(inner, |view| &*view.parent);
+        let extended = plan.storage && (image.storage.is_none() || root.twin.is_some());
+        // An 8-bit sRGB view's storage view is its UNORM twin's, where the image lists the twin
+        // and takes the storage usage (`Plan`'s `twin`).
+        let profile = inner.core.translator.profile();
+        let written = usage.contains(TextureUsage::SHADER_WRITE) && !multisampled(d.texture_type);
+        let twin = (written
+            .then(|| srgb_twin(profile, d.pixel_format, usage))
+            .flatten())
+        .filter(|twin| image.view_formats.contains(twin))
+        .filter(|_| image.usage.contains(vk::ImageUsageFlags::STORAGE));
         if !usable.contains(vk::ImageUsageFlags::SAMPLED) {
             plan.sampled = None;
         }
@@ -4375,12 +4422,15 @@ impl Texture {
         };
         let image = inner.imaged().image;
         let make = |(components, aspect, role): (_, _, vk::ImageUsageFlags)| {
-            let view_type = match role == vk::ImageUsageFlags::STORAGE {
+            let stored = role == vk::ImageUsageFlags::STORAGE;
+            let view_type = match stored {
                 true => storage_view_type(shape.view_type),
                 false => shape.view_type,
             };
-            let format = plan.format;
-            let usage = views_usage.map(|usage| usage & role);
+            let (format, usage) = match twin.filter(|_| stored) {
+                Some(twin) => (twin, Some(role)),
+                None => (plan.format, views_usage.map(|usage| usage & role)),
+            };
             // SAFETY: the image is bound, lists the view's format, has the view's usage, and holds
             // the range: the texture's levels and layers hold the view's.
             unsafe {
@@ -4398,7 +4448,7 @@ impl Texture {
         let sampled_role =
             vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT;
         let sampled = (plan.sampled).map(|(components, aspect)| (components, aspect, sampled_role));
-        let storage = (plan.storage).then_some((
+        let storage = (plan.storage || twin.is_some()).then_some((
             vk::ComponentMapping::default(),
             vk::ImageAspectFlags::COLOR,
             vk::ImageUsageFlags::STORAGE,
@@ -4466,6 +4516,7 @@ impl Texture {
             body: Body::Image(Arc::clone(image)),
             format: plan.format,
             storage_reads: plan.storage_reads,
+            twin,
             views_usage,
             unit: plan.unit,
             index,
@@ -5498,13 +5549,23 @@ pub(crate) trait TextureObject {
 
     /// Where it is made for shader writes (`ShaderWrite`, or Metal's unknown usage) but has no
     /// storage element, which shaders write it and read it as storage through
-    /// (`Arrays::place_texture`): its pixel format, which [`Gap::StorageElement`] names. Never a
-    /// multisampled texture, which no shader writes (`multisampled`).
+    /// (`Arrays::place_texture`), or has its sRGB twin's ([`encodes`](Self::encodes)), which only
+    /// a write at a slot of its kernel's sRGB variant encodes: its pixel format, which
+    /// [`Gap::StorageElement`] names. Never a multisampled texture, which no shader writes
+    /// (`multisampled`).
     fn unstored(&self) -> Option<PixelFormat> {
         let d = &self.object().descriptor;
         let written = (d.usage.is_empty() || d.usage.contains(TextureUsage::SHADER_WRITE))
             && !multisampled(d.texture_type);
-        (written && !self.object().stores()).then_some(d.pixel_format)
+        let stored = self.object().stores() && !self.encodes();
+        (written && !stored).then_some(d.pixel_format)
+    }
+
+    /// Whether its storage element is an 8-bit sRGB texture's UNORM twin's view ([`Plan`]'s
+    /// `twin`), which a kernel's write at a slot encodes under the kernel's sRGB variant
+    /// (`LoweringInputs::srgb_storage`).
+    fn encodes(&self) -> bool {
+        self.object().twin.is_some()
     }
 
     /// Whether it is a view with a storage element through the storage usage its image took for
@@ -6201,6 +6262,7 @@ impl Device {
             }),
             format: form.format,
             storage_reads: form.reads,
+            twin: None,
             views_usage: None,
             unit: Some(CopyUnit {
                 aspect: vk::ImageAspectFlags::COLOR,
@@ -6472,6 +6534,7 @@ impl Device {
             body: Body::Image(image),
             format: plan.format,
             storage_reads: plan.storage_reads,
+            twin: plan.twin,
             views_usage,
             unit: plan.unit,
             index,

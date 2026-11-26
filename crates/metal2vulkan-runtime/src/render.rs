@@ -543,6 +543,7 @@ impl crate::Device {
         let key = KernelKey {
             pipeline: core.translator.queried_render_descriptor_key(descriptor),
             required: None,
+            srgb: 0,
         };
         let compiled = match core.kernels.find_render(&key) {
             Some(compiled) => compiled,

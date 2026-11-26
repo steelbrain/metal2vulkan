@@ -13,7 +13,7 @@
 //! buffers ([`Objects`]), so a command buffer allocates and frees none of it.
 
 use crate::buffer::Buffer;
-use crate::pipeline::{ComputePipelineState, Listed};
+use crate::pipeline::{Compiled, ComputePipelineState, Listed};
 use crate::render::RenderPipelineState;
 use crate::sampler::SamplerState;
 use crate::texture::Texture;
@@ -248,6 +248,8 @@ pub(crate) struct ByKind {
     pub(crate) pipelines: Kept<ComputePipelineState>,
     pub(crate) render_pipelines: Kept<RenderPipelineState>,
     pub(crate) variants: Kept<Arc<Listed>>,
+    /// The sRGB variants of kernels the recording dispatched, which no state holds.
+    pub(crate) contents: Kept<Arc<Compiled>>,
 }
 
 impl ByKind {
@@ -260,6 +262,7 @@ impl ByKind {
         self.pipelines.clear();
         self.render_pipelines.clear();
         self.variants.clear();
+        self.contents.clear();
     }
 }
 

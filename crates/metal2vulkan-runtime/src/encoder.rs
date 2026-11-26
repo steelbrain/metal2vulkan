@@ -303,6 +303,10 @@ struct DispatchFacts {
     /// ([`FieldValue::TextureLevels`], [`FieldValue::TextureLevelBase`]), found with the
     /// alignments.
     levels: bool,
+    /// The state's sRGB variant the dispatch runs, where a texture slot its kernel writes and
+    /// does not read is bound to an 8-bit sRGB texture's UNORM twin
+    /// ([`TextureObject::encodes`]), found with the alignments.
+    srgb: Option<Arc<Compiled>>,
 }
 
 /// Which of its state's modules a dispatch runs.
@@ -321,6 +325,8 @@ pub(crate) enum Module {
 /// The last dispatch's module and workgroup size, and its `VkPipeline`.
 #[derive(Clone, Copy)]
 struct Last {
+    /// The content whose module it is: the state's, or its sRGB variant's.
+    content: u64,
     module: Module,
     local: [u32; 3],
     pipeline: vk::Pipeline,
@@ -1098,26 +1104,46 @@ impl ComputeCommandEncoder {
                     }
                 }
             }
+            // The texture slots the kernel writes and does not read that are bound to an 8-bit
+            // sRGB texture's UNORM twin, which its sRGB variant encodes; with the first's gap,
+            // where the state has no variant.
+            let mut srgb = 0u128;
+            let mut first = None;
+            let element = |slot, gap: StorageGap| {
+                Error::Unsupported(Gap::StorageElement {
+                    slot: Some(slot),
+                    pixel_format: gap.pixel_format,
+                    case: gap.case,
+                    backing: gap.backing,
+                })
+            };
             for &(slot, access) in &interface.textures {
                 let read = interface.storage_reads.contains(&slot);
                 let stored = access != Access::Read || read;
                 // Its format's own answers, for the writes and reads declared without a format.
                 let formatless = interface.formatless.contains(&slot);
                 let unstored = match self.textures.get(slot as usize) {
+                    Some(Some(texture)) if access.writes() && !read && texture.encodes() => {
+                        srgb |= 1 << slot;
+                        first = first.or(texture.storage_gap(true, false).map(|gap| (slot, gap)));
+                        None
+                    }
                     Some(Some(texture)) if stored => {
                         texture.storage_gap(formatless && access.writes(), formatless && read)
                     }
                     _ => None,
                 };
                 if let Some(gap) = unstored {
-                    return Err(Error::Unsupported(Gap::StorageElement {
-                        slot: Some(slot),
-                        pixel_format: gap.pixel_format,
-                        case: gap.case,
-                        backing: gap.backing,
-                    }));
+                    return Err(element(slot, gap));
                 }
             }
+            self.facts.srgb = match first {
+                None => None,
+                Some((slot, gap)) => match state.srgb_variant(srgb) {
+                    Some(variant) => Some(variant?),
+                    None => return Err(element(slot, gap)),
+                },
+            };
             // A texture declared written with no storage element, which the kernel may reach
             // through its storage image beyond its slots.
             if let (true, Some(gap)) = (interface.unbound_storage, self.declared_unstored_write) {
@@ -1150,6 +1176,12 @@ impl ComputeCommandEncoder {
             });
             self.facts.aligned = true;
         }
+        // An sRGB variant's content runs in place of the state's, kept by the command buffer.
+        let variant = self.facts.srgb.clone();
+        if let Some(variant) = &variant {
+            recording(&mut self.building).hold_content(variant);
+        }
+        let inner: &Compiled = variant.as_deref().unwrap_or(inner);
         let core = &*self.core;
         let limits = &core.limits;
         // A kernel that writes no memory has no effect a program can observe: once checked as
@@ -1193,7 +1225,9 @@ impl ComputeCommandEncoder {
             return Ok(());
         }
         let vk_pipeline = match self.last {
-            Some(last) if last.module == module && last.local == local => last.pipeline,
+            Some(last) if (last.content, last.module, last.local) == (inner.id, module, local) => {
+                last.pipeline
+            }
             _ => {
                 let lengths = threadgroup_memory(
                     kernel,
@@ -1211,6 +1245,7 @@ impl ComputeCommandEncoder {
             }
         };
         self.last = Some(Last {
+            content: inner.id,
             module,
             local,
             pipeline: vk_pipeline,
