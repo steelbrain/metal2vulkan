@@ -16,7 +16,8 @@
 //!   device's map of contents: a dispatch onto the other format's twin, or onto an `RGBA8Unorm`
 //!   texture, lowers nothing; filled past a cap of 2, the map holds 2, and a variant it forgot
 //!   is lowered again at its kernel's next dispatch onto a twin (on a device whose textures have
-//!   their twins' storage views).
+//!   their twins' storage views). It prints the translation time of the float kernel's state and
+//!   of its variant.
 //!
 //! `llvm-as` assembles the fixture; without it the tests skip visibly.
 
@@ -292,17 +293,20 @@ mod on_device {
             let counters = device.counters();
             let entries = || counters.gauges().kernel_entries;
             let lowered = || counters.metrics().translations;
+            let nanos = || counters.metrics().translation_nanos;
             let mut buffers = Buffers::new(&device);
             let width = buffers.of(&device, &WIDTH.to_le_bytes());
+            let begun = nanos();
             let float = state(&device, &library, "fpv_srgb_write");
+            let plain = nanos() - begun;
             let values = buffers.of(&device, &written("fpv_srgb_write").0);
             let run = |state: &ComputePipelineState, texture: &Texture| {
                 (dispatch(&device, state, texture, &values, &width))
                     .unwrap_or_else(|error| panic!("{name}: {error}"));
             };
-            let start = lowered();
+            let (start, begun) = (lowered(), nanos());
             run(&float, &rgba);
-            let each = lowered() - start;
+            let (each, variant) = (lowered() - start, nanos() - begun);
             assert!(
                 each > 0,
                 "{name}: the variant lowered at its first dispatch"
@@ -330,7 +334,8 @@ mod on_device {
             drop((float, half, rgba, bgra, unorm));
             println!(
                 "{name}: one sRGB variant a kernel, kept in a map of 2 filled past its cap, a \
-                 forgotten one lowered again"
+                 forgotten one lowered again; fpv_srgb_write's state took {plain} ns of \
+                 translation, its sRGB variant {variant} ns"
             );
         });
     }

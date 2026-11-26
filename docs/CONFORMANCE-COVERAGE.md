@@ -42,7 +42,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1336 |
 | distinct SDK items the Metal leg reaches, of any status | 812 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 7984 |
+| ledger rows (a case whose gap is recorded) | 7978 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -4163,23 +4163,27 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `read-write-tier-held` | Known gap (rt README, Known gaps of textures): the kernel writes a texture with no storage element on this device through the argument buffer, with no use_resou… |
 | `read-write-tier-held` | Known gap (rt README, Known gaps of textures): the kernel reads, through the argument buffer, a texture whose storage element this device cannot read without a … |
 | `read-write-tier-held` | The device's own answer (rule 1): the device converts an 8-bit code by the reciprocal product, so a code's value is one `f32` ulp off Metal's. Note `device-texe… |
-| `read-write-tier-held` | Known gap (rt README, Known gaps of textures): the kernel writes a texture with no storage element on this device through the argument buffer, with no use_resou… |
-| `read-write-tier-held` | Known gap (rt README, Known gaps of textures): the kernel writes a texture with no storage element on this device through the argument buffer, with no use_resou… |
+| `read-write-tier-held` | Known gap (rt README, Known gaps of textures): the kernel reads an 8-bit sRGB texture through the argument buffer's access::read_write member, with no use_resou… |
+| `read-write-tier-held` | Known gap (rt README, Known gaps of textures): the kernel reads an 8-bit sRGB texture through the argument buffer's access::read_write member, with no use_resou… |
+| `read-write-tier-held` | Known gap (rt README, Known gaps of textures): the kernel reads an 8-bit sRGB texture through the argument buffer's access::read_write member, with no use_resou… |
+| `read-write-tier-held` | Known gap (rt README, Known gaps of textures): the kernel reads an 8-bit sRGB texture through the argument buffer's access::read_write member, with no use_resou… |
 | `read-write-tier-held` | The device's own answer (rule 1): the device converts an 8-bit code by the reciprocal product, so a code's value is one `f32` ulp off Metal's. Note `device-texe… |
 | `read-write-tier-held` | Known gap (rt README, Known gaps of textures): the kernel reads, through the argument buffer, a texture whose storage element this device cannot read without a … |
 | `read-write-tier-held` | The device's own answer (rule 1): the device converts an 8-bit code by the reciprocal product, so a code's value is one `f32` ulp off Metal's. Note `device-texe… |
 | `read-write-tier-held` | The device's own answer (rule 1): the device converts an 8-bit code by the reciprocal product, so a code's value is one `f32` ulp off Metal's. Note `device-texe… |
-| `read-write-tier-held` | Known gap (rt README, Known gaps of textures): the kernel writes a texture with no storage element on this device through the argument buffer, with no use_resou… |
-| `read-write-tier-held` | Known gap (rt README, Known gaps of textures): the kernel writes a texture with no storage element on this device through the argument buffer, with no use_resou… |
+| `read-write-tier-held` | Known gap (rt README, Known gaps of textures): the kernel reads an 8-bit sRGB texture through the argument buffer's access::read_write member, with no use_resou… |
+| `read-write-tier-held` | Known gap (rt README, Known gaps of textures): the kernel reads an 8-bit sRGB texture through the argument buffer's access::read_write member, with no use_resou… |
+| `read-write-tier-held` | Known gap (rt README, Known gaps of textures): the kernel reads an 8-bit sRGB texture through the argument buffer's access::read_write member, with no use_resou… |
+| `read-write-tier-held` | Known gap (rt README, Known gaps of textures): the kernel reads an 8-bit sRGB texture through the argument buffer's access::read_write member, with no use_resou… |
 | `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatA8Unorm, so rt binds no such texture to a read_write or w… |
 | `read-write-tier-round-trip-float` | Known gap (rt README, Known gaps of textures): ANV on the Iris Xe (before Gfx12.5) cannot read this format's storage element without a format, so a read at a sl… |
 | `read-write-tier-round-trip-float` | Known gap (rt README, Known gaps of textures): ANV on the Iris Xe (before Gfx12.5) cannot read this format's storage element without a format, so a read at a sl… |
 | `read-write-tier-round-trip-float` | The device's own answer (rule 1): the device converts an 8-bit code by the reciprocal product, so a code's value is one `f32` ulp off Metal's. Note `device-texe… |
-| `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatBGRA8Unorm_sRGB, so rt binds no such texture to a read_wr… |
+| `read-write-tier-round-trip-float` | Known gap (rt README, Known gaps of textures): an access::read_write slot bound to an 8-bit sRGB texture is Gap::StorageElement on every device. The texture's s… |
 | `read-write-tier-round-trip-float` | Known gap (rt README, Known gaps of textures): ANV on the Iris Xe (before Gfx12.5) cannot read this format's storage element without a format, so a read at a sl… |
 | `read-write-tier-round-trip-float` | The device's own answer (rule 1): the device converts an 8-bit code by the reciprocal product, so a code's value is one `f32` ulp off Metal's. Note `device-texe… |
 | `read-write-tier-round-trip-float` | The device's own answer (rule 1): the device converts an 8-bit code by the reciprocal product, so a code's value is one `f32` ulp off Metal's. Note `device-texe… |
-| `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatRGBA8Unorm_sRGB, so rt binds no such texture to a read_wr… |
+| `read-write-tier-round-trip-float` | Known gap (rt README, Known gaps of textures): an access::read_write slot bound to an 8-bit sRGB texture is Gap::StorageElement on every device. The texture's s… |
 | `render-then-sample-magnified-linear` | The device's own answer (rule 1): a linear magnified sample of a rendered 8-bit target, codes a step apart (Metal 0xda, ours 0xd9 at the first differing element… |
 | `resolve-stencil-under-depth-filters` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
 | `resource-own-getters` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no buffer of length 0: every newBufferWithLength… |
@@ -8158,16 +8162,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatA8Unorm, so rt binds no such texture to a read_write or w… |
 | `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatBGR10A2Unorm, so rt binds no such texture to a read_write… |
 | `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatBGR10A2Unorm, so rt binds no such texture to a read_write… |
-| `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatBGRA8Unorm_sRGB, so rt binds no such texture to a read_wr… |
-| `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatBGRA8Unorm_sRGB, so rt binds no such texture to a read_wr… |
-| `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatBGRA8Unorm_sRGB, so rt binds no such texture to a read_wr… |
-| `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatBGRA8Unorm_sRGB, so rt binds no such texture to a read_wr… |
-| `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatBGRA8Unorm_sRGB, so rt binds no such texture to a read_wr… |
-| `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatRGBA8Unorm_sRGB, so rt binds no such texture to a read_wr… |
-| `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatRGBA8Unorm_sRGB, so rt binds no such texture to a read_wr… |
-| `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatRGBA8Unorm_sRGB, so rt binds no such texture to a read_wr… |
-| `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatRGBA8Unorm_sRGB, so rt binds no such texture to a read_wr… |
-| `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatRGBA8Unorm_sRGB, so rt binds no such texture to a read_wr… |
 | `render-state-heap-residency` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no sparse texture, heap or tile call). The rt si… |
 | `render-state-render-barriers` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no useResource:usage:stages: or useHeap:stages:)… |
 | `render-state-texture-accesses` | refused: the consumer's own (MTLComputePipelineReflection, MTLRenderPipelineReflection, MTLPipelineOptionFailOnBinaryArchiveMiss, MTLPipelineOptionArgumentInfo,… |
