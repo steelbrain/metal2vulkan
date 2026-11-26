@@ -961,7 +961,7 @@ pub(crate) mod on_device {
     /// device, not that the rule refuses an import it took before: on every lab card the rule
     /// without the state also refuses these under the view (`Limit::ImportType`, printed), since
     /// the first type their fd's query offers is a cached type the view reads as not coherent or
-    /// is not host-visible; the rule's own proof is
+    /// is not host-visible and host-coherent; the rule's own proof is
     /// `a_dma_buf_is_refused_where_the_shared_type_is_not_host_coherent`. Host memory of the same
     /// length, by its pointer
     /// (`import_host_memory`), takes the host-memory rule's answer, which the state does not key:
