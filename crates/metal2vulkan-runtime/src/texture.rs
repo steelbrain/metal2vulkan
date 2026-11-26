@@ -4188,6 +4188,24 @@ impl Texture {
         Some((bytes, &named.places))
     }
 
+    /// Of a texture over a Managed buffer that keeps a device copy ([`Buffer::new_texture`], in
+    /// place or in an image of its own): the buffer, and the bytes of it its texels lie in, from
+    /// the texture's offset through the last texel of its last row, within the buffer. `None` for
+    /// any other texture.
+    pub(crate) fn over_device_copy(&self) -> Option<(Buffer, u64, u64)> {
+        let inner = &self.inner;
+        let named = (inner.named.as_ref()).filter(|named| named.form != Form::Managed)?;
+        named.buffer.held().1?;
+        let unit = inner.unit?;
+        let place = named.places[0];
+        let d = &inner.descriptor;
+        let rows = u64::from(d.height.max(1) - 1) * place.bytes_per_row;
+        let span = rows + u64::from(d.width) * u64::from(unit.bytes);
+        let bytes = Buffer::of(Arc::clone(&named.buffer), self.device.clone());
+        let length = span.min(bytes.length().saturating_sub(place.offset));
+        Some((bytes, place.offset, length))
+    }
+
     /// `newTextureViewWithPixelFormat:textureType:levels:slices:`: a texture over `levels` and
     /// `slices` of this one's image, of `texture_type`, at `index`, with elements of set 1 of its
     /// own and no copy; `newTextureViewWithPixelFormat:` is the call with the texture's own type,

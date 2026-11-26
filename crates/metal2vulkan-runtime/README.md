@@ -2981,11 +2981,14 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
 - `synchronize_resource` is `synchronizeResource:`, counted in `Metrics::synchronizations` and
   never a submission of its own. Of a Managed buffer with a device copy it records one
   `vkCmdCopyBuffer` of the copy into the consumer's bytes between the same two barriers; of a
-  Managed texture with named bytes, on every device, one `vkCmdCopyImageToBuffer` of each level
-  and slice into its place in them, between one pair of barriers. Either marks the segment so its
-  end barrier reaches the host: the host reads the GPU's writes before the call once the command
-  buffer completes or it sees an event signaled after it. Of any other buffer, which the host
-  reads where shaders write it, and of a texture without named bytes, which has none the host
+  texture over such a buffer (`Buffer::new_texture`), whose texels are the buffer's bytes as in
+  Metal, the same copy of the bytes its texels lie in, from its offset through its last texel,
+  after its image of its own, where it has one, goes back to the copy; of a Managed texture with
+  named bytes, on every device, one `vkCmdCopyImageToBuffer` of each level and slice into its
+  place in them, between one pair of barriers. Each marks the segment so its end barrier reaches
+  the host: the host reads the GPU's writes before the call once the command buffer completes or
+  it sees an event signaled after it. Of any other buffer, which the host reads where shaders
+  write it, of a texture over one, and of a texture without named bytes, which has none the host
   reads apart from its image, it records nothing. Metal's validation stops it on a resource
   that is not Managed; the runtime keeps no storage mode for those and does not refuse it.
 - `generate_mipmaps` is `generateMipmapsForTexture:`: each level below the texture's first made

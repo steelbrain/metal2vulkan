@@ -1027,12 +1027,17 @@ impl BlitCommandEncoder {
     /// ([`Device::new_managed_texture`](crate::Device::new_managed_texture)), on every device, is
     /// one `vkCmdCopyImageToBuffer` of each level and slice of its image into its place in them,
     /// between one pair of a buffer copy's barriers, as
-    /// [`copy_from_texture_to_buffer`](Self::copy_from_texture_to_buffer) records. Either marks
+    /// [`copy_from_texture_to_buffer`](Self::copy_from_texture_to_buffer) records. A texture over
+    /// a Managed buffer with a device copy ([`Buffer::new_texture`](crate::Buffer::new_texture)),
+    /// whose texels are the buffer's bytes, as Metal's texture over a buffer shares the buffer's
+    /// storage, is the buffer's synchronize over the bytes its texels lie in: its image of its
+    /// own, where it has one, goes back to the device copy first, then one `vkCmdCopyBuffer` of
+    /// that range of the copy into the consumer's bytes. Each marks
     /// the segment so its end barrier reaches the host, and the command buffer keeps the resource
-    /// until it retires. A buffer with no device copy is one the host reads where shaders write
-    /// it, and a texture without named bytes has none the host reads apart from its image: the
-    /// call records nothing for either, nor for an indirect command buffer, whose records the host
-    /// never reads.
+    /// until it retires. A buffer with no device copy, and a texture over one, are what the host
+    /// reads where shaders write them, and a texture without named bytes has none the host reads
+    /// apart from its image: the call records nothing for any of them, nor for an indirect command
+    /// buffer, whose records the host never reads.
     ///
     /// Metal's validation stops the call on a resource that is not Managed (probe
     /// `blit_synchronize_rules.m` in the conformance crate, an Apple M3 Max, macOS 27.0.1, job
@@ -1057,6 +1062,12 @@ impl BlitCommandEncoder {
     /// A Managed texture's synchronize: each level and slice of its image into its place in the
     /// named bytes, where it has them.
     fn read_back_texture(&mut self, texture: &Texture) -> Result<(), Error> {
+        // A texture over a Managed buffer's device copy holds its texels in the buffer's bytes,
+        // in place or through an image of its own that goes back to the copy first: Metal's
+        // synchronize of it is the buffer's, over the bytes those texels lie in.
+        if let Some((buffer, start, length)) = texture.over_device_copy() {
+            return self.read_back_range(&buffer, start, length);
+        }
         let Some((bytes, places)) = texture.named_bytes() else {
             return Ok(());
         };
@@ -1097,14 +1108,23 @@ impl BlitCommandEncoder {
     /// A Managed buffer's synchronize: its device copy into the consumer's bytes, where it has
     /// one.
     fn read_back(&mut self, buffer: &Buffer) -> Result<(), Error> {
+        self.read_back_range(buffer, 0, buffer.length())
+    }
+
+    /// The bytes `[start, start + length)` of a Managed buffer's device copy into the consumer's
+    /// bytes, where it has one: a synchronize of the buffer (all of it) or of a texture over it
+    /// (the bytes the texture's texels lie in).
+    fn read_back_range(&mut self, buffer: &Buffer, start: u64, length: u64) -> Result<(), Error> {
         let (core, building) = self.parts();
         if let (block, Some(copy)) = buffer.held() {
-            let ((from, src_offset), (to, dst_offset)) =
-                (copy.range(0), block.memory.range(buffer.offset()));
+            let ((from, src_offset), (to, dst_offset)) = (
+                copy.range(start),
+                block.memory.range(buffer.offset() + start),
+            );
             let region = vk::BufferCopy {
                 src_offset,
                 dst_offset,
-                size: buffer.length(),
+                size: length,
             };
             building.keep(buffer);
             // The textures over the device copy go back to it first (`crate::over`).
@@ -1118,8 +1138,8 @@ impl BlitCommandEncoder {
             if let Some(held) = building.coherence() {
                 held.wrote(crate::coherence::Range::of_block(
                     &block.memory,
-                    buffer.offset(),
-                    buffer.length(),
+                    buffer.offset() + start,
+                    length,
                     held.atom,
                 ));
             }
