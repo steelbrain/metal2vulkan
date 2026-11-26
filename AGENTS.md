@@ -80,11 +80,12 @@ order, and a lower one never overrides a higher one.
    robustBufferAccessUpdateAfterBind and the limits the bound layout needs binds a compute
    function's buffer arguments as storage buffers, each contained by its pipeline's robust buffer
    access 2, and a dispatch whose buffers differ from those its command buffer bound last writes
-   and binds a descriptor set for them, whose CPU and GPU cost on such a device is recorded as a
-   known gap; a device without them reaches them at their device addresses with each access
-   checked in the shader, and that check's cost is recorded as a known gap, as is the check that
-   stays by structure on a slot a wide pointer, a typed atomic or the stage-in fetch reaches, on a
-   slot bound below its argument's alignment, and on every render stage), and Shared memory's host
+   and binds a descriptor set for them; that set's CPU and GPU cost, and a kernel's slower run on
+   a device whose bound access costs more than its address access, are recorded as a known gap; a
+   device without them reaches them at their device addresses with each access checked in the
+   shader, and that check's cost is recorded as a known gap, as is the check that stays by
+   structure on a slot a wide pointer, a typed atomic or the stage-in fetch reaches, on a slot
+   bound below its argument's alignment, and on every render stage), and Shared memory's host
    coherence (decided by the host-coherent flag of the memory type
    Shared takes, the first host-visible, host-cached type a buffer can use, a host-coherent one
    first: a device whose type has it makes no flush or invalidate call; on a device whose type is
