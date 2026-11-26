@@ -3611,11 +3611,36 @@ cache is answered compile-required on both.
   runs a relaxed form of the kernel, whose accesses of that buffer claim 4-byte alignment. A
   build that took that form for every such argument, bound so or not, ran the harness's four
   `constant_*` rows on an RTX 3090 in 234-252 us against 99-122 us (job 74651).
-- A compute function's buffer argument is reached at its device address, with its accesses at an
-  offset that is not a constant checked in the shader (Compute encoders, above), where a native
-  Vulkan program binds the buffer as a storage buffer and the device's own range check applies.
-  Our kernel's GPU time over a native Vulkan build of the same kernel on the same device
-  (device-local buffers, release, two runs each):
+- On a device that binds a kernel's buffers (Bound kernel buffers), a dispatch whose buffers
+  differ from those its command buffer bound last writes a descriptor set for them and binds it,
+  and a kernel whose accesses through a bound storage buffer cost the device more than through an
+  address runs slower than at its addresses. The harness's rows, GPU time of a build with the form
+  over a build that reaches every buffer argument at its address, on the same device (two
+  alternated pairs a job, so two ratios; release; Mesa 26.2.6, NVIDIA 620.70.06), and the CPU
+  instructions the form adds to a dispatch (user space, a run's over its dispatches):
+  - the sets, in rows of many small dispatches: 2,000 command buffers of one dispatch each, each
+    binding its two buffers (`burst_2000`), 1.07x-1.08x and +2,951 instructions on the Iris Xe
+    (m3-max-75203), 1.09x and +1,685 on the Radeon 780M (m3-max-75095), 1.13x-1.19x and +2,089 on
+    the RX 7900 XTX (m3-max-75094), and 1.00x and +3,772 on the RTX 3090 (m3-max-75237); 2,000
+    command buffers of five such dispatches, each in its own compute encoder (`burst_2000x5`), in
+    the same order, 0.94x and +1,161, 1.13x-1.14x and +821, 1.08x-1.09x and +780, and 1.00x and
+    +1,217; a chain of 512 dependent dispatches, each with its own `setBytes` (`dispatch_chain`),
+    1.02x and +1,842, 1.26x-1.27x and +490, 1.29x and +489, and 0.99x-1.00x and +2,422;
+  - the kernel's access, in a row of one large dispatch whose buffers are bound once: a 3x3 filter
+    over a 1920x1080 image (`image_filter`) takes 1.07x-1.08x on the Iris Xe (m3-max-75203), and
+    1.00x on the 780M, the RX 7900 XTX and the RTX 3090;
+  - a recorded stream with compute dispatches took 7.98% more GPU time a frame on the Iris Xe,
+    41.528 ms against 38.460 ms over its 1,050 frames, its four checked frames equal
+    (m3-max-75206). How much of that is the sets' and how much the kernels' slower access is not
+    measured.
+- On a device without the bound form (Bound kernel buffers: lavapipe, the M3 Max under MoltenVK,
+  the UHD 630's Windows driver and the 780M under AMDVLK 2025.Q2.1 among the lab's, each with the
+  query it fails), on a kernel's slots that keep their addresses by structure, and on every render
+  stage, a buffer argument is reached at its device address, with its accesses at an offset that
+  is not a constant checked in the shader (Compute encoders, above), where a native Vulkan program
+  binds the buffer as a storage buffer and the device's own range check applies. A build that
+  reached every kernel's buffer arguments at their addresses took, over a native Vulkan build of
+  the same kernel on the same device (device-local buffers, release, two runs each):
   - a particle kernel whose inner loop makes one 8-byte load: 1.15x on an RTX 3090 (job
     m3-max-74929), 1.35x on an RX 7900 XTX (m3-max-74927), 1.37x on an Iris Xe (m3-max-74928) and
     1.48x-1.50x on a Radeon 780M (m3-max-74926);
@@ -3626,18 +3651,11 @@ cache is answered compile-required on both.
   A build that bound those arguments as storage buffers under the pipeline's robust buffer access
   2 ran the particle kernel at 1.01x-1.02x of the native build on the 780M, 1.02x-1.03x on the RX
   7900 XTX, 1.05x on the RTX 3090 and 1.09x on the Iris Xe (m3-max-75062, m3-max-75063,
-  m3-max-75064, m3-max-75061), so that much of the difference is the address form's. Buffers are
-  not bound because each way of binding them loses on a device: a descriptor set written for a
-  dispatch's buffers took 6.0% to 7.9% more GPU time a frame on the Iris Xe over two recorded
-  streams (m3-max-75124, m3-max-75128, m3-max-75132) and 25% to 29% more on a chain of dependent
-  dispatches on the 780M and the RX 7900 XTX (m3-max-75120, m3-max-75119); and a table of every
-  buffer's descriptor, indexed by a pushed word, is reached on the Iris Xe under Mesa 26.2.6's ANV
-  by an address with the range check in the shader, one bounded load for each component, by that
-  driver's source, where the address form makes one load. On the Iris Xe the vertical and
-  horizontal convolutions and a copy kernel take 1.38x, 1.38x and 1.61x of the native build at the
-  same threadgroup shape (m3-max-75079), and the build that bound their buffers ran them in the
-  same time (m3-max-75061): that difference is not the address form's, and its cause is not
-  found.
+  m3-max-75064, m3-max-75061), so that much of the difference is the address form's. On the Iris
+  Xe the vertical and horizontal convolutions and a copy kernel take 1.38x, 1.38x and 1.61x of the
+  native build at the same threadgroup shape (m3-max-75079), and the build that bound their
+  buffers ran them in the same time (m3-max-75061): that difference is not the address form's,
+  and its cause is not found.
 - A driver's create of a state's main pipeline can fail after the state has answered, where Metal
   compiles the state before it answers and a program never meets a state it was given that cannot
   run. Vulkan lets `vkCreateComputePipelines` and `vkCreateGraphicsPipelines` fail with
@@ -5762,9 +5780,10 @@ m3-max-75037, 75038, 75039, 75040, 75048), and on the 780M under AMDVLK in the a
 
 The Radeon 780M under AMDVLK 2025.Q2.1 reports Vulkan 1.4, where the feature is core, and lists
 no `VK_EXT_pipeline_robustness`; the runtime's instance asks Vulkan 1.3, so the device keeps
-addresses there (m3-max-75042). lavapipe (`maxStorageBufferRange` 128 MiB), MoltenVK (no
-`robustBufferAccess2`) and the UHD 630's Windows driver (no `pipelineRobustness`) keep
-addresses too.
+addresses there (m3-max-75042). lavapipe (`maxStorageBufferRange` 128 MiB; no dispatch bound in
+m3-max-75211), the M3 Max under MoltenVK (no `robustBufferAccess2`, by the validation crate's
+`moltenvk-m3` profile) and the UHD 630's Windows driver 101.2145 (no
+`VK_EXT_pipeline_robustness`) keep addresses too.
 
 | Pipeline-robustness feature | Structure | Used for |
 |---|---|---|
