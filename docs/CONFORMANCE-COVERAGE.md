@@ -38,7 +38,7 @@ Its limits, measured rather than asserted:
 | share of the reachable exercised | 88% |
 | of those exercised, no case reaching it loosens anything | 339 |
 | of those exercised, a case reaching it loosens some site | 220 |
-| case modules | 188 |
+| case modules | 189 |
 | committed recordings | 1335 |
 | distinct SDK items the Metal leg reaches, of any status | 812 |
 | of those, reached only where this cannot name the family | 5 |
@@ -505,7 +505,7 @@ An implemented container no case's Metal leg touches. These are the families of 
 
 | | |
 |---|---|
-| case modules | 188 |
+| case modules | 189 |
 | committed recordings | 1335 |
 | recorded runs behind a case, median | 3 |
 | recorded runs, least and most | 1 and 30 |
@@ -682,6 +682,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `sparse_mappings` | 14 | 14 | every field | 32 |
 | `sparse_tiles` | 4 | 4 | every field | 1 |
 | `srgb_fetch` | 2 | 2 | every field | 133 |
+| `srgb_storage_writes` | 0 | 0 | every field | 0 |
 | `stage_in_regions` | 1 | 1 | every field | 49 |
 | `stage_in_unread` | 1 | 1 | every field | 48 |
 | `stencil_resolve_pairs` | 2 | 2 | every field | 135 |

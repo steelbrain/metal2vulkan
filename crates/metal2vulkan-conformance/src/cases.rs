@@ -182,6 +182,7 @@ pub mod sparse_heaps;
 pub mod sparse_mappings;
 pub mod sparse_tiles;
 pub mod srgb_fetch;
+pub mod srgb_storage_writes;
 pub mod stage_in_regions;
 pub mod stage_in_unread;
 pub mod stencil_resolve_pairs;
@@ -611,6 +612,7 @@ pub fn all() -> Vec<Box<dyn Case>> {
     for case in shared_exponent_storage::all() {
         cases.push(Box::new(case));
     }
+    cases.push(Box::new(srgb_storage_writes::SrgbStorageWrites));
     cases.extend(norm_storage_writes::NormStorageWrites::all());
     cases.extend(texel_swizzles::all());
     for case in swizzled_storage::all() {
