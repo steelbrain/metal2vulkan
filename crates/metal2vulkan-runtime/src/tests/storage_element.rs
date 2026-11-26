@@ -112,11 +112,6 @@ pub(crate) mod on_device {
             return;
         };
         each_device("storage elements", |name, _, device| {
-            let (_, optimal) = device.core().format_features(vk::Format::R8G8B8A8_UNORM);
-            let stores = optimal.contains(
-                vk::FormatFeatureFlags2::STORAGE_IMAGE
-                    | vk::FormatFeatureFlags2::STORAGE_WRITE_WITHOUT_FORMAT,
-            );
             let _grant = (device.grant_indices(IndexClass::Texture, 1, 1))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let mut d =
@@ -125,6 +120,10 @@ pub(crate) mod on_device {
             d.storage_mode = StorageMode::Shared;
             let texture =
                 (device.new_texture(&d, Some(1))).unwrap_or_else(|error| panic!("{name}: {error}"));
+            // Written through its UNORM twin where the device stores the twin and its image format
+            // query makes the image extended for it (`Plan`'s `twin`), the device's own answer:
+            // Intel's Windows driver on the UHD 630 makes no such image.
+            let stores = texture.encodes();
             let mut arena = Arena::new(&device);
             let out = arena.buffer();
             for (kernel, written) in [("rrp_sw_write_f", stores), ("rrp_sw_rwread_f", false)] {
