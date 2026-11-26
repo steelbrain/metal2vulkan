@@ -7,8 +7,9 @@
 //!   after a fill of the buffer takes the filled bytes, in the fill's command buffer or the next
 //!   one's; a blit's write to the texture is in the buffer for the host once the command buffer
 //!   completes.
-//! - Over a Managed buffer's device copy, where the device keeps one, only at Metal's Managed
-//!   events: 100 command buffers using the texture copy it in once; a didModifyRange over part of
+//! - Over a Managed buffer's device copy, where the device keeps one (and, on a device that keeps
+//!   none, through the two-copy view, `command::on_device::each_device_in_both_forms`), only at
+//!   Metal's Managed events: 100 command buffers using the texture copy it in once; a didModifyRange over part of
 //!   its range copies it again once, and one outside it not at all; a kernel that writes the
 //!   buffer owes one copy in the next submission, one that only reads it none; a texture written
 //!   and then read through its buffer by a blit shows the written texels; a synchronize of the
@@ -42,7 +43,9 @@
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
-    use crate::tests::command::on_device::{each_device, finished, Arena};
+    use crate::tests::command::on_device::{
+        each_device, each_device_in_both_forms, finished, Arena,
+    };
     use crate::tests::compute::on_device::{add, step, WORDS};
     use crate::tests::draw::on_device as draw;
     use crate::tests::storage_element::on_device::{place_id, ARGUMENT_FRAGMENT};
@@ -291,7 +294,7 @@ mod on_device {
 
     #[test]
     fn every_device_copies_a_texture_over_a_managed_buffer_at_its_events() {
-        each_device("over managed", |name, _, device| {
+        each_device_in_both_forms("over managed", |name, _, device| {
             if device.core().unified_memory() {
                 println!("over managed: {name}: no device copy, the Shared rule");
                 return;
@@ -564,7 +567,7 @@ declare void @air.write_texture_2d.v4f32(ptr addrspace(1), <2 x i32>, <4 x float
         let kernel = ComputePipelineDescriptor::new(StageSource::Function(
             FunctionDescriptor::new(function),
         ));
-        each_device("synchronize over managed", |name, _, device| {
+        each_device_in_both_forms("synchronize over managed", |name, _, device| {
             if device.core().unified_memory() {
                 println!("synchronize over managed: {name}: no device copy, the Shared rule");
                 return;
@@ -685,7 +688,7 @@ declare void @air.write_texture_2d.v4f32(ptr addrspace(1), <2 x i32>, <4 x float
         let kernel = ComputePipelineDescriptor::new(StageSource::Function(
             FunctionDescriptor::new(function),
         ));
-        each_device("over untouched", |name, _, device| {
+        each_device_in_both_forms("over untouched", |name, _, device| {
             if device.core().unified_memory() {
                 println!("over untouched: {name}: no device copy, the Shared rule");
                 return;

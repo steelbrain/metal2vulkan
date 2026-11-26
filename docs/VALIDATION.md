@@ -61,8 +61,20 @@ coherence") on a GPU whose memory is coherent in fact; Vulkan allows both calls 
 Lavapipe cannot run it: its one memory type also holds the parameter ring, which needs a coherent
 type. Under the view every card refuses every dma-buf import (`Limit::ImportCoherence`), and a
 card whose host-pointer query offers only its cached types refuses every pointer import too; run
-it with the import families filtered. Lint the gated code without running
-it, in its own target directory:
+it with the import families filtered.
+
+A Managed buffer's two copies need no cfg. Under `m2v_cpu_icd` and `m2v_gpu` alike, the device
+tests of `metal2vulkan-runtime` whose work a Managed buffer's form decides (those of
+`tests::managed` that make a Managed buffer, and those of `tests::copy_over`, `tests::blit` and
+`tests::over` that read the device's form) run each device in its own form and, on a device that
+keeps one copy (`Device::has_unified_memory` true: an integrated GPU, or lavapipe), once more
+through the two-copy view (`DeviceOptions`'s test-only `two_copies`, read where the device decides
+its form; `tests::command::on_device::each_device_in_both_forms`). Through the view the device
+keeps a Private device copy of every Managed buffer, as a discrete GPU does, and
+`has_unified_memory` answers false; its Vulkan device, memory types and every other answer are its
+own. So lavapipe runs both forms.
+
+Lint the gated code without running it, in its own target directory:
 
 ```sh
 CARGO_TARGET_DIR=target/gpucfg RUSTFLAGS='-Dwarnings --cfg m2v_gpu' \

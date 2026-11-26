@@ -490,6 +490,12 @@ pub struct DeviceOptions {
     /// only takes flags away from a type or leaves it.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) memory: Option<fn(&mut vk::PhysicalDeviceMemoryProperties)>,
+    /// For the device tests: the two-copy view. Where true, the device keeps a device copy of
+    /// every Managed buffer whatever Vulkan's device type, as a discrete or virtual GPU does, and
+    /// [`Device::has_unified_memory`] answers false; where false, Vulkan's device type decides
+    /// both. The Vulkan device, its memory types and every other answer are the same.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) two_copies: bool,
 }
 
 /// Takes a lock. A panic while another thread held it leaves what it guards usable (a queue, the
@@ -747,6 +753,8 @@ impl Device {
             properties.properties.device_type,
             vk::PhysicalDeviceType::INTEGRATED_GPU | vk::PhysicalDeviceType::CPU
         );
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        let unified_memory = unified_memory && !options.two_copies;
         let ticks = Ticks::new(
             properties.properties.limits.timestamp_period,
             families[family as usize].timestamp_valid_bits,

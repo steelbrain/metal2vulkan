@@ -226,6 +226,39 @@ pub(crate) mod on_device {
         open_each_device(test, &instance, options, body);
     }
 
+    /// [`each_device`], for a test whose work a Managed buffer's form decides: each device runs
+    /// `body` in its own form, then, where it keeps one copy of a Managed buffer
+    /// (`Device::has_unified_memory` true: an integrated GPU or a CPU device), once more opened
+    /// through the two-copy view (`DeviceOptions::two_copies`), where it keeps a device copy as
+    /// a discrete GPU does and `has_unified_memory` answers false. The second run's name is the
+    /// device's with ", two copies" after it.
+    pub(crate) fn each_device_in_both_forms(
+        test: &str,
+        mut body: impl FnMut(&str, &Instance, Device),
+    ) {
+        let instance = crate::tests::validation::instance(&[]);
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let device = Device::new(physical, DeviceOptions::default())
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let unified = device.has_unified_memory();
+            run_settled(test, &instance, name, device, &mut body);
+            if !unified {
+                continue;
+            }
+            let view = DeviceOptions {
+                two_copies: true,
+                ..DeviceOptions::default()
+            };
+            let device =
+                Device::new(physical, view).unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert!(!device.has_unified_memory(), "{name}: two copies");
+            let name = format!("{name}, two copies");
+            run_settled(test, &instance, &name, device, &mut body);
+        }
+    }
+
     /// What a test opens each device with ([`each_device_with`]).
     pub(crate) type Options = fn() -> DeviceOptions;
 

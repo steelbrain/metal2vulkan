@@ -1292,7 +1292,9 @@ fn a_fill_takes_whole_words_of_a_range_inside_the_buffer() {
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 pub(crate) mod on_device {
-    use crate::tests::command::on_device::{each_device, finished, within};
+    use crate::tests::command::on_device::{
+        each_device, each_device_in_both_forms, finished, within,
+    };
     use crate::{
         BlitCommandEncoder, Buffer, BufferLayout, BytesPlace, CommandBuffer, CommandBufferStatus,
         Device, DispatchType, Error, Gap, HeapRange, IndexClass, MemoryClass, PixelFormat, Refusal,
@@ -2807,7 +2809,7 @@ pub(crate) mod on_device {
     /// synchronize brings to the host.
     #[test]
     fn every_device_copies_between_buffers() {
-        each_device("blit_buffer_to_buffer", |name, _, device| {
+        each_device_in_both_forms("blit_buffer_to_buffer", |name, _, device| {
             let block = (device.take_block(MemoryClass::Shared, 4096)).expect("a Shared block");
             let source = (device.new_buffer(block.id, 0, 256, Some(0))).expect("a buffer");
             let destination = (device.new_buffer(block.id, 256, 256, Some(0))).expect("a buffer");
@@ -2959,7 +2961,7 @@ pub(crate) mod on_device {
     /// end reaches the host. A synchronize of a texture without named bytes records nothing.
     #[test]
     fn every_device_synchronizes_a_managed_buffer() {
-        each_device("blit_synchronize", |name, _, device| {
+        each_device_in_both_forms("blit_synchronize", |name, _, device| {
             let copied = !device.core().unified_memory();
             let block = (device.take_block(MemoryClass::Shared, 4096)).expect("a Shared block");
             let before = pattern(64, 21);

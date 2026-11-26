@@ -19,7 +19,7 @@
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::device::Core;
-    use crate::tests::command::on_device::{each_device, finished};
+    use crate::tests::command::on_device::{each_device, each_device_in_both_forms, finished};
     use crate::texture::TextureObject;
     use crate::{
         Buffer, ClearColor, Error, Gap, IndexClass, LoadAction, MemoryClass, PixelFormat, Refusal,
@@ -103,7 +103,7 @@ mod on_device {
 
     #[test]
     fn every_device_holds_a_texture_over_a_buffer_in_place() {
-        each_device("over", |name, _, device| {
+        each_device_in_both_forms("over", |name, _, device| {
             let mut answers = Vec::new();
             for (pf, texel) in FORMATS {
                 let answer = (device.minimum_linear_texture_alignment(pf))

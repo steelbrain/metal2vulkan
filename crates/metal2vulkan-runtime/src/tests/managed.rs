@@ -1,5 +1,7 @@
 //! Managed buffers: changed ranges merge where they overlap or touch; and, under a device cfg, on
-//! every device of the cfg's kind, in the form Vulkan's device type picks: with a device copy
+//! every device of the cfg's kind, in the form Vulkan's device type picks and, on a device that
+//! keeps one copy, in the two-copy form too, through the two-copy view
+//! (`command::on_device::each_device_in_both_forms`): with a device copy
 //! where the device is neither integrated nor a CPU, the copy holds the consumer's first bytes and
 //! zeros after them, a changed range reaches it at the next commit and a range not marked changed
 //! does not, a change submits nothing, and the copy-in at a commit adds one barrier; without one,
@@ -165,7 +167,8 @@ pub(crate) mod on_device {
     use crate::buffer::BufferObject;
     use crate::submit::UNSEEN_JOINS;
     use crate::tests::command::on_device::{
-        behind_busy, each_device, fill, finished, two_queues, within, Arena,
+        behind_busy, each_device, each_device_in_both_forms, fill, finished, two_queues, within,
+        Arena,
     };
     use crate::tests::compute::on_device::{add, quiet_step, step, WORDS};
     use crate::texture::TextureObject;
@@ -243,7 +246,7 @@ pub(crate) mod on_device {
 
     #[test]
     fn every_device_copies_a_managed_buffer_s_changed_ranges() {
-        each_device("managed", |name, _, device| {
+        each_device_in_both_forms("managed", |name, _, device| {
             let core = device.core();
             let copied = !core.unified_memory();
             let counters = device.counters();
@@ -380,7 +383,7 @@ pub(crate) mod on_device {
         const AT: u64 = 4099;
         const LENGTH: u64 = 1000;
         const COPIED: u64 = 600;
-        each_device("managed placed", |name, _, device| {
+        each_device_in_both_forms("managed placed", |name, _, device| {
             let cpu = (device.take_block(MemoryClass::Shared, 2 * BLOCK))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let first: Vec<u8> = (0..LENGTH).map(|i| (i * 7 % 251 + 1) as u8).collect();
@@ -633,7 +636,7 @@ pub(crate) mod on_device {
 
     #[test]
     fn every_device_keeps_metal_s_two_copy_rule_for_a_managed_buffer() {
-        each_device("managed two copies", |name, _, device| {
+        each_device_in_both_forms("managed two copies", |name, _, device| {
             two_copy_rule(name, &device, |_| {});
         });
     }
@@ -647,7 +650,7 @@ pub(crate) mod on_device {
     /// GPU.
     #[test]
     fn every_device_takes_a_managed_buffer_s_bytes_at_the_commit() {
-        each_device("managed at commit", |name, _, device| {
+        each_device_in_both_forms("managed at commit", |name, _, device| {
             let copied = !device.core().unified_memory();
             let counters = device.counters();
             let mut arena = Arena::new(&device);
@@ -707,7 +710,7 @@ pub(crate) mod on_device {
     /// is still held when the reader completes.
     #[test]
     fn every_device_reads_bytes_named_before_its_commit_while_the_capturing_one_waits() {
-        each_device("managed capture held", |name, _, device| {
+        each_device_in_both_forms("managed capture held", |name, _, device| {
             let copied = !device.core().unified_memory();
             let mut arena = Arena::new(&device);
             let (zero, out, scratch) = (arena.buffer(), arena.buffer(), arena.buffer());
@@ -778,7 +781,7 @@ pub(crate) mod on_device {
     /// reads.
     #[test]
     fn every_device_keeps_a_copy_in_behind_its_queue_s_older_command_buffers() {
-        each_device("managed capture order", |name, _, device| {
+        each_device_in_both_forms("managed capture order", |name, _, device| {
             let copied = !device.core().unified_memory();
             let mut arena = Arena::new(&device);
             let (zero, out) = (arena.buffer(), arena.buffer());
@@ -901,7 +904,7 @@ pub(crate) mod on_device {
 
     #[test]
     fn every_device_takes_named_ranges_at_a_commit_with_no_commands() {
-        each_device("managed empty commit", |name, _, device| {
+        each_device_in_both_forms("managed empty commit", |name, _, device| {
             empty_commit_takes_named_ranges(name, &device, |_, _| {});
         });
     }
@@ -910,7 +913,7 @@ pub(crate) mod on_device {
     /// Managed buffer, is of a kernel that writes no memory, and so records nothing.
     #[test]
     fn every_device_takes_named_ranges_at_a_commit_whose_dispatch_has_no_effects() {
-        each_device("managed quiet commit", |name, _, device| {
+        each_device_in_both_forms("managed quiet commit", |name, _, device| {
             let quiet = quiet_step(&device);
             let before = device.counters().metrics().dispatches_without_effects;
             empty_commit_takes_named_ranges(name, &device, |command_buffer, managed| {
@@ -977,7 +980,7 @@ pub(crate) mod on_device {
     /// time on the host.
     #[test]
     fn every_device_copies_a_long_named_range_with_no_staging() {
-        each_device("managed long range", |name, _, device| {
+        each_device_in_both_forms("managed long range", |name, _, device| {
             if device.core().unified_memory() {
                 println!("managed long range: {name}: no device copy");
                 return;
@@ -1035,7 +1038,7 @@ pub(crate) mod on_device {
         use crate::tests::import::on_device::{memfd, udmabuf};
         use crate::{ImportHandle, Limit};
         use std::os::unix::fs::FileExt;
-        each_device("managed over a dma-buf", |name, _, device| {
+        each_device_in_both_forms("managed over a dma-buf", |name, _, device| {
             const LEN: u64 = 64 << 10;
             let copied = !device.core().unified_memory();
             let memfd = memfd(LEN);
@@ -1434,7 +1437,7 @@ pub(crate) mod on_device {
     /// group held when B1 is submitted, A4 held for room in no group. The form, A's submissions
     /// in flight and group held as B1 commits, and the order they ran in are printed.
     fn over_read_from_two_queues(test: &str, reader: u32, managed: bool) {
-        each_device(test, |name, _, device| {
+        let body = |name: &str, _: &crate::Instance, device: Device| {
             let cpu = (device.take_block(MemoryClass::Shared, 1))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let (buffer, bytes, texture, form) = over_texture(name, &device, cpu.id, managed);
@@ -1476,7 +1479,12 @@ pub(crate) mod on_device {
             assert!(b_bytes == rows, "{name}: B1 reads the buffer's bytes");
             drop((texture, buffer, a_read, b_read, arena));
             (device.release_block(cpu)).unwrap_or_else(|error| panic!("{name}: {error}"));
-        });
+        };
+        // Over a Shared buffer the form is the same on every device.
+        match managed {
+            true => each_device_in_both_forms(test, body),
+            false => each_device(test, body),
+        }
     }
 
     /// [`over_read_from_two_queues`] with A3, in A's group held when B1 passes it, the first of
@@ -1510,7 +1518,7 @@ pub(crate) mod on_device {
     /// bytes in every row. With `held`, [`UNSEEN_JOINS`] command buffers join the queue's group
     /// held first, so R is held for room in no group when C commits; else R is in the group held.
     fn over_read_before_a_capture(test: &str, held: bool) {
-        each_device(test, |name, _, device| {
+        each_device_in_both_forms(test, |name, _, device| {
             let counters = device.counters();
             let cpu = (device.take_block(MemoryClass::Shared, 1))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -1617,7 +1625,7 @@ pub(crate) mod on_device {
     /// W's submission is counted before R is scheduled, while the busy work still holds the GPU.
     /// Held for room, or with one copy, nothing goes before the busy work ends.
     fn over_write_before_a_capture(test: &str, held: bool) {
-        each_device(test, |name, _, device| {
+        each_device_in_both_forms(test, |name, _, device| {
             let counters = device.counters();
             let cpu = (device.take_block(MemoryClass::Shared, 1))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -1719,7 +1727,7 @@ pub(crate) mod on_device {
     #[test]
     fn every_device_keeps_a_managed_texture_over_s_write_held_behind_a_passing_capture() {
         let test = "managed over written behind a passing capture";
-        each_device(test, |name, _, device| {
+        each_device_in_both_forms(test, |name, _, device| {
             let cpu = (device.take_block(MemoryClass::Shared, 1))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let (managed, bytes, texture, form) = over_texture(name, &device, cpu.id, true);
@@ -1836,7 +1844,7 @@ pub(crate) mod on_device {
     /// bytes outside them. The form, the copies R recorded as it was encoded, those made as R and
     /// W went, and what R and L read are printed.
     fn over_read_in_commit_order(test: &str, writer_first: bool, other_queue: bool) {
-        each_device(test, |name, _, device| {
+        each_device_in_both_forms(test, |name, _, device| {
             let counters = device.counters();
             let cpu = (device.take_block(MemoryClass::Shared, 1))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
