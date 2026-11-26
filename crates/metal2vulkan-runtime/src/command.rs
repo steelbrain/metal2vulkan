@@ -334,8 +334,8 @@ pub(crate) struct Gpu {
     /// The occlusion queries of its render encoders' visibility results, from pools of its own,
     /// each given back to the device as it retires (`crate::visibility`).
     pub(crate) queries: Queries,
-    /// The sets of set 0 its dispatches bound their kernels' storage buffers through, from pools
-    /// of its own, each given back to the device as it retires (`crate::bound`).
+    /// The sets of set 0 its dispatches bound their kernels' storage buffers through, taken in
+    /// runs from the device's shared pools and given back as it retires (`crate::bound`).
     pub(crate) sets: crate::bound::Sets,
     /// What it holds of Shared memory, where the device's Shared type is not host-coherent:
     /// what its commands may write and, from its commit, what they reach (`crate::coherence`),

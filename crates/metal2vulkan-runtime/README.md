@@ -5730,12 +5730,21 @@ storage-buffer limits of set 0 at 31 or more, and `maxStorageBufferRange` at lea
   own, and no copy), and pushes the slot's bytes from there to its bind address
   (`PushField::SlotBindOffset`). A dispatch whose slots' descriptors begin those of the set its
   command buffer wrote last writes none and binds that set only where the Vulkan command buffer
-  does not hold it, so a changed bind offset alone is a push word; any other takes the next set
-  of its command buffer's pools, writes it and binds it. A command buffer takes its sets in order
-  from pools the device lends it, 256 sets a pool allocated as the pool is made, and gives them
-  back as it retires or drops uncommitted; the device keeps at most 16 pools free and destroys
-  the rest, and counts every pool alive (the `buffer_set_pools` gauge). A set is written only
-  while no pending work names it.
+  does not hold it, so a changed bind offset alone is a push word; any other takes a set, writes
+  it and binds it. The device's sets are in pools of 256, allocated as the pool is
+  made, which command buffers share: a command buffer takes its sets from the pool the device
+  hands out from in runs, the first of one set and each next as long as all it took before, up to
+  32, so it holds no more sets unused than it wrote and at most 31; it gives them back as it
+  retires or drops uncommitted. A pool is free again once every set taken from it is back. The
+  device keeps at most 16 free pools besides the one it hands out from and destroys the rest, and
+  counts every pool alive (the `buffer_set_pools` gauge). So a device with no pending command
+  buffer holds at most 17 pools: 4,352 sets of 31 storage-buffer descriptors, 134,912
+  descriptors; on RADV (Mesa's source: 16 bytes of device memory a descriptor, 128 bytes of host
+  memory a set) 2.06 MiB of device memory and 0.53 MiB of host memory, and the runtime's own
+  2 KiB a pool for its sets' handles. Pending command buffers hold, besides, the pools their sets
+  are of. One lock orders a pool's making, its sets' allocation, the takes and give-backs, and a
+  pool's destruction; a set is written only while no pending work names it, by the one command
+  buffer that holds it.
 
 The dispatches by form, and the sets written and held, are counted (Counters). The containment
 differs from the address form's by bytes the queries state: before a buffer whose first byte is

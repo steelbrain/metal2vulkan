@@ -3583,9 +3583,10 @@ pub struct Gauges {
     /// and gives them back as it retires; at most 16 are kept free, and the rest destroyed.
     pub occlusion_pools: u64,
     /// The device's pools of sets of set 0, each of 256 sets, on a device whose kernels bind
-    /// their buffers as storage buffers there (`Metrics::bound_dispatches`): a command buffer
-    /// takes them as its dispatches write sets, and gives them back as it retires; at most 16
-    /// are kept free, and the rest destroyed.
+    /// their buffers as storage buffers there (`Metrics::bound_dispatches`): command buffers
+    /// share them, each taking sets in runs as its dispatches write sets and giving them back as
+    /// it retires. A pool is free once every set taken from it is back; at most 16 are kept free
+    /// besides the one sets are handed out from, and the rest destroyed.
     pub buffer_set_pools: u64,
     /// Imports whose memory is not yet freed: one for each imported block
     /// (`Device::import_dma_buf` on Unix,

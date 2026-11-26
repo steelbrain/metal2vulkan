@@ -109,6 +109,7 @@ mod resolve;
 mod ring;
 mod sampler;
 mod sampling;
+mod set_pools;
 mod shadow;
 mod signed_zeros;
 mod sites;
