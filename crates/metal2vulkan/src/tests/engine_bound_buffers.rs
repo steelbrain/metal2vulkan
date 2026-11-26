@@ -28,7 +28,7 @@ use crate::pipeline::sym::{PushField, ResourceKind, SlotClass, SlotRef, Stage};
 use crate::pipeline::testing::{
     compile_with, engine_dir, link_and_validate, llvm_assemble, AssembleError,
 };
-use ash::vk;
+use crate::vk;
 use metal2vulkan_devtools::vector_word_phases::{FIXTURE, VEC16, WORDS};
 
 fn bitcode() -> Option<Vec<u8>> {
