@@ -1912,6 +1912,16 @@ made, with no lock, and never rewritten for layouts.
     there answers the stored codes as linear values. It is not refused: nothing the runtime is
     told names the textures such an argument reaches, and a refusal by the declarations of reads
     or by the bindings would refuse programs Metal runs.
+- Intel's Windows driver 101.2145 on the UHD Graphics 630 makes no such extended image for an
+  8-bit sRGB texture made for shader writes. Its image format query for `R8G8B8A8_SRGB`, optimal
+  tiling, `VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_EXTENDED_USAGE_BIT`, a format
+  list of that format and `R8G8B8A8_UNORM`, and the plain image's usage with the storage usage
+  answers no. So such a texture has no storage element there, and a dispatch whose kernel writes
+  it at a slot is `Gap::StorageElement` (`StorageElementCase::Absent`). This was read from the
+  runtime's test that asserts the image is extended exactly where that query takes it (it passed
+  there, job m3-max-74877) and from the conformance case `srgb-storage-writes` (job
+  m3-max-74873), not probed apart: whether that query takes the image without the plain image's
+  resolve attachment usage was not asked.
 - A texture whose storage element the device cannot read without a format (its format lacks
   `VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT`, which a device without
   `shaderStorageImageReadWithoutFormat` answers per format: on ANV before Gfx12.5, `BGRA8Unorm`,
@@ -1922,6 +1932,16 @@ made, with no lock, and never rewritten for layouts.
   as no declaration tells it from a sample: it reads the texture's storage element without a
   format, outside Vulkan's valid usage (`VUID-vkCmdDispatch-OpTypeImage-07028`), and Vulkan does
   not define what that read returns.
+- Intel's Windows driver 101.2145 on the UHD Graphics 630 lists
+  `VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT` for `B8G8R8A8_UNORM` while its
+  `shaderStorageImageReadWithoutFormat` is false, so a `BGRA8Unorm` texture's storage element is
+  read without a format there, at a slot through `access::read_write` and through an argument
+  buffer. Those reads differed from Metal's in 256 and 1,024 elements of the conformance cases
+  `read-write-tier-held` and `read-write-tier-round-trip-float` (the largest difference,
+  1055846127, is what a read of zero gives against a Metal answer of 0.46667; job m3-max-74873),
+  read from that run and not reproduced outside the runtime. `BGRA8Unorm` is outside Metal's
+  read-write tiers, so documented Metal defines no answer for that read; no Vulkan query tells
+  the driver's answer apart, and the runtime follows the per-format bit on every device.
 - A texture buffer's storage texel buffer is declared without a format too, but at a slot a
   texture atomic updates (`R32ui` or `R32i`), and its answers are its format's buffer features,
   of which Vulkan requires neither `VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT` nor the

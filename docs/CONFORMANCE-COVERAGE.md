@@ -42,7 +42,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1337 |
 | distinct SDK items the Metal leg reaches, of any status | 812 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 7979 |
+| ledger rows (a case whose gap is recorded) | 7993 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -4158,27 +4158,38 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `read-write-tier-held` | Known gap (rt README, Known gaps of textures): the kernel writes a texture with no storage element on this device through the argument buffer, with no use_resou… |
 | `read-write-tier-held` | Known gap (rt README, Known gaps of textures): the kernel writes a texture with no storage element on this device through the argument buffer, with no use_resou… |
 | `read-write-tier-held` | Known gap (rt README, Known gaps of textures): the kernel writes a texture with no storage element on this device through the argument buffer, with no use_resou… |
+| `read-write-tier-held` | Known gap (rt README, Known gaps of textures): the kernel writes a texture with no storage element on this device through the argument buffer, with no use_resou… |
 | `read-write-tier-held` | Known gap (rt README, Known gaps of textures): the kernel reads, through the argument buffer, a texture whose storage element this device cannot read without a … |
 | `read-write-tier-held` | Known gap (rt README, Known gaps of textures): the kernel writes a texture with no storage element on this device through the argument buffer, with no use_resou… |
 | `read-write-tier-held` | Known gap (rt README, Known gaps of textures): the kernel writes a texture with no storage element on this device through the argument buffer, with no use_resou… |
+| `read-write-tier-held` | Known gap (rt README, Known gaps of textures): the kernel writes a texture with no storage element on this device through the argument buffer, with no use_resou… |
 | `read-write-tier-held` | Known gap (rt README, Known gaps of textures): the kernel reads, through the argument buffer, a texture whose storage element this device cannot read without a … |
 | `read-write-tier-held` | The device's own answer (rule 1): the device converts an 8-bit code by the reciprocal product, so a code's value is one `f32` ulp off Metal's. Note `device-texe… |
+| `read-write-tier-held` | Known gap (rt README, Known gaps of textures): Intel's Windows driver on the UHD 630 lists VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT for B8G8R8A8_UNOR… |
 | `read-write-tier-held` | Known gap (rt README, Known gaps of textures): the kernel reads an 8-bit sRGB texture through the argument buffer's access::read_write member, with no use_resou… |
 | `read-write-tier-held` | Known gap (rt README, Known gaps of textures): the kernel reads an 8-bit sRGB texture through the argument buffer's access::read_write member, with no use_resou… |
 | `read-write-tier-held` | Known gap (rt README, Known gaps of textures): the kernel reads an 8-bit sRGB texture through the argument buffer's access::read_write member, with no use_resou… |
 | `read-write-tier-held` | Known gap (rt README, Known gaps of textures): the kernel reads an 8-bit sRGB texture through the argument buffer's access::read_write member, with no use_resou… |
+| `read-write-tier-held` | Known gap (rt README, Known gaps of textures): Intel's Windows driver on the UHD 630 makes no extended image for an 8-bit sRGB texture made for shader writes, s… |
+| `read-write-tier-held` | The device's own answer (rule 1): the device converts an 8-bit code by the reciprocal product, so a code's value is one `f32` ulp off Metal's. Note `device-texe… |
 | `read-write-tier-held` | The device's own answer (rule 1): the device converts an 8-bit code by the reciprocal product, so a code's value is one `f32` ulp off Metal's. Note `device-texe… |
 | `read-write-tier-held` | Known gap (rt README, Known gaps of textures): the kernel reads, through the argument buffer, a texture whose storage element this device cannot read without a … |
 | `read-write-tier-held` | The device's own answer (rule 1): the device converts an 8-bit code by the reciprocal product, so a code's value is one `f32` ulp off Metal's. Note `device-texe… |
 | `read-write-tier-held` | The device's own answer (rule 1): the device converts an 8-bit code by the reciprocal product, so a code's value is one `f32` ulp off Metal's. Note `device-texe… |
+| `read-write-tier-held` | The device's own answer (rule 1): the device converts an 8-bit code by the reciprocal product, so a code's value is one `f32` ulp off Metal's. Note `device-texe… |
+| `read-write-tier-held` | The device's own answer (rule 1): the device converts an 8-bit code by the reciprocal product, so a code's value is one `f32` ulp off Metal's. Note `device-texe… |
 | `read-write-tier-held` | Known gap (rt README, Known gaps of textures): the kernel reads an 8-bit sRGB texture through the argument buffer's access::read_write member, with no use_resou… |
 | `read-write-tier-held` | Known gap (rt README, Known gaps of textures): the kernel reads an 8-bit sRGB texture through the argument buffer's access::read_write member, with no use_resou… |
 | `read-write-tier-held` | Known gap (rt README, Known gaps of textures): the kernel reads an 8-bit sRGB texture through the argument buffer's access::read_write member, with no use_resou… |
 | `read-write-tier-held` | Known gap (rt README, Known gaps of textures): the kernel reads an 8-bit sRGB texture through the argument buffer's access::read_write member, with no use_resou… |
+| `read-write-tier-held` | Known gap (rt README, Known gaps of textures): Intel's Windows driver on the UHD 630 makes no extended image for an 8-bit sRGB texture made for shader writes, s… |
+| `read-write-tier-held` | Known gap (rt README, Known gaps of textures): Intel's Windows driver on the UHD 630 makes no extended image for an 8-bit sRGB texture made for shader writes, s… |
+| `read-write-tier-held` | Known gap (rt README, Known gaps of textures): Intel's Windows driver on the UHD 630 makes no extended image for an 8-bit sRGB texture made for shader writes, s… |
 | `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatA8Unorm, so rt binds no such texture to a read_write or w… |
 | `read-write-tier-round-trip-float` | Known gap (rt README, Known gaps of textures): ANV on the Iris Xe (before Gfx12.5) cannot read this format's storage element without a format, so a read at a sl… |
 | `read-write-tier-round-trip-float` | Known gap (rt README, Known gaps of textures): ANV on the Iris Xe (before Gfx12.5) cannot read this format's storage element without a format, so a read at a sl… |
 | `read-write-tier-round-trip-float` | The device's own answer (rule 1): the device converts an 8-bit code by the reciprocal product, so a code's value is one `f32` ulp off Metal's. Note `device-texe… |
+| `read-write-tier-round-trip-float` | Known gap (rt README, Known gaps of textures): Intel's Windows driver on the UHD 630 lists VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT for B8G8R8A8_UNOR… |
 | `read-write-tier-round-trip-float` | Known gap (rt README, Known gaps of textures): an access::read_write slot bound to an 8-bit sRGB texture is Gap::StorageElement on every device. The texture's s… |
 | `read-write-tier-round-trip-float` | Known gap (rt README, Known gaps of textures): ANV on the Iris Xe (before Gfx12.5) cannot read this format's storage element without a format, so a read at a sl… |
 | `read-write-tier-round-trip-float` | The device's own answer (rule 1): the device converts an 8-bit code by the reciprocal product, so a code's value is one `f32` ulp off Metal's. Note `device-texe… |
@@ -8161,6 +8172,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatA8Unorm, so rt binds no such texture to a read_write or w… |
 | `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatA8Unorm, so rt binds no such texture to a read_write or w… |
 | `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatA8Unorm, so rt binds no such texture to a read_write or w… |
+| `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatA8Unorm, so rt binds no such texture to a read_write or w… |
+| `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatBGR10A2Unorm, so rt binds no such texture to a read_write… |
 | `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatBGR10A2Unorm, so rt binds no such texture to a read_write… |
 | `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatBGR10A2Unorm, so rt binds no such texture to a read_write… |
 | `render-state-heap-residency` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no sparse texture, heap or tile call). The rt si… |
@@ -10077,4 +10090,5 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `reconvergence-handle-choices` | The device's own answer (rule 1): llvmpipe's trilinear sample of the R16Float mip chain at a level of detail of q + log2(1.5) answers other bits than Metal's in… |
 | `reconvergence-handle-choices` | The device's own answer (rule 1): llvmpipe's trilinear sample of the R16Float mip chain at a level of detail of q + log2(1.5) answers other bits than Metal's in… |
 | `reconvergence-handle-choices` | The device's own answer (rule 1): llvmpipe's trilinear sample of the R16Float mip chain at a level of detail of q + log2(1.5) answers other bits than Metal's in… |
+| `srgb-storage-writes` | Known gap (rt README, Known gaps of textures): Intel's Windows driver on the UHD 630 makes no extended image for an 8-bit sRGB texture made for shader writes (i… |
 
