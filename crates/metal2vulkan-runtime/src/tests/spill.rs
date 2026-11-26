@@ -12,7 +12,7 @@
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
-    use crate::tests::command::on_device::each_device;
+    use crate::tests::command::on_device::each_device_in_both_forms;
     use crate::tests::compute::on_device::WORDS;
     use crate::tests::managed::on_device::two_copy_rule;
     use crate::{MemoryClass, PixelFormat, TextureDescriptor, TextureType, TextureUsage};
@@ -30,7 +30,7 @@ mod on_device {
 
     #[test]
     fn every_device_spills_private_memory_out_of_device_memory() {
-        each_device("spill", |name, _, device| {
+        each_device_in_both_forms("spill", |name, _, device| {
             let core = device.core();
             let counters = device.counters();
             wait_until("a wholly free unit in each class", || {

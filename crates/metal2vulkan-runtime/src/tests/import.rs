@@ -156,7 +156,9 @@ fn host_memory_takes_the_first_coherent_listed_type_offered() {
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 pub(crate) mod on_device {
     use crate::memory::Release;
-    use crate::tests::command::on_device::{each_device, finished, within, Busy};
+    use crate::tests::command::on_device::{
+        each_device, each_device_in_both_forms, finished, within, Busy,
+    };
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::texture::TextureObject;
     use crate::{
@@ -528,7 +530,7 @@ pub(crate) mod on_device {
     /// import host memory has nothing to show.
     #[test]
     fn every_device_releases_an_import_under_a_managed_buffer_dropped_before_any_commit() {
-        each_device("import_managed_drop", |name, _, device| {
+        each_device_in_both_forms("import_managed_drop", |name, _, device| {
             let counters = device.counters();
             let Some((_, alignment)) = device.core().imports.host.as_ref() else {
                 println!("import: {name}: imports no host memory");

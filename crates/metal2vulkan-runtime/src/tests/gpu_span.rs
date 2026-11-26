@@ -5,7 +5,9 @@
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 pub(crate) mod on_device {
-    use crate::tests::command::on_device::{each_device, finished, Arena};
+    use crate::tests::command::on_device::{
+        each_device, each_device_in_both_forms, finished, Arena,
+    };
     use crate::tests::compute::on_device::step;
     use crate::tests::managed::on_device::new_managed;
     use crate::{
@@ -93,7 +95,7 @@ pub(crate) mod on_device {
     /// puts the upload inside it. Only where the Managed buffer has a device copy.
     #[test]
     fn every_device_leaves_a_copy_in_out_of_the_gpu_span_it_goes_ahead_of() {
-        each_device("copy-in outside the span", |name, _, device| {
+        each_device_in_both_forms("copy-in outside the span", |name, _, device| {
             if device.has_unified_memory() {
                 println!("copy-in outside the span: {name}: unified, no copy-in");
                 return;

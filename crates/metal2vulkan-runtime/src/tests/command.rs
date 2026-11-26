@@ -232,16 +232,23 @@ pub(crate) mod on_device {
     /// through the two-copy view (`DeviceOptions::two_copies`), where it keeps a device copy as
     /// a discrete GPU does and `has_unified_memory` answers false. The second run's name is the
     /// device's with ", two copies" after it.
-    pub(crate) fn each_device_in_both_forms(
+    pub(crate) fn each_device_in_both_forms(test: &str, body: impl FnMut(&str, &Instance, Device)) {
+        each_device_in_both_forms_with(test, DeviceOptions::default, body);
+    }
+
+    /// [`each_device_in_both_forms`] with `options` for each device, the two-copy view's run
+    /// opened with them too.
+    pub(crate) fn each_device_in_both_forms_with(
         test: &str,
+        options: impl Fn() -> DeviceOptions,
         mut body: impl FnMut(&str, &Instance, Device),
     ) {
         let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
         for (name, physical) in &devices {
-            let device = Device::new(physical, DeviceOptions::default())
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let device =
+                Device::new(physical, options()).unwrap_or_else(|error| panic!("{name}: {error}"));
             let unified = device.has_unified_memory();
             run_settled(test, &instance, name, device, &mut body);
             if !unified {
@@ -249,7 +256,7 @@ pub(crate) mod on_device {
             }
             let view = DeviceOptions {
                 two_copies: true,
-                ..DeviceOptions::default()
+                ..options()
             };
             let device =
                 Device::new(physical, view).unwrap_or_else(|error| panic!("{name}: {error}"));

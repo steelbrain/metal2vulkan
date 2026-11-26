@@ -10,7 +10,7 @@ mod on_device {
     use crate::fill::ZEROS;
     use crate::memory::MakerTest;
     use crate::ring::{Writes, CHUNK};
-    use crate::tests::command::on_device::{each_device_with, within};
+    use crate::tests::command::on_device::{each_device_in_both_forms_with, within};
     use crate::{
         Device, DeviceOptions, HostBytes, MemoryClass, Metrics, PixelFormat, Region,
         SiteAllocations, StorageMode, Texture, TextureDescriptor, TextureType, TextureUsage,
@@ -106,7 +106,7 @@ mod on_device {
             maker: MakerTest::Fail,
             ..DeviceOptions::default()
         };
-        each_device_with("allocation_sites", options, |name, _, device| {
+        each_device_in_both_forms_with("allocation_sites", options, |name, _, device| {
             count_each_site(name, &device);
         });
     }

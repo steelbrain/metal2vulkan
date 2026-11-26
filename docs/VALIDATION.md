@@ -65,9 +65,10 @@ it with the import families filtered.
 
 A Managed buffer's two copies need no cfg. Under `m2v_cpu_icd` and `m2v_gpu` alike, the device
 tests of `metal2vulkan-runtime` whose work a Managed buffer's form decides (those of
-`tests::managed` that make a Managed buffer, and those of `tests::copy_over`, `tests::blit` and
-`tests::over` that read the device's form) run each device in its own form and, on a device that
-keeps one copy (`Device::has_unified_memory` true: an integrated GPU, or lavapipe), once more
+`tests::managed` that make a Managed buffer, and those of `tests::copy_over`, `tests::blit`,
+`tests::over`, `tests::upload`, `tests::import`, `tests::spill`, `tests::sites`, `tests::gpu_span`
+and `tests::resolve` that read the device's form) run each device in its own form and, on a device
+that keeps one copy (`Device::has_unified_memory` true: an integrated GPU, or lavapipe), once more
 through the two-copy view (`DeviceOptions`'s test-only `two_copies`, read where the device decides
 its form; `tests::command::on_device::each_device_in_both_forms`). Through the view the device
 keeps a Private device copy of every Managed buffer, as a discrete GPU does, and

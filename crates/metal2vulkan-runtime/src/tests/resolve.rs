@@ -84,7 +84,7 @@ fn a_resolving_action_needs_a_resolve_texture_and_unknown_resolves_where_one_is_
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
-    use crate::tests::command::on_device::each_device;
+    use crate::tests::command::on_device::{each_device, each_device_in_both_forms};
     use crate::tests::draw::on_device::{
         descriptor, examples, floats, pass, run, state, target, Buffers, SIDE,
     };
@@ -747,7 +747,7 @@ mod on_device {
         let Some(library) = examples() else {
             return;
         };
-        each_device("resolve_over", |name, _, device| {
+        each_device_in_both_forms("resolve_over", |name, _, device| {
             let format = PixelFormat::BGRA8UnormSRGB;
             let color = four_of(name, &device, format, WALK)
                 .unwrap_or_else(|error| panic!("{name}: Vulkan requires 4 samples: {error}"));

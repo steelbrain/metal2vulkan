@@ -30,7 +30,7 @@ mod on_device {
     use crate::staging::REGION_LEN;
     use crate::submit::{HOMES_PRUNE, UPLOAD_BYTES, UPLOAD_ENTRIES};
     use crate::tests::command::on_device::{
-        behind_busy, each_device, finished, within, Busy, PATIENCE,
+        behind_busy, each_device, each_device_in_both_forms, finished, within, Busy, PATIENCE,
     };
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
@@ -703,7 +703,7 @@ mod on_device {
     #[test]
     fn every_device_counts_and_times_its_own_command_buffers() {
         use crate::tests::managed::on_device::new_managed;
-        each_device("own command buffers", |name, _, device| {
+        each_device_in_both_forms("own command buffers", |name, _, device| {
             let counters = device.counters();
             let copies = !device.has_unified_memory();
             let timed = cfg!(m2v_cpu_icd);
