@@ -1406,14 +1406,11 @@ fn the_copy_moves_every_byte_in_whole_threadgroups() {
 /// The fixture's two cells kernels on lavapipe's `Device::from_queries` profile. Under the
 /// resident-table domains both observe their threadgroup partition with
 /// partial threadgroups through the lockstep order's barriers, which stand past the bounds test,
-/// so they are SIMD-group barriers, as in the row-indexed kernels the fixture stands for. The
-/// one-row variant (`LoweringInputs::one_row`) of `row_cells`, whose `int` cell arithmetic
-/// compiles to `nsw` steps, does not observe it, so a runtime may run its grids in tiles; that of
-/// `row_cells_uint`, the control, whose `uint` steps carry no flags, still does. Under the
-/// identity domains (the runtime's), whose kernels take no lockstep order, neither observes
-/// it, plain or with partial threadgroups.
+/// so they are SIMD-group barriers, as in the row-indexed kernels the fixture stands for. Under the
+/// identity domains (the runtime's), whose kernels take no lockstep order, neither observes it,
+/// plain or with partial threadgroups.
 #[test]
-fn the_int_cells_kernel_is_apart_in_rows_and_its_uint_control_is_not() {
+fn the_cells_kernels_observe_their_partition_only_under_the_lockstep_order() {
     use metal2vulkan::device::{Device, DeviceDescription, DevicePolicy};
     use metal2vulkan::library::Library;
     use metal2vulkan::pipeline::{FunctionDescriptor, LoweringInputs, StageEntries};
@@ -1433,9 +1430,7 @@ fn the_int_cells_kernel_is_apart_in_rows_and_its_uint_control_is_not() {
     let budget = metal2vulkan::Budget::standard();
     let mut partial = LoweringInputs::new();
     partial.partial_threadgroups = true;
-    let mut rows = partial.clone();
-    rows.one_row = true;
-    for (name, apart) in [("row_cells", true), ("row_cells_uint", false)] {
+    for name in ["row_cells", "row_cells_uint"] {
         let function = FunctionDescriptor::new(library.function(name).unwrap());
         let observes = |device: &Device, inputs: &LoweringInputs| {
             let entries = StageEntries::new();
@@ -1443,11 +1438,6 @@ fn the_int_cells_kernel_is_apart_in_rows_and_its_uint_control_is_not() {
                 .unwrap_or_else(|why| panic!("{name}: {why}"))
         };
         assert!(observes(&resident, &partial), "{name}: the partial variant");
-        assert_eq!(
-            observes(&resident, &rows),
-            !apart,
-            "{name}: the one-row variant"
-        );
         let own = (identity.compile_function(&function, &LoweringInputs::new(), &budget))
             .unwrap_or_else(|why| panic!("{name}: {why}"));
         assert!(

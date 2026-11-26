@@ -126,7 +126,6 @@
 //! there; otherwise it orders only pairs whose threads meet where a simdgroup spans two rows, and
 //! runs only in a threadgroup whose local size lets one (more than one row, of a width not a
 //! multiple of 32: [`Lockstep::across_rows`], a test of specialization constants a driver folds).
-//! The kernel's one-row variant leaves such barriers out.
 //!
 //! Each pair names an interval of positions in one block where its barrier may stand; one
 //! barrier at a position of the most intervals serves them all (interval stabbing, threadgroup
@@ -633,26 +632,22 @@ struct Decision {
 
 /// What [`order`] reads besides the entry, which with it decides the order completely: of the
 /// device's profile, whether a subgroup barrier where the simdgroup's threads diverge orders the
-/// threads that run it together; and whether the kernel is its one-row variant
-/// (`LoweringInputs::one_row`); and whether the profile orders no pair (`unordered`: the identity
+/// threads that run it together; and whether the profile orders no pair (`unordered`: the identity
 /// domains, whose kernels take no order, the module documentation). Two asks with equal keys order
 /// an entry the same way, so an ordered entry is kept under its key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OrderKey {
     tangle: bool,
-    one_row: bool,
     unordered: bool,
 }
 
 impl OrderKey {
-    /// The key of a device of profile `p`, for the one-row variant where `one_row`. Under the
-    /// identity domains (`lower::access::identity`) the key orders nothing: [`order`] finds the
-    /// kernel's pairs and inserts no barrier.
-    pub fn of(p: &DeviceProfile, one_row: bool) -> OrderKey {
+    /// The key of a device of profile `p`. Under the identity domains (`lower::access::identity`)
+    /// the key orders nothing: [`order`] finds the kernel's pairs and inserts no barrier.
+    pub fn of(p: &DeviceProfile) -> OrderKey {
         if crate::lower::access::identity(p) {
             return OrderKey {
                 tangle: false,
-                one_row,
                 unordered: true,
             };
         }
@@ -667,7 +662,6 @@ impl OrderKey {
             );
         OrderKey {
             tangle,
-            one_row,
             unordered: false,
         }
     }
@@ -675,12 +669,10 @@ impl OrderKey {
 
 /// Order the threadgroup-memory and device-memory accesses of kernel `e` that only Apple's
 /// simdgroup lockstep orders, by inserting barriers into its body (see the module
-/// documentation), for the device and variant of `key`. Where the key's one-row variant
-/// (`LoweringInputs::one_row`) and, with each simdgroup lying within one row, no pair wants more
-/// than a threadgroup barrier, only the threadgroup barriers are inserted, on every device. Under
-/// a key that orders nothing (`OrderKey::unordered`) no barrier is inserted, and a kernel with
-/// such a pair states it ([`Lockstep::unordered`]). An entry of another stage, or a kernel without
-/// such a pair, is returned unchanged.
+/// documentation), for the device of `key`. Under a key that orders nothing
+/// (`OrderKey::unordered`) no barrier is inserted, and a kernel with such a pair states it
+/// ([`Lockstep::unordered`]). An entry of another stage, or a kernel without such a pair, is
+/// returned unchanged.
 pub fn order(mut e: Entry, key: OrderKey, m: &mut Meter) -> Result<Entry, Error> {
     if !matches!(e.ep.stage, AbiStage::Kernel { .. }) {
         return Ok(e);
@@ -725,11 +717,7 @@ pub fn order(mut e: Entry, key: OrderKey, m: &mut Meter) -> Result<Entry, Error>
 /// threads that run it together (maximal reconvergence on 32-lane subgroups); `unordered`: the
 /// key orders nothing, so a kernel with a pair needs no barrier.
 fn decide(e: &Entry, key: OrderKey, m: &mut Meter) -> Result<Option<(Decision, bool)>, Error> {
-    let OrderKey {
-        tangle,
-        one_row,
-        unordered,
-    } = key;
+    let OrderKey { tangle, unordered } = key;
     let Some(body) = e.module.func(e.func).and_then(|f| f.body.as_ref()) else {
         return Ok(None);
     };
@@ -787,12 +775,11 @@ fn decide(e: &Entry, key: OrderKey, m: &mut Meter) -> Result<Option<(Decision, b
     // `rows`). A threadgroup barrier none of them wants orders only pairs that meet where a
     // simdgroup spans two rows, so it runs only in such a threadgroup (`Order::Rows`). And where
     // none of them wants more than a threadgroup barrier, a dispatch of such threadgroups needs
-    // none of the simdgroup barriers (`cleared`): the one-row variant leaves them out on every
-    // device, and the plan states it (`rows`) where the kernel's subgroup barriers keep a 32-lane
-    // tier (`tangle`), the old binder's one-row regions.
+    // none of the simdgroup barriers (`cleared`): the plan states it (`rows`) where the kernel's
+    // subgroup barriers keep a 32-lane tier (`tangle`), the old binder's one-row regions.
     drop(af);
     let mut in_rows: BTreeSet<Want> = BTreeSet::new();
-    if one_row || tangle || wants.iter().any(|w| w.order == Order::Threadgroup) {
+    if tangle || wants.iter().any(|w| w.order == Order::Threadgroup) {
         let mut rows_af = AddrFacts::new(e, body, &layouts, &us, true, m)?;
         for (_, acc) in &spaces {
             pairs(
@@ -808,7 +795,7 @@ fn decide(e: &Entry, key: OrderKey, m: &mut Meter) -> Result<Option<(Decision, b
     }
     let cleared = in_rows.iter().all(|w| w.order == Order::Threadgroup);
     let rows = tangle && cleared;
-    let mut wants: BTreeSet<Want> = wants
+    let wants: BTreeSet<Want> = wants
         .into_iter()
         .map(
             |w| match w.order == Order::Threadgroup && !in_rows.contains(&w) {
@@ -820,14 +807,6 @@ fn decide(e: &Entry, key: OrderKey, m: &mut Meter) -> Result<Option<(Decision, b
             },
         )
         .collect();
-    // The one-row variant keeps the threadgroup barriers alone: in a threadgroup whose simdgroups
-    // each lie within one row, no pair a simdgroup barrier or an `Order::Rows` one orders meets.
-    if one_row && cleared {
-        wants.retain(|w| w.order == Order::Threadgroup);
-        if wants.is_empty() {
-            return Ok(None);
-        }
-    }
     let term = spaces
         .first()
         .map_or(&[][..], |(_, acc)| acc.term.as_slice());

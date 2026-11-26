@@ -36,13 +36,6 @@
 //! its lane is, an insertion at a constant index replaces its lane's, and a shuffle with no
 //! `poison` lane moves each lane's. A value is divergent when any of its lanes is.
 //!
-//! **Unit axes** ([`Uniformity::with_unit_axes`]). In a threadgroup of one thread along an axis,
-//! every thread's `thread_position_in_threadgroup` there is 0 and its `thread_position_in_grid`
-//! there is its threadgroup's `threadgroup_position_in_grid`, so among a workgroup's or a
-//! simdgroup's invocations both are uniform on that axis: the analysis of a dispatch whose
-//! threadgroups have such axes takes those lanes of the two builtins (the first, a scalar one's)
-//! as uniform.
-//!
 //! **Blocks.** A block is divergent when some invocations of a workgroup may execute it while
 //! others do not, or a different number of times: it is control dependent on a branch or switch
 //! whose condition is divergent, or on one in a divergent block (control dependence is read off
@@ -159,33 +152,6 @@ pub const LANES: u32 = 8;
 
 /// Every lane of a value divergent.
 const ALL: u8 = u8::MAX;
-
-/// The axes of a threadgroup of one thread along each: bit 0 `x`, bit 1 `y`, bit 2 `z`.
-pub type UnitAxes = u8;
-
-/// The lanes of the dispatch builtin `b`, a parameter of `lanes` tracked lanes (`None` a scalar),
-/// that are divergent among the invocations `among` relates in threadgroups of one thread along
-/// the axes `unit` (the module docs, "Unit axes"); [`ALL`] where every lane may be.
-fn builtin_lanes(b: &Builtin, among: Among, lanes: Option<u32>, unit: UnitAxes) -> u8 {
-    if !per_invocation(b, among) {
-        return 0;
-    }
-    let positional = matches!(
-        b,
-        Builtin::ThreadPositionInThreadgroup | Builtin::ThreadPositionInGrid
-    );
-    if !positional || unit == 0 || among == Among::Primitive {
-        return ALL;
-    }
-    match lanes {
-        // A scalar position is its `x`.
-        None => match unit & 1 {
-            0 => ALL,
-            _ => 0,
-        },
-        Some(n) => lane_bits(n) & !unit,
-    }
-}
 
 /// The mask of a value of `n` tracked lanes.
 fn lane_bits(n: u32) -> u8 {
@@ -574,18 +540,7 @@ impl Uniformity {
     /// The uniformity of the blocks of `e`'s entry body. The returned structure stays charged to
     /// `m` ([`Uniformity::ledger_bytes`]); the analysis' own tables are released.
     pub fn of(e: &Entry, body: &Body, m: &mut Meter) -> Result<Uniformity, Error> {
-        Uniformity::analyze(e, body, Among::Workgroup, None, &[], 0, m)
-    }
-
-    /// [`of`](Self::of) for a dispatch whose threadgroups have one thread along the axes `unit`
-    /// (the module docs, "Unit axes").
-    pub fn with_unit_axes(
-        e: &Entry,
-        body: &Body,
-        unit: UnitAxes,
-        m: &mut Meter,
-    ) -> Result<Uniformity, Error> {
-        Uniformity::analyze(e, body, Among::Workgroup, None, &[], unit, m)
+        Uniformity::analyze(e, body, Among::Workgroup, None, &[], m)
     }
 
     /// The uniformity of the blocks and values of vertex function `e`'s entry body among the
@@ -598,7 +553,7 @@ impl Uniformity {
         uniform: &[u32],
         m: &mut Meter,
     ) -> Result<Uniformity, Error> {
-        Uniformity::analyze(e, body, Among::Primitive, None, uniform, 0, m)
+        Uniformity::analyze(e, body, Among::Primitive, None, uniform, m)
     }
 
     /// The uniformity of the blocks of `e`'s entry body among the invocations `among` relates,
@@ -613,7 +568,7 @@ impl Uniformity {
         loops: &LoopForest<BlockId>,
         m: &mut Meter,
     ) -> Result<Uniformity, Error> {
-        Uniformity::analyze(e, body, among, Some(loops), &[], 0, m)
+        Uniformity::analyze(e, body, among, Some(loops), &[], m)
     }
 
     /// The analysis among `among`, with the barrier contract where `contract` gives the loop
@@ -624,7 +579,6 @@ impl Uniformity {
         among: Among,
         contract: Option<&LoopForest<BlockId>>,
         uniform: &[u32],
-        unit: UnitAxes,
         m: &mut Meter,
     ) -> Result<Uniformity, Error> {
         let n = body.insts.len();
@@ -659,7 +613,7 @@ impl Uniformity {
         let result = PostDomTree::compute(&e.cfg, m)
             .map_err(Error::from)
             .and_then(|pdom| {
-                let r = State::new(e, body, among, uniform, unit, m)
+                let r = State::new(e, body, among, uniform, m)
                     .and_then(|st| match contract {
                         Some(loops) => st.pin(&pdom, loops, m),
                         None => Ok(st),
@@ -690,7 +644,6 @@ impl<'a> State<'a> {
         body: &'a Body,
         among: Among,
         uniform: &[u32],
-        unit: UnitAxes,
         m: &mut Meter,
     ) -> Result<State<'a>, Error> {
         let n = body.insts.len();
@@ -705,18 +658,14 @@ impl<'a> State<'a> {
             .unwrap_or_default();
         let mut args = vec![ALL; params.len()];
         for b in &e.ep.params {
-            let lanes =
-                (params.get(b.param as usize)).and_then(|&ty| match e.module.types().get(ty) {
-                    Some(Type::Vector { len, .. }) if *len <= LANES => Some(*len),
-                    _ => None,
-                });
             if let Some(a) = args.get_mut(b.param as usize) {
-                *a = match &b.role {
-                    ParamRole::Builtin(builtin) => builtin_lanes(builtin, among, lanes, unit),
-                    role => match divergent_role(role, among) {
-                        true => ALL,
-                        false => 0,
-                    },
+                let divergent = match &b.role {
+                    ParamRole::Builtin(builtin) => per_invocation(builtin, among),
+                    role => divergent_role(role, among),
+                };
+                *a = match divergent {
+                    true => ALL,
+                    false => 0,
                 };
             }
         }

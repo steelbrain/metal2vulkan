@@ -1928,7 +1928,6 @@ field	metal2vulkan::cache::VariantKey.folded_groups	pub folded_groups: bool
 field	metal2vulkan::cache::VariantKey.kept_imageblock_bytes	pub kept_imageblock_bytes: Option<u32>
 field	metal2vulkan::cache::VariantKey.line_band	pub line_band: Option<crate::pipeline::BandPrimitive>
 field	metal2vulkan::cache::VariantKey.merged_draws	pub merged_draws: bool
-field	metal2vulkan::cache::VariantKey.one_row	pub one_row: bool
 field	metal2vulkan::cache::VariantKey.open_cl_lines	pub open_cl_lines: BTreeSet<SlotRef>
 field	metal2vulkan::cache::VariantKey.partial_threadgroups	pub partial_threadgroups: bool
 field	metal2vulkan::cache::VariantKey.primitive_id_indices	pub primitive_id_indices: Option<crate::metal::IndexType>
@@ -1943,7 +1942,6 @@ field	metal2vulkan::cache::VariantKey.srgb_textures	pub srgb_textures: BTreeSet<
 field	metal2vulkan::cache::VariantKey.storage_images	pub storage_images: BTreeMap<SlotRef, StorageImageChoice>
 field	metal2vulkan::cache::VariantKey.swizzled_storage	pub swizzled_storage: BTreeSet<SlotRef>
 field	metal2vulkan::cache::VariantKey.texel_buffer_parts	pub texel_buffer_parts: BTreeMap<SlotRef, u32>
-field	metal2vulkan::cache::VariantKey.unit_axes	pub unit_axes: u8
 field	metal2vulkan::cache::VariantKey.zeroed_colors	pub zeroed_colors: BTreeMap<u32, crate::metal::PixelFormat>
 field	metal2vulkan::device::AllocationLimits.max_buffer_size	pub max_buffer_size: u64
 field	metal2vulkan::device::AllocationLimits.max_memory_allocation_size	pub max_memory_allocation_size: u64
@@ -2434,7 +2432,6 @@ field	metal2vulkan::pipeline::LoweringInputs.max_call_stack_depth	pub max_call_s
 field	metal2vulkan::pipeline::LoweringInputs.merged_draws	pub merged_draws: bool
 field	metal2vulkan::pipeline::LoweringInputs.multisampled	pub multisampled: bool
 field	metal2vulkan::pipeline::LoweringInputs.object_payload	pub object_payload: Option<u32>
-field	metal2vulkan::pipeline::LoweringInputs.one_row	pub one_row: bool
 field	metal2vulkan::pipeline::LoweringInputs.open_cl_lines	pub open_cl_lines: BTreeSet<SlotRef>
 field	metal2vulkan::pipeline::LoweringInputs.open_cl_mode	pub open_cl_mode: bool
 field	metal2vulkan::pipeline::LoweringInputs.partial_threadgroups	pub partial_threadgroups: bool
@@ -2464,7 +2461,6 @@ field	metal2vulkan::pipeline::LoweringInputs.threadgroup_size_matches_tile_size	
 field	metal2vulkan::pipeline::LoweringInputs.tile_attachments	pub tile_attachments: Option<BTreeMap<u32, metal::PixelFormat>>
 field	metal2vulkan::pipeline::LoweringInputs.unattached_colors	pub unattached_colors: BTreeSet<u32>
 field	metal2vulkan::pipeline::LoweringInputs.uniform_varyings	pub uniform_varyings: BTreeSet<VaryingKey>
-field	metal2vulkan::pipeline::LoweringInputs.unit_axes	pub unit_axes: u8
 field	metal2vulkan::pipeline::LoweringInputs.vertex_fetch	pub vertex_fetch: Option<VertexFetchProjection>
 field	metal2vulkan::pipeline::LoweringInputs.viewport_index_varying	pub viewport_index_varying: bool
 field	metal2vulkan::pipeline::LoweringInputs.word_colors	pub word_colors: BTreeMap<u32, metal::format::WordAttachment>
@@ -9970,7 +9966,6 @@ variant	metal2vulkan::pipeline::RuntimeFact::LocalSizeConstraint	LocalSizeConstr
 variant	metal2vulkan::pipeline::RuntimeFact::LocalSizeLimits	LocalSizeLimits
 variant	metal2vulkan::pipeline::RuntimeFact::MergedDraws	MergedDraws
 variant	metal2vulkan::pipeline::RuntimeFact::ObjectThreadgroupArena	ObjectThreadgroupArena { static_bytes: u32, payload: Option<u32> }
-variant	metal2vulkan::pipeline::RuntimeFact::OneRow	OneRow
 variant	metal2vulkan::pipeline::RuntimeFact::OpenClLineTexture	OpenClLineTexture { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::OpenClMode	OpenClMode
 variant	metal2vulkan::pipeline::RuntimeFact::OutOfBoundsAlpha	OutOfBoundsAlpha { slot: SlotRef }
@@ -10012,7 +10007,6 @@ variant	metal2vulkan::pipeline::RuntimeFact::TileFunction	TileFunction
 variant	metal2vulkan::pipeline::RuntimeFact::TileImageblock	TileImageblock { data_size: u32, alignment: u32 }
 variant	metal2vulkan::pipeline::RuntimeFact::TileThreadgroup	TileThreadgroup { tile_sized: bool }
 variant	metal2vulkan::pipeline::RuntimeFact::TileThreadgroupMemory	TileThreadgroupMemory { index: u32 }
-variant	metal2vulkan::pipeline::RuntimeFact::UnitAxes	UnitAxes { axes: u8, relief: u8 }
 variant	metal2vulkan::pipeline::RuntimeFact::VertexBufferStride	VertexBufferStride { layout: u32 }
 variant	metal2vulkan::pipeline::RuntimeFact::VertexFetch	VertexFetch { attr: u32 }
 variant	metal2vulkan::pipeline::RuntimeFact::ViewportCount	ViewportCount

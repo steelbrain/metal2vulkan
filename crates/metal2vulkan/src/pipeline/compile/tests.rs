@@ -641,7 +641,6 @@ fn the_inputs_encoding_is_the_earlier_derived_debug() {
             inputs_encoding(&inputs),
             derived
                 .replace(", emulated_simdgroups: false", "")
-                .replace(", one_row: false", "")
                 .replace(", stage_input: None", "")
                 .replace(", signed_color_attachments: {}", "")
                 .replace(", tile_attachments: None", "")
@@ -698,7 +697,6 @@ fn the_inputs_encoding_is_the_earlier_derived_debug() {
                 .replace(", object_payload: None", "")
                 .replace(", tessellation: None", "")
                 .replace(", region_viewports: false", "")
-                .replace(", unit_axes: 0", "")
                 .replace(", push_base: 0", ""),
             "{derived}"
         );

@@ -243,15 +243,9 @@ pub fn check(
         Some(_) => divergent::plan(cx, strategy, u, divergent::SyncSet::Emulated, m).map(Some),
         None => Ok(None),
     };
-    // Where the walk is predicated, the unit axes that would relieve it.
-    let relief = match &planned {
-        Ok(Some(_)) => divergent::unit_relief(cx, strategy, u, divergent::SyncSet::Emulated, m),
-        _ => Ok(0),
-    };
     if given.is_none() {
         m.release(u.ledger_bytes());
     }
-    let relief = relief?;
     let (predication, demoted) = match planned? {
         Some((p, extra)) => (Some(p), Some(extra)),
         None => (None, None),
@@ -316,9 +310,6 @@ pub fn check(
     cx.families.simd.predication = predication;
     if let Some(fact) = fact {
         cx.facts.insert(fact);
-    }
-    if relief != 0 {
-        cx.facts.insert(RuntimeFact::UnitAxes { axes: 0, relief });
     }
     Ok(())
 }

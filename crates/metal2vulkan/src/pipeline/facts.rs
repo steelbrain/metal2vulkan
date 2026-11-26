@@ -250,25 +250,7 @@ pub enum RuntimeFact {
     /// where a simdgroup spans two rows of its threadgroup (`Lockstep::rows`). A dispatch region
     /// of one row runs on the planned pipeline whatever its width, without whole subgroups, where
     /// no pair meets; any other region keeps the tier's whole subgroups or emulated simdgroups.
-    /// A dispatch whose every region is one row asks for the kernel's one-row variant
-    /// (`VariantKey::one_row`), which has none of those barriers.
     RowLockstep,
-    /// The kernel was compiled under `VariantKey::one_row` (`LoweringInputs::one_row`): it runs
-    /// threadgroups whose simdgroups each lie within one row, without the lockstep barriers that
-    /// order only pairs meeting where a simdgroup spans two rows (its threadgroup ones kept),
-    /// whatever its device. Its plans state the variant, and a dispatch with a region of more than
-    /// one row asks for the variant without it.
-    OneRow,
-    /// Unit axes (`lower::simd::uniform`, "Unit axes"; bit 0 `x`, bit 1 `y`, bit 2 `z`). Where
-    /// `axes` is 0, the kernel's walk is predicated and `relief` holds, at bit `m − 1`, each mask
-    /// `m` of axes under which fewer of its synchronizations' blocks are divergent once its
-    /// threads' positions along them are taken as uniform: a dispatch whose threadgroups have one
-    /// thread along exactly the axes `m` may run the kernel's unit-axes variant
-    /// (`VariantKey::unit_axes`). Where `axes` is not 0, the
-    /// kernel was compiled under that variant (`LoweringInputs::unit_axes`), `relief` is 0, its
-    /// plans state the variant, and a dispatch with more than one thread along one of `axes` asks
-    /// for the variant without it.
-    UnitAxes { axes: u8, relief: u8 },
     /// The kernel was compiled under `VariantKey::flat_grid` (`LoweringInputs::flat_grid`): it
     /// runs any grid in threadgroups of its own size, reading the grid from the 32-byte region
     /// record at its `PushField::ReplayRegionAddress`, which a preprocess writes beside the
@@ -677,8 +659,6 @@ impl RuntimeFact {
             RuntimeFact::OpenClMode => "OpenClMode",
             RuntimeFact::OpenClLineTexture { .. } => "OpenClLineTexture",
             RuntimeFact::RowLockstep => "RowLockstep",
-            RuntimeFact::OneRow => "OneRow",
-            RuntimeFact::UnitAxes { .. } => "UnitAxes",
             RuntimeFact::FlatGrid => "FlatGrid",
             RuntimeFact::CallThreadgroups => "CallThreadgroups",
             RuntimeFact::SparseTextureWrites { .. } => "SparseTextureWrites",

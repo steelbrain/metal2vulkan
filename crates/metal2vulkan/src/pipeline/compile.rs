@@ -222,15 +222,6 @@ impl<'a> InputsFrom<'a> {
         }
     }
 
-    /// Whether the stage compiles as a kernel's one-row variant (`LoweringInputs::one_row`): the
-    /// given inputs' say; a render pipeline's stage never does.
-    fn one_row(&self) -> bool {
-        match self {
-            InputsFrom::Given(i) => i.one_row,
-            InputsFrom::Vertex(..) | InputsFrom::Fragment(..) => false,
-        }
-    }
-
     /// Whether the stage compiles as the kernel of a compute pipeline of OpenCL mode
     /// (`LoweringInputs::open_cl_mode`): the given inputs' say; a render pipeline's stage never
     /// does.
@@ -1036,9 +1027,9 @@ struct KeptOrder {
     ordered: Arc<Specialized>,
 }
 
-/// The most ordered entries one [`StageEntry`] keeps. A device's profile fixes all of the key
-/// but whether the kernel is its one-row variant, so a creation asks for at most two.
-const KEPT_ORDERS: usize = 2;
+/// The most ordered entries one [`StageEntry`] keeps. A device's profile fixes the whole key, so a
+/// creation asks for one.
+const KEPT_ORDERS: usize = 1;
 
 impl std::fmt::Debug for StageEntries {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -2816,7 +2807,7 @@ fn decoded_module(r: &Request<'_>, m: &mut Meter) -> Result<air::Decoded, Error>
 /// ([`StageEntries::ordered`]): the check of the partition its kernel observes and its compile
 /// read one ordered entry.
 fn ordered_entry(r: &Request<'_>, p: &DeviceProfile, m: &mut Meter) -> Result<Specialized, Error> {
-    let key = OrderKey::of(p, r.inputs.one_row());
+    let key = OrderKey::of(p);
     if let Shared::Entry(entries, fd) = r.shared {
         let open_cl = (r.inputs.open_cl_mode(), r.inputs.open_cl_lines());
         let depth = r.inputs.call_stack_depth();

@@ -35,7 +35,7 @@
 use std::collections::BTreeMap;
 
 use crate::budget::{Budget, Meter, SPIRV_WORDS};
-use crate::device::subgroup::{OpBits, SimdClass, SubgroupRequirement, Tier};
+use crate::device::subgroup::{OpBits, SimdClass, Tier};
 use crate::device::DevicePolicy;
 use crate::error::Error;
 use crate::library::FunctionConstantValues;
@@ -43,9 +43,7 @@ use crate::lower::select::{LowerInputs, Plan};
 use crate::pipeline::compile::{compile_bitcode, EntryRef};
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
-use crate::pipeline::testing::{
-    llvm_assemble, profile, typed_module, typed_module_with, AssembleError, Scratch,
-};
+use crate::pipeline::testing::{llvm_assemble, profile, typed_module, AssembleError, Scratch};
 use crate::spirv::interp::{run, Buffer, Config, Order, Resources, SubgroupSize};
 use crate::spirv::ir::TypedModule;
 
@@ -3346,42 +3344,20 @@ done:
 /// A tree reduction whose guard tests its `ushort` index widened to 32 bits ([`ZEXT_GUARD`]),
 /// or its `short` index sign-extended so ([`SEXT_GUARD`]), on the 780M (whose maximal
 /// reconvergence on 32-lane subgroups makes a lockstep simdgroup barrier a tangle barrier). Its
-/// own pipeline keeps the pair of `tg[x]`'s load and store, which threads of two rows meet in:
-/// `Direct`, 32 lanes pinned, `RowLockstep`, and lockstep's words in a simdgroup of two rows. Its
-/// one-row variant takes no simdgroup barrier, no simd class and no pinned subgroup, and leaves
-/// the sum at every width. A signed test of zero-extended indices ([`MIXED_GUARD`]) clears
-/// nothing: its one-row variant keeps the barrier and the pin.
+/// pipeline keeps the pair of `tg[x]`'s load and store, which threads of two rows meet in:
+/// `Direct`, 32 lanes pinned, `RowLockstep` (no pair meets where each simdgroup lies within one
+/// row), and lockstep's words in a simdgroup of two rows. A signed test of zero-extended indices
+/// ([`MIXED_GUARD`]) clears nothing there: it keeps the barrier and the pin, and records no
+/// `RowLockstep`.
 #[test]
-fn a_guard_on_its_index_widened_once_clears_a_tree_reduction_in_one_row() {
+fn a_guard_on_its_index_widened_once_clears_a_tree_reduction_in_rows() {
     let p = profile("amd-780m-radv", DevicePolicy::RESIDENT_TABLES).expect("profile");
-    let mut one_row = LowerInputs::new();
-    one_row.one_row = true;
     let sum: u32 = (0..16).sum();
     for (name, body) in [("zext_guard", ZEXT_GUARD), ("sext_guard", SEXT_GUARD)] {
         let Some(bc) = assemble_text(name, &format!("{HEADER}\n{body}\n{}", footer_ushort(name)))
         else {
             return;
         };
-        let (row, rm) =
-            typed_module_with(&bc, name, &p, &one_row).unwrap_or_else(|e| panic!("{name}: {e}"));
-        assert_eq!(
-            uses(&row, "barrier.lockstep.simdgroup"),
-            0,
-            "{name}: {:?}",
-            row.census()
-        );
-        assert_eq!(row.simd, (SimdClass::None, Tier::NoSubgroup), "{name}");
-        assert_eq!(row.subgroup, SubgroupRequirement::NONE, "{name}");
-        for local in [[16, 1, 1], [32, 1, 1]] {
-            let threads = local.iter().product::<u32>() as usize;
-            for lanes in CHUNKED {
-                assert_eq!(
-                    run_shape(&row, &rm, local, lanes),
-                    vec![sum; threads],
-                    "{name} at {local:?} {lanes:?}"
-                );
-            }
-        }
         let (own, m) = typed_module(&bc, name, &p).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert_eq!(own.simd.1, Tier::Direct, "{name}: {:?}", own.census());
         assert_eq!(own.subgroup.size, Some(32), "{name}");
@@ -3399,13 +3375,13 @@ fn a_guard_on_its_index_widened_once_clears_a_tree_reduction_in_one_row() {
     ) else {
         return;
     };
-    let (row, _) =
-        typed_module_with(&bc, name, &p, &one_row).unwrap_or_else(|e| panic!("{name}: {e}"));
+    let (own, _) = typed_module(&bc, name, &p).unwrap_or_else(|e| panic!("{name}: {e}"));
     assert!(
-        uses(&row, "barrier.lockstep.simdgroup") > 0,
+        uses(&own, "barrier.lockstep.simdgroup") > 0,
         "{:?}",
-        row.census()
+        own.census()
     );
-    assert_eq!(row.simd.1, Tier::Direct);
-    assert_eq!(row.subgroup.size, Some(32));
+    assert_eq!(own.simd.1, Tier::Direct);
+    assert_eq!(own.subgroup.size, Some(32));
+    assert!(!own.facts.contains(&RuntimeFact::RowLockstep));
 }

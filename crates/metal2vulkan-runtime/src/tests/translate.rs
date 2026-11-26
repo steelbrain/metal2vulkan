@@ -144,41 +144,6 @@ mod on_device {
             })
     }
 
-    /// The facts the runtime reads of `descriptor`'s kernel, one that observes its threadgroup
-    /// partition, on `device`, lowered as the state lowers it: of its plain module, under the
-    /// inputs the kernel reads, and of its emulated-SIMD-group variant, the same inputs with
-    /// emulated SIMD groups.
-    fn facts_read(
-        name: &str,
-        device: &Device,
-        descriptor: &ComputePipelineDescriptor,
-    ) -> [Vec<RuntimeFact>; 2] {
-        let StageSource::Function(function) = &descriptor.kernel else {
-            unreachable!("a fixture's kernel is a function");
-        };
-        let translator = device.translator();
-        let budget = Budget::standard();
-        let entries = StageEntries::new();
-        let plain = translator
-            .kernel_inputs_read(function, &descriptor.lowering_inputs(), &budget, &entries)
-            .unwrap_or_else(|error| panic!("{name}: {error}"));
-        let emulated = plain.kernel_variant(KernelVariant::EmulatedSimdgroups);
-        [plain, emulated].map(|inputs| {
-            let compiled = translator
-                .compile_function_from_entries(function, &inputs, &budget, &entries)
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let mut lowered = descriptor.clone();
-            lowered.kernel = StageSource::Compiled(compiled);
-            translator
-                .compile_compute_pipeline(&lowered, &budget)
-                .unwrap_or_else(|error| panic!("{name}: {error}"))
-                .dependencies
-                .iter()
-                .map(|dependency| dependency.fact)
-                .collect()
-        })
-    }
-
     /// Whether `state`'s make made its emulated-SIMD-group module.
     fn emulated_made(state: &ComputePipelineState) -> bool {
         use crate::pipeline::Lowered;
@@ -2220,15 +2185,14 @@ attributes #1 = { convergent nounwind willreturn }
 
     /// `unit_axes_walk`: a loop of `(y & 3) + 1` iterations at row `y`, each a SIMD-group sum over
     /// the threads still in it, in one threadgroup of 8 x 8 threads and one of 8 x 10 (a partial
-    /// SIMD group of 16 last). Where its SIMD groups are emulated its walk is predicated, and the
-    /// translator states the unit axes that would make it less divergent (`RuntimeFact::UnitAxes`
-    /// with no axes): the module is the general one, and every device creates the state and runs
-    /// both sizes, on the module whose walk states it where its tier emulates SIMD groups, and on
-    /// the emulated module at 8 x 10 where it runs only whole ones. Every answer is Metal's (M3 Max,
-    /// macOS 27.0.1): thread `t` adds, at each iteration `i` of its own, `i + 1` times the threads
-    /// of its SIMD group whose own trip count exceeds `i`.
+    /// SIMD group of 16 last). Where its SIMD groups are emulated its walk is predicated: every
+    /// device creates the state and runs both sizes, on the module whose walk is predicated where
+    /// its tier emulates SIMD groups, and on the emulated module at 8 x 10 where it runs only
+    /// whole ones. Every answer is Metal's (M3 Max, macOS 27.0.1): thread `t` adds, at each
+    /// iteration `i` of its own, `i + 1` times the threads of its SIMD group whose own trip count
+    /// exceeds `i`.
     #[test]
-    fn every_device_runs_a_kernel_whose_walk_unit_axes_could_relieve() {
+    fn every_device_runs_a_kernel_whose_walk_diverges_by_row() {
         let Some(descriptor) = descriptor("unit_axes_walk") else {
             return;
         };
@@ -2271,26 +2235,10 @@ attributes #1 = { convergent nounwind willreturn }
                     "{name}: the sums in a threadgroup of 8 x {rows}"
                 );
             }
-            // Which modules the runtime read the relief of: the plain one, and the emulated
-            // variant.
-            let relieved = |facts: &[RuntimeFact]| {
-                facts.iter().any(|fact| match *fact {
-                    RuntimeFact::UnitAxes { axes, relief } => axes == 0 && relief != 0,
-                    _ => false,
-                })
-            };
-            let [plain, emulated] = facts_read(name, &device, &descriptor);
-            let (plain, emulated) = (relieved(&plain), relieved(&emulated));
-            let made = emulated_made(&state);
-            assert!(
-                plain || (emulated && made),
-                "{name}: a module that states unit axes with no axes ran (plain {plain}, emulated \
-                 {emulated}, emulated made {made})"
-            );
             println!(
-                "{name}: unit axes with no axes stated by the {} module, which ran; sums checked \
-                 in threadgroups of 8 x 8 and 8 x 10",
-                if plain { "plain" } else { "emulated" }
+                "{name}: sums checked in threadgroups of 8 x 8 and 8 x 10 (emulated module made: \
+                 {})",
+                emulated_made(&state)
             );
         });
     }

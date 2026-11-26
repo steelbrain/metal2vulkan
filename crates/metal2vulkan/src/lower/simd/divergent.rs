@@ -291,7 +291,7 @@ pub fn barriers(
             &computed
         }
     };
-    let r = (|| -> Result<Option<(Predication, bool, u8)>, Error> {
+    let r = (|| -> Result<Option<(Predication, bool)>, Error> {
         let divergent = cx.body.blocks.iter().any(|(b, block)| {
             !u.is_uniform(b)
                 && block.inst_ids().any(|id| {
@@ -305,21 +305,16 @@ pub fn barriers(
         if !divergent && !partial {
             return Ok(None);
         }
-        // A partial threadgroup walks to every barrier whatever its axes.
-        let relief = match divergent && !partial {
-            true => unit_relief(cx, strategy, u, set, m)?,
-            false => 0,
-        };
         let (mut p, extra) = plan(cx, strategy, u, set, m)?;
         demote(cross, extra);
         p.vote_word = sync_in_loop(cx, &p, m)?;
         p.partial_groups = partial;
-        Ok(Some((p, divergent, relief)))
+        Ok(Some((p, divergent)))
     })();
     if given.is_none() {
         m.release(u.ledger_bytes());
     }
-    let Some((p, divergent, relief)) = r? else {
+    let Some((p, divergent)) = r? else {
         return Ok(());
     };
     if p.vote_word {
@@ -350,80 +345,13 @@ pub fn barriers(
         cx.facts.insert(RuntimeFact::PredicationVote);
         vote_in_object_arena(cx);
     }
-    if relief != 0 {
-        cx.facts.insert(RuntimeFact::UnitAxes { axes: 0, relief });
-    }
     cx.families.simd.predication = Some(p);
     Ok(())
 }
 
-/// The workgroup uniformity of `cx`'s entry: a kernel's under the unit axes it is compiled for
-/// (`LoweringInputs::unit_axes`, `uniform`'s "Unit axes"), every other stage's as it is.
+/// The workgroup uniformity of `cx`'s entry.
 pub fn workgroup_uniformity(cx: &SelectCx<'_>, m: &mut Meter) -> Result<Uniformity, Error> {
-    let unit = match cx.stage {
-        Stage::Kernel => cx.inputs.unit_axes,
-        _ => 0,
-    };
-    Uniformity::with_unit_axes(cx.entry, cx.body, unit, m)
-}
-
-/// The blocks of `cx`'s entry that hold a synchronization of `set` and that `u` does not prove
-/// uniform.
-fn divergent_syncs(
-    cx: &SelectCx<'_>,
-    strategy: &[Option<Strategy>],
-    u: &Uniformity,
-    set: SyncSet,
-) -> usize {
-    (cx.body.blocks.iter())
-        .filter(|(b, block)| {
-            !u.is_uniform(*b)
-                && block.inst_ids().any(|id| {
-                    (cx.values.inst(id))
-                        .and_then(|v| strategy.get(v.index()))
-                        .and_then(Option::as_ref)
-                        .is_some_and(|s| set.holds(s))
-                })
-        })
-        .count()
-}
-
-/// The unit-axes relief of a kernel compiled without unit axes and walked predicated under `u`
-/// (`RuntimeFact::UnitAxes`): bit `m − 1` for each mask `m` of axes (bit 0 `x`, bit 1 `y`, bit 2
-/// `z`) under which fewer of the blocks that hold a synchronization of `set` are divergent once the
-/// threads' positions along those axes are taken as uniform (`uniform`'s "Unit axes"); 0 for any
-/// other function. Taking more positions as uniform makes no block divergent, so where the three
-/// axes together relieve none no mask does: one more analysis then, at most seven.
-pub(super) fn unit_relief(
-    cx: &SelectCx<'_>,
-    strategy: &[Option<Strategy>],
-    u: &Uniformity,
-    set: SyncSet,
-    m: &mut Meter,
-) -> Result<u8, Error> {
-    if cx.stage != Stage::Kernel || cx.inputs.unit_axes != 0 {
-        return Ok(0);
-    }
-    let base = divergent_syncs(cx, strategy, u, set);
-    if base == 0 {
-        return Ok(0);
-    }
-    let fewer = |axes: u8, m: &mut Meter| -> Result<bool, Error> {
-        let under = Uniformity::with_unit_axes(cx.entry, cx.body, axes, m)?;
-        let n = divergent_syncs(cx, strategy, &under, set);
-        m.release(under.ledger_bytes());
-        Ok(n < base)
-    };
-    if !fewer(0b111, m)? {
-        return Ok(0);
-    }
-    let mut relief = 1 << 6;
-    for axes in 1..0b111u8 {
-        if fewer(axes, m)? {
-            relief |= 1 << (axes - 1);
-        }
-    }
-    Ok(relief)
+    Uniformity::of(cx.entry, cx.body, m)
 }
 
 /// An object function's arena fact with the vote word in its static part, which the binder checks

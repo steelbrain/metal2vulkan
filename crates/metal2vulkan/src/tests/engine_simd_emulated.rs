@@ -2131,18 +2131,14 @@ fn run_local(plan: &Plan, m: &TypedModule, local: [u32; 3], lanes: SubgroupSize)
     words(&run_orders(m, lanes, &res)[0])
 }
 
-/// A threadgroup of one row runs a tile whose halves meet only across rows without its lockstep
-/// simdgroup barrier ([`row_tile_kernel`], on the Iris Xe, whose maximal reconvergence on
-/// 32-lane subgroups makes that barrier a tangle barrier). Its own pipeline keeps the barrier,
-/// takes `CrossLane(BASIC)` and `Direct` (32 lanes pinned), records `RowLockstep`, and leaves
-/// Metal's words in a threadgroup 144 wide and 2 tall, which runs on it, the shared lane's word
-/// included. Its one-row variant (`LoweringInputs::one_row`) keeps the threadgroup barrier the
-/// `@nb` pair takes, has no simdgroup barrier, no simd class and no pinned subgroup, states
-/// `OneRow`, and leaves Metal's words in a threadgroup of one row (128 or 48 threads) at every
-/// width. The same kernel with a simdgroup sum keeps its pinned pipeline and records no
-/// `RowLockstep`.
+/// A tile whose halves meet only across rows ([`row_tile_kernel`], on the Iris Xe, whose maximal
+/// reconvergence on 32-lane subgroups makes its lockstep simdgroup barrier a tangle barrier) keeps
+/// that barrier and the threadgroup barrier the `@nb` pair takes, takes `CrossLane(BASIC)` and
+/// `Direct` (32 lanes pinned), records `RowLockstep`, and leaves Metal's words in a threadgroup
+/// 144 wide and 2 tall, the shared lane's word included. The same kernel with a simdgroup sum keeps
+/// its pinned pipeline and records no `RowLockstep`.
 #[test]
-fn a_one_row_dispatch_drops_the_lockstep_simdgroup_barriers() {
+fn a_row_tile_keeps_its_lockstep_barriers_and_records_row_lockstep() {
     let dev = device("intel-irisxe-rplp-anv");
     let p = dev.profile();
     let name = "row_tile";
@@ -2170,42 +2166,10 @@ fn a_one_row_dispatch_drops_the_lockstep_simdgroup_barriers() {
         (SimdClass::CrossLane(OpBits::BASIC), Tier::Direct)
     );
     assert!(own.facts.contains(&RuntimeFact::RowLockstep));
-    assert!(!own.facts.contains(&RuntimeFact::OneRow));
     assert_eq!(
         run_local(&own, &m, wide, SubgroupSize::W32),
         row_tile_words(wide)
     );
-
-    // The one-row variant.
-    let mut inputs = LoweringInputs::new();
-    inputs.one_row = true;
-    let (row, rm) =
-        typed_module_with(&bc, name, p, &inputs).unwrap_or_else(|e| panic!("{name}: {e}"));
-    assert_eq!(
-        uses(&row, "barrier.lockstep.simdgroup"),
-        0,
-        "{:?}",
-        row.census()
-    );
-    assert_eq!(
-        uses(&row, "barrier.lockstep.threadgroup"),
-        1,
-        "{:?}",
-        row.census()
-    );
-    assert_eq!(row.simd, (SimdClass::None, Tier::NoSubgroup));
-    assert_eq!(row.subgroup, SubgroupRequirement::NONE);
-    assert!(row.facts.contains(&RuntimeFact::OneRow));
-    assert!(!row.facts.contains(&RuntimeFact::RowLockstep));
-    for local in [[128, 1, 1], [48, 1, 1]] {
-        for lanes in [SubgroupSize::W8, SubgroupSize::W16, SubgroupSize::W32] {
-            assert_eq!(
-                run_local(&row, &rm, local, lanes),
-                row_tile_words(local),
-                "{local:?} at {lanes:?}"
-            );
-        }
-    }
 
     // With a simdgroup operation of its own the kernel keeps its pinned pipeline.
     let summed = "row_tile_sum";

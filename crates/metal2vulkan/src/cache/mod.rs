@@ -70,7 +70,7 @@ pub const SEMANTICS_VERSION: u32 = 2304;
 /// re-typed in an encoded type, its `codec` body or its `envelope`. A variant removed while its tag
 /// stays unused needs no bump: an entry holding it fails to decode, which is a miss. The commit that
 /// bumps it says what changed; this comment keeps no history.
-pub const ARTIFACT_FORMAT_VERSION: u32 = 597;
+pub const ARTIFACT_FORMAT_VERSION: u32 = 598;
 
 /// The version of what this crate gives a runtime for the runs of a compiled pipeline, beside the
 /// compile: the device a run opens and what it enables, the Vulkan and Metal vocabularies a runtime
@@ -155,19 +155,6 @@ pub struct VariantKey {
     /// runs simdgroups on whole subgroups.
     #[cfg_attr(feature = "serde", serde(default))]
     pub emulated_simdgroups: bool,
-    /// Every threadgroup of the dispatch is one row, so each of its simdgroups lies within the row:
-    /// a kernel whose lockstep simdgroup barriers order only pairs that meet where a simdgroup
-    /// spans two rows (`RuntimeFact::RowLockstep`) runs without them, keeping its threadgroup ones,
-    /// and without the subgroup size they pinned (`LoweringInputs::one_row`). A dispatch whose
-    /// every region is one row asks for it.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub one_row: bool,
-    /// The axes along which every threadgroup of the dispatch has one thread (bit 0 `x`, bit 1 `y`,
-    /// bit 2 `z`): a kernel whose walk is predicated, where those axes' thread positions alone make
-    /// some of its synchronizations' blocks divergent (`RuntimeFact::UnitAxes`'s `relief`),
-    /// compiles with them uniform (`LoweringInputs::unit_axes`).
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub unit_axes: u8,
     /// Texture slots bound to an 8-bit sRGB texture the device cannot sample, which the runtime
     /// holds as the format's UNORM twin (`metal::format::srgb_raw_twin`), whose views read the
     /// codes (`c / 255`): every slot of a `RuntimeFact::SrgbTexture` the shape binds in such a
@@ -381,8 +368,6 @@ impl VariantKey {
             && self.psb_slots.is_empty()
             && self.pulled_vertex_buffers.is_empty()
             && !self.emulated_simdgroups
-            && !self.one_row
-            && self.unit_axes == 0
             && self.srgb_textures.is_empty()
             && self.texel_buffer_parts.is_empty()
             && self.address_maps.is_empty()
@@ -445,11 +430,6 @@ impl VariantKey {
             .collect();
         out.emulated_simdgroups =
             self.emulated_simdgroups && stage == crate::pipeline::sym::Stage::Kernel;
-        out.one_row = self.one_row && stage == crate::pipeline::sym::Stage::Kernel;
-        out.unit_axes = match stage {
-            crate::pipeline::sym::Stage::Kernel => self.unit_axes,
-            _ => 0,
-        };
         out.flat_grid = self.flat_grid && stage == crate::pipeline::sym::Stage::Kernel;
         out.call_threadgroups =
             self.call_threadgroups && stage == crate::pipeline::sym::Stage::Kernel;

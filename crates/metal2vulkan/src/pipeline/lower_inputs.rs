@@ -38,15 +38,6 @@ pub struct LoweringInputs {
     /// kernel has simdgroups this emulates; a vertex or fragment function compiles as without it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub emulated_simdgroups: bool,
-    /// A kernel runs threadgroups whose simdgroups each lie within one row
-    /// (`VariantKey::one_row`): the lockstep barriers it takes are its threadgroup ones alone
-    /// where, so dispatched, no pair wants more than a threadgroup barrier, on every device (the
-    /// old binder asks for it where `air::Lockstep::rows` holds), and with no simdgroup barrier it
-    /// takes no simd class and pins no subgroup for them. A kernel
-    /// compiled under it depends on `RuntimeFact::OneRow`. Any other function compiles as without
-    /// it.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub one_row: bool,
     /// A kernel's stage-input descriptor (`MTLComputePipelineDescriptor.stageInputDescriptor`): how
     /// each `[[stage_in]]` attribute is fetched from its buffer. A kernel reading a stage-in
     /// attribute needs it (`NeedsInput(StageInputDescriptor)` without it);
@@ -760,17 +751,6 @@ pub struct LoweringInputs {
     /// function that writes none. Any other stage compiles as without it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub region_viewports: bool,
-    /// The axes along which every threadgroup the kernel runs has one thread
-    /// (`VariantKey::unit_axes`; bit 0 `x`, bit 1 `y`, bit 2 `z`): there every thread's
-    /// `thread_position_in_threadgroup` is 0 and its `thread_position_in_grid` is its
-    /// threadgroup's `threadgroup_position_in_grid`, partial threadgroups included, so the
-    /// workgroup-uniformity analysis takes those lanes of the two builtins as uniform
-    /// (`lower::simd::uniform`, "Unit axes") and a block they alone made divergent is walked as a
-    /// uniform one. A kernel compiled under it states `RuntimeFact::UnitAxes { axes, .. }`, and its
-    /// plans run only dispatches whose threadgroups have one thread along every such axis. Any
-    /// other stage compiles as without it.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub unit_axes: u8,
     /// Where a fragment function's push fields start on `Device::from_queries`' profile, whose
     /// render pipeline pushes one range `[0, W)` for both stages, `W` the device's push window
     /// ([`DeviceProfile::push_window`](crate::device::DeviceProfile::push_window), 256 or 128):

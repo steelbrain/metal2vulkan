@@ -1683,10 +1683,6 @@ pub(crate) fn interface(
             | RuntimeFact::DeviceAddresses { .. } => {}
             // The stage-in region, which the encoder pushes (`FieldValue::StageInRegion`).
             RuntimeFact::StageInRegion => {}
-            // What a variant could relieve, which the module runs without: a predicated walk
-            // that unit axes would make less divergent. Every dispatch runs on this module,
-            // keeping its whole groups.
-            RuntimeFact::UnitAxes { axes: 0, .. } => {}
             // What the translator checks against the descriptor when it compiles, and nothing on
             // the device reads.
             RuntimeFact::CallStackDepth { .. } | RuntimeFact::OpenClMode => {}

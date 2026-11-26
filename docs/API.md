@@ -520,23 +520,13 @@ the widest mode is not weighed for it. The pin to 32 stays where 32 is the devic
 On the emulated tier, a simdgroup operation or barrier in a block whose control flow differs
 between threads is walked predicated: each thread carries a live flag, the threads that do not run
 the block take part in its exchanges as inactive lanes, and a loop that holds one votes on its
-exit. A kernel whose threads' positions alone make such a block differ, along some axes
-(`thread_position_in_threadgroup` or `thread_position_in_grid`, read by lane), states
-`RuntimeFact::UnitAxes { axes: 0, relief }`: `relief` holds, at bit `m - 1`, each mask `m` of axes
-(bit 0 `x`, bit 1 `y`, bit 2 `z`) under which fewer of those blocks differ once the positions along
-them are taken as uniform. In a threadgroup of one thread along an axis, Metal's
-`threads_per_threadgroup` is 1 there, so every thread's `thread_position_in_threadgroup` on that
-axis is 0 and its `thread_position_in_grid` is its threadgroup's position, partial threadgroups
-included. A dispatch of such threadgroups, where its axes are among the masks of `relief`, may
-run on the kernel's unit-axes variant (`VariantKey::unit_axes`, which `LoweringInputs::unit_axes`
-compiles): the same kernel with those positions uniform, walked without the predication they
-caused, giving the same answers. Its compile states `UnitAxes { axes, relief: 0 }`, and a
-dispatch with more than one thread along one of its axes takes the variant without them. A kernel has at most seven
-such variants per variant it runs on, one per mask. On the Iris Xe, an authored kernel of four shuffles each way and a
-simdgroup sum in a loop of 8 to 11 trips, in threadgroups of 8 x 1 x 16, ran 1.14 to 2.16 times
-the GPU time predicated (its trip count read from `thread_position_in_grid.y`) as with the same
-trip counts read from `threadgroup_position_in_grid.y`, over four sizes from 46 to 126 estimated
-words (one run each), with the same bits.
+exit. A block that the threads' positions alone make differ (`thread_position_in_threadgroup` or
+`thread_position_in_grid`, read by lane) is walked predicated at every threadgroup size. On the
+Iris Xe, an authored kernel of four shuffles each way and a simdgroup sum in a loop of 8 to 11
+trips, in threadgroups of 8 x 1 x 16, ran 1.14 to 2.16 times the GPU time predicated (its trip
+count read from `thread_position_in_grid.y`) as with the same trip counts read from
+`threadgroup_position_in_grid.y`, over four sizes from 46 to 126 estimated words (one run each),
+with the same bits.
 
 ### What the module contains
 
