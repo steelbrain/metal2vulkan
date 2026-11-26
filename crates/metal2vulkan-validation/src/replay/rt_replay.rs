@@ -117,6 +117,8 @@
 //!   them, no modules line carries one.
 //! - A dump of a listed command buffer holds the colour attachment its pass stored: the draw's
 //!   Private target, read back through a blit, green at every texel, and covering nothing.
+//! - A layered pass plays as the runtime builds it, not skipped: a draw renders the layer its
+//!   vertex function selects, the clear covers the other, and a blit and a dump read both slices.
 //!
 //! The runtime's device is opened behind the hang tripwire, as every device open in this crate
 //! is (`gpu.rs`), its kernels kept in a cache the test owns ([`ScratchCache`]).
@@ -555,6 +557,161 @@ fn a_dump_holds_the_colour_attachment_a_pass_stored() {
     ended.unwrap();
     let read = |name: &str| std::fs::read(dumps.path().join(name)).unwrap();
     assert_eq!(read("cb12-obj7.bin"), green);
+    assert_eq!(read("cb12-obj7.cover"), b"-");
+}
+
+/// What the layered pass of [`layered_pass`] leaves in its target's two slices, one after the
+/// other: slice 0 the clear's 7, slice 1 `rt6_layered_fragment`'s word for instance 0, which
+/// selected layer 1, `(1 << 8) | 1`, at every texel.
+fn layered_slices() -> Vec<u8> {
+    let slice = |word: u32| word.to_le_bytes().repeat(16);
+    [slice(7), slice((1 << 8) | 1)].concat()
+}
+
+/// A stream of a layered pass: `renderTargetArrayLength` 2 over colour attachment 0, a 2D array
+/// texture (#7) of two slices, R32Uint, 4 by 4, from slice 0, cleared to 7; one instance of
+/// `rt6_layered`'s fullscreen triangle (engine `rt6_layered`), which renders into the layer its
+/// buffer 0 names, 1. A blit copies both slices to a buffer (#10), which the stream checks as
+/// [`layered_slices`].
+fn layered_pass(dir: &ScratchDir) -> PathBuf {
+    written(dir, |w| {
+        let ll = metal2vulkan_devtools::engine_dir().join("rt6_layered.ll");
+        let functions = [("rt6_layered_vertex", 0, 1), ("rt6_layered_fragment", 1, 2)];
+        let library = w.blob(&library_of(dir, &ll, &functions))?;
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        let made = [Value::Blob(library)];
+        w.call("newLibraryWithData:error:", 1, 3, &made, &[])?;
+        for (id, (name, _, _)) in [4, 5].into_iter().zip(functions) {
+            let name = [Value::Str(name.into())];
+            w.call("newFunctionWithName:", 3, id, &name, &[])?;
+        }
+        // Colour 0's format R32Uint.
+        let pipeline = Value::Map(vec![
+            ("vertex".into(), Value::Object(4)),
+            ("fragment".into(), Value::Object(5)),
+            ("color0PixelFormat".into(), Value::Uint(53)),
+        ]);
+        let made = "newRenderPipelineStateWithDescriptor:error:";
+        w.call(made, 1, 6, &[pipeline], &[])?;
+        // A 2D array of two slices, R32Uint, 4 by 4, shader-read and render-target, Private.
+        let target = uints(&[
+            ("textureType", 3),
+            ("pixelFormat", 53),
+            ("width", 4),
+            ("height", 4),
+            ("arrayLength", 2),
+            ("usage", 5),
+            ("storageMode", 2),
+        ]);
+        w.call("newTextureWithDescriptor:", 1, 7, &[target], &[])?;
+        // The layer instance 0 renders into.
+        let layers = [
+            Value::Bytes(1u32.to_le_bytes().to_vec()),
+            Value::Uint(4),
+            Value::Uint(0),
+        ];
+        w.call("newBufferWithBytes:length:options:", 1, 8, &layers, &[])?;
+        let shared = [Value::Uint(128), Value::Uint(0)];
+        w.call("newBufferWithLength:options:", 1, 10, &shared, &[])?;
+        w.call("MTLRenderPassDescriptor.new", 0, 11, &[], &[])?;
+        let pass = uints(&[
+            ("renderTargetArrayLength", 2),
+            ("renderTargetWidth", 4),
+            ("renderTargetHeight", 4),
+        ]);
+        w.call("m2v.setPass", 11, 0, &[pass], &[])?;
+        let Value::Map(mut color) = uints(&[
+            ("level", 0),
+            ("slice", 0),
+            ("loadAction", 2),
+            ("storeAction", 1),
+        ]) else {
+            unreachable!("a map");
+        };
+        color.push(("texture".into(), Value::Object(7)));
+        let clear = [("red", 7.0), ("green", 0.0), ("blue", 0.0), ("alpha", 0.0)]
+            .map(|(key, value)| (key.into(), Value::F64(value)));
+        color.push(("clearColor".into(), Value::Map(clear.to_vec())));
+        let args = [Value::Uint(0), Value::Map(color)];
+        w.call("m2v.setColorAttachment", 11, 0, &args, &[])?;
+        w.call("commandBuffer", 2, 12, &[], &[])?;
+        w.call(
+            "renderCommandEncoderWithDescriptor:",
+            12,
+            13,
+            &[Value::Object(11)],
+            &[],
+        )?;
+        w.call("setRenderPipelineState:", 13, 0, &[Value::Object(6)], &[])?;
+        let bound = [Value::Object(8), Value::Uint(0), Value::Uint(0)];
+        w.call("setVertexBuffer:offset:atIndex:", 13, 0, &bound, &[])?;
+        // MTLPrimitiveTypeTriangle, from vertex 0, three vertices, one instance.
+        let draw = [Value::Uint(3), Value::Uint(0), Value::Uint(3)];
+        w.call("drawPrimitives:vertexStart:vertexCount:", 13, 0, &draw, &[])?;
+        w.call("endEncoding", 13, 0, &[], &[])?;
+        w.call("blitCommandEncoder", 12, 14, &[], &[])?;
+        let selector = "copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:\
+                        destinationOffset:destinationBytesPerRow:destinationBytesPerImage:";
+        for slice in 0..2 {
+            let copy = [
+                Value::Object(7),
+                Value::Uint(slice),
+                Value::Uint(0),
+                uints(&[("x", 0), ("y", 0), ("z", 0)]),
+                uints(&[("width", 4), ("height", 4), ("depth", 1)]),
+                Value::Object(10),
+                Value::Uint(slice * 64),
+                Value::Uint(16),
+                Value::Uint(64),
+            ];
+            w.call(selector, 14, 0, &copy, &[])?;
+        }
+        w.call("endEncoding", 14, 0, &[], &[])?;
+        w.call("commit", 12, 0, &[], &[])?;
+        w.call(WAIT_COMPLETED, 12, 0, &[], &[])?;
+        let sum = Value::List(vec![Value::Bytes(
+            Sha256::digest(layered_slices()).to_vec(),
+        )]);
+        w.call("m2v.check", 0, 0, &[Value::Object(10)], &[("sha256", sum)])
+    })
+}
+
+/// A layered pass (`renderTargetArrayLength` 2) plays as the runtime builds it: its encoder is
+/// made, not skipped as a pass the runtime's descriptor does not hold, and nothing else is
+/// skipped. The draw renders the layer its vertex function selects, slice 1, the clear covers
+/// slice 0, and the stream's check of both slices, read back through a blit, matches. A dump of
+/// the command buffer (#12) holds both slices the pass stored (#7), one after the other.
+#[test]
+fn a_layered_pass_plays_and_its_draw_renders_the_layer_it_selects() {
+    let dir = ScratchDir::new("rt-replay-layered").unwrap();
+    let path = layered_pass(&dir);
+    let dumps = ScratchDir::new("rt-replay-layered-out").unwrap();
+    let cache = ScratchCache::new().unwrap();
+    let mut backend = NewRuntime::new(rt_device(cache.path()), gpu::TEST_DEVICE).unwrap();
+    let mut reader = StreamReader::open(&[path], None).unwrap();
+    let listed = CommandBufferList::parse("12").unwrap();
+    let player = Player::new(&mut backend).dumping(listed, dumps.path().to_path_buf());
+    let (report, ended) = player.play(&mut reader);
+    for line in report.lines().iter().chain(&backend.lines()) {
+        eprintln!("REPLAY layered {line}");
+    }
+    ended.unwrap();
+    let executed = &report.total.executed;
+    for skipped in [
+        "skipped_encoders",
+        "skipped_render_states",
+        "skipped_draws",
+        "skipped_calls",
+        "skipped_objects",
+    ] {
+        assert_eq!(executed[skipped], 0, "{skipped}: {executed:?}");
+    }
+    assert!(executed["passes"] >= 1, "{executed:?}");
+    assert_eq!(report.first_skip, None);
+    assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
+    let read = |name: &str| std::fs::read(dumps.path().join(name)).unwrap();
+    assert_eq!(read("cb12-obj7.bin"), layered_slices());
     assert_eq!(read("cb12-obj7.cover"), b"-");
 }
 

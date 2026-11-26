@@ -3,10 +3,11 @@
 //! What the runtime does not build yet is skipped and counted: a render pipeline state it answers
 //! with a typed gap or the translator refuses (`render_states`, by the gap, with the first state
 //! and the runtime's answer of each); a render encoder whose pass the
-//! runtime's descriptor cannot hold (store action options, layered or tile rendering, a skipped
-//! texture, resolve texture or visibility result buffer) or that it answers
-//! with a typed gap (`encoders`); a draw whose pipeline state, or a buffer or texture bound to
-//! either stage, is a skipped object (`draws`); and a render command the runtime answers with a
+//! runtime's descriptor cannot hold (store action options, tile rendering, a skipped texture,
+//! resolve texture or visibility result buffer) or that it answers with a typed gap (`encoders`;
+//! a layered pass, `renderTargetArrayLength` 2 or more, plays as the runtime's descriptor holds
+//! it); a draw whose pipeline state, or a buffer or texture bound to either stage, is a skipped
+//! object (`draws`); and a render command the runtime answers with a
 //! typed gap, a draw it does not build and a visibility result mode in an `Accumulate` pass among
 //! them, or a visibility result mode it refuses as Metal's validation does (`render_commands`, by
 //! the gap, or `Refused(KIND)` by the refusal's kind, with the first frame and call of each),
@@ -608,7 +609,7 @@ impl NewRuntime {
                     Some(None) => (Some(None), false),
                     None => (None, false),
                 };
-                let layers = f.uint("renderTargetArrayLength")?;
+                let layers = f.count("renderTargetArrayLength")?;
                 let tile = [
                     "imageblockSampleLength",
                     "threadgroupMemoryLength",
@@ -627,7 +628,7 @@ impl NewRuntime {
                     pass.descriptor.visibility_result_type = kind;
                 }
                 if let Some(layers) = layers {
-                    pass.hold(OWN, "renderTargetArrayLength", layers <= 1);
+                    pass.descriptor.render_target_array_length = layers;
                 }
                 for set in tile {
                     if let (key, Some(value)) = set? {

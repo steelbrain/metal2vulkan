@@ -745,10 +745,11 @@ records as text, and
     (`skipped_compute_states`), whose dispatches are skipped (`skipped_dispatches`);
   - parallel render encoders, and render encoders of a pass the runtime does not build
     (`skipped_encoders`): a pass whose setter records leave in it what the runtime's render pass
-    descriptor does not hold (store action options, a render target array length above 1, tile
-    or imageblock sizes, or a skipped texture, resolve texture or visibility result buffer; a
-    color attachment's depth plane is played, and a depth or stencil attachment's, which Metal
-    reads of a 3D texture alone, is not), or one the runtime answers with a typed gap; and
+    descriptor does not hold (store action options, tile or imageblock sizes, or a skipped
+    texture, resolve texture or visibility result buffer; a color attachment's depth plane is
+    played, and a depth or stencil attachment's, which Metal reads of a 3D texture alone, is not;
+    `renderTargetArrayLength` is played, so a layered pass is the runtime's to build or answer),
+    or one the runtime answers with a typed gap; and
     every call of a skipped object (`skipped_calls`, with `useResource:usage:` and `useHeap:` of
     one, and each skipped object of a `useResources:count:usage:` or `useHeaps:count:` list);
   - dispatches whose pipeline state or bound buffer or texture is a skipped object
@@ -1153,10 +1154,11 @@ the command buffer's render passes stored: a texture its attachment names under
 `MTLStoreActionMultisampleResolve` or that one, an `MTLStoreActionUnknown` decided by the
 encoder's `setColorStoreAction:atIndex:`. `cbC-objT.bin` holds the texture's parts the passes
 stored, each a level, a slice and a depth plane (`level`, `slice` and `depthPlane`, or the
-resolve's), one after another by level, then slice, then plane, each laid out as a check reads a
-texture's first level and slice; its `cbC-objT.cover` is `-`, and `cbC-objT.unread` replaces the
-bytes where the backend could not read a part (a multisample texture stored without its resolve,
-for one). It writes too each texture the command buffer's compute encoders bound
+resolve's; a pass of `renderTargetArrayLength` 2 or more stores that many slices from the slice),
+one after another by level, then slice, then plane, each laid out as a check reads a texture's
+first level and slice; its `cbC-objT.cover` is `-`, and `cbC-objT.unread` replaces the bytes
+where the backend could not read a part (a multisample texture stored without its resolve, for
+one). It writes too each texture the command buffer's compute encoders bound
 (`setTexture:atIndex:` and `setTextures:withRange:`, a nil one left out): its first level and
 slice as a part, read once the command buffer completed as an attachment's parts are, so what the
 command buffer's last write left there; a texture both stored and bound holds each of its parts

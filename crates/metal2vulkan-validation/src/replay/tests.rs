@@ -3607,6 +3607,67 @@ fn a_listed_command_buffer_dumps_the_colour_attachments_its_render_passes_store(
     }
 }
 
+/// A layered pass's dump holds each slice it renders: pass #30, of `renderTargetArrayLength` 3,
+/// stores texture #8 from slice 1 (`MTLStoreActionStore`) as slices 1 to 3, and #9 from slice 0
+/// (`MTLStoreActionUnknown`, named by the encoder's `setColorStoreAction:atIndex:`) as slices 0 to
+/// 2; pass #31, of length 1, stores #10's slice 2 alone.
+#[test]
+fn a_layered_pass_s_dump_holds_each_slice_it_renders() {
+    let dir = ScratchDir::new("dumps-layered").unwrap();
+    let (_, ended) = dumped(&mut Kept::default(), dir.path(), |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 6, &[], &[])?;
+        w.call("m2v.textureDescriptor", 0, 7, &[map(&[])], &[])?;
+        for texture in 8..=10 {
+            let made = [Value::Object(7)];
+            w.call("newTextureWithDescriptor:", 1, texture, &made, &[])?;
+        }
+        let pass = |w: &mut StreamWriter<File>, id, layers| -> std::io::Result<()> {
+            w.call("MTLRenderPassDescriptor.new", 0, id, &[], &[])?;
+            let set = [map(&[("renderTargetArrayLength", Value::Uint(layers))])];
+            w.call("m2v.setPass", id, 0, &set, &[])
+        };
+        let colour = |w: &mut StreamWriter<File>, pass, at, texture, slice, store| {
+            let set = map(&[
+                ("texture", Value::Object(texture)),
+                ("slice", Value::Uint(slice)),
+                ("storeAction", Value::Uint(store)),
+            ]);
+            w.call(
+                "m2v.setColorAttachment",
+                pass,
+                0,
+                &[Value::Uint(at), set],
+                &[],
+            )
+        };
+        pass(w, 30, 3)?;
+        colour(w, 30, 0, 8, 1, 1)?;
+        colour(w, 30, 1, 9, 0, 4)?;
+        pass(w, 31, 1)?;
+        colour(w, 31, 0, 10, 2, 1)?;
+        w.call("commandBuffer", 6, 20, &[], &[])?;
+        let encoder = "renderCommandEncoderWithDescriptor:";
+        w.call(encoder, 20, 21, &[Value::Object(30)], &[])?;
+        let store = [Value::Uint(1), Value::Uint(1)];
+        w.call("setColorStoreAction:atIndex:", 21, 0, &store, &[])?;
+        w.call("endEncoding", 21, 0, &[], &[])?;
+        w.call(encoder, 20, 22, &[Value::Object(31)], &[])?;
+        w.call("endEncoding", 22, 0, &[], &[])?;
+        w.call("commit", 20, 0, &[], &[])
+    });
+    ended.unwrap();
+    let read = |name: &str| std::fs::read(dir.path().join(name)).unwrap();
+    let slices = |texture: u64, slices: std::ops::Range<u64>| -> Vec<u8> {
+        (slices.flat_map(|slice| [texture, 0, slice, 0]))
+            .flat_map(|word| word.to_le_bytes())
+            .collect()
+    };
+    assert_eq!(read("cb20-obj8.bin"), slices(8, 1..4));
+    assert_eq!(read("cb20-obj9.bin"), slices(9, 0..3));
+    assert_eq!(read("cb20-obj10.bin"), slices(10, 2..3));
+}
+
 /// A listed command buffer's dump holds each texture its compute encoders bound, its first level
 /// and slice: command buffer #20's compute encoder binds #8 (`setTexture:atIndex:`) and #9 and
 /// #10 with a nil between them (`setTextures:withRange:`), and #10 again; its render encoder's
