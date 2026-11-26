@@ -2463,6 +2463,7 @@ field	metal2vulkan::pipeline::LoweringInputs.unattached_colors	pub unattached_co
 field	metal2vulkan::pipeline::LoweringInputs.uniform_varyings	pub uniform_varyings: BTreeSet<VaryingKey>
 field	metal2vulkan::pipeline::LoweringInputs.vertex_fetch	pub vertex_fetch: Option<VertexFetchProjection>
 field	metal2vulkan::pipeline::LoweringInputs.viewport_index_varying	pub viewport_index_varying: bool
+field	metal2vulkan::pipeline::LoweringInputs.word_bound_buffers	pub word_bound_buffers: BTreeSet<SlotRef>
 field	metal2vulkan::pipeline::LoweringInputs.word_colors	pub word_colors: BTreeMap<u32, metal::format::WordAttachment>
 field	metal2vulkan::pipeline::LoweringInputs.zeroed_colors	pub zeroed_colors: BTreeMap<u32, metal::PixelFormat>
 field	metal2vulkan::pipeline::MeshPipelineDescriptor.alpha_to_coverage	pub alpha_to_coverage: bool

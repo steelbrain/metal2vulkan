@@ -290,11 +290,21 @@ pub fn compile_kept(
     entry: &str,
     p: &DeviceProfile,
 ) -> Result<(Arc<FunctionArtifact>, Plan, TypedModule), Error> {
+    compile_kept_with(bitcode, entry, p, &LowerInputs::new())
+}
+
+/// [`compile_kept`] under lowering inputs `inputs`.
+pub fn compile_kept_with(
+    bitcode: &[u8],
+    entry: &str,
+    p: &DeviceProfile,
+    inputs: &LowerInputs,
+) -> Result<(Arc<FunctionArtifact>, Plan, TypedModule), Error> {
     compile_bitcode_kept(
         bitcode,
         EntryRef::Name(entry),
         p,
-        &LowerInputs::new(),
+        inputs,
         &mut meter(),
         SPIRV_WORDS,
     )

@@ -11,6 +11,11 @@
 //! its `Aligned` operand does not divide, both kernels answer Metal's words with `vwp_words`'s
 //! buffers bound at offsets 0, 4, 8 and 12 (`metal2vulkan_devtools::vector_word_phases`).
 //!
+//! Plain Metal also runs `vwp_vec16`'s `float4` buffers bound at a multiple of 4 that is not one
+//! of 16, each element at its own address. The variant a dispatch so bound runs
+//! (`LoweringInputs::word_bound_buffers`) claims and states 4 for those buffers, and answers
+//! Metal's words on the interpreter there, where the plain module traps.
+//!
 //! `llvm-as` assembles the fixture; without it the tests skip visibly.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -20,19 +25,21 @@ use crate::device::profile::{DeviceProfile, HandleDomain, PointerDomain};
 use crate::device::{Device, DevicePolicy};
 use crate::library::FunctionConstantValues;
 use crate::lower::dispatch::region_bytes;
+use crate::lower::select::LowerInputs;
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::interface::PushLoc;
-use crate::pipeline::sym::PushField;
+use crate::pipeline::sym::{PushField, SlotClass, SlotRef, Stage};
 use crate::pipeline::testing::{
-    compile, compile_kept, description, engine_dir, link_and_validate, llvm_assemble, meter,
-    specialized_entry, AssembleError,
+    compile, compile_kept_with, compile_with, description, engine_dir, link_and_validate,
+    llvm_assemble, meter, specialized_entry, AssembleError,
 };
 use crate::spirv::interp::{run, Buffer, Config, Resources};
 use crate::spirv::testing::committed_profiles;
 use crate::spirv_binary::{parse_bytes, Operand};
 use crate::spv::{Op, StorageClass};
 use metal2vulkan_devtools::vector_word_phases::{
-    answer, inputs, vec16_offsets, FIXTURE, OFFSETS, THREADS, VEC16, WORDS,
+    answer, answer_at, inputs, vec16_offsets, FIXTURE, OFFSETS, THREADS, VEC16, VEC16_AT_WORDS,
+    WORDS,
 };
 
 /// `MemoryAccess`'s `Aligned` bit.
@@ -228,7 +235,7 @@ fn vector_accesses_answer_metal_at_every_word_phase() {
             let (a_at, b_at) = vec16_offsets(offset);
             let [src, dst] = dispatch(
                 &bc,
-                WORDS,
+                (WORDS, &LowerInputs::new()),
                 p,
                 [
                     (0x1_0000_0000, offset, before.src.clone()),
@@ -238,7 +245,7 @@ fn vector_accesses_answer_metal_at_every_word_phase() {
             .unwrap_or_else(|e| panic!("{what}: {WORDS}: {e}"));
             let [a, b] = dispatch(
                 &bc,
-                VEC16,
+                (VEC16, &LowerInputs::new()),
                 p,
                 [
                     (0x3_0000_2000, a_at, before.a.clone()),
@@ -267,16 +274,108 @@ fn vector_accesses_answer_metal_at_every_word_phase() {
     }
 }
 
-/// Kernel `name` run once over [`THREADS`] threads in one threadgroup on the interpreter, its
-/// buffer `n` at device address `buffers[n].0` holding `buffers[n].2`, bound at offset
-/// `buffers[n].1`: the buffers' bytes afterwards.
+/// The inputs of a dispatch that binds both buffers of a kernel at a multiple of 4 below their
+/// argument's alignment.
+fn word_bound() -> LowerInputs {
+    let mut inputs = LowerInputs::new();
+    inputs.word_bound_buffers = (0..2)
+        .map(|index| SlotRef {
+            stage: Stage::Kernel,
+            class: SlotClass::Buffer,
+            index,
+        })
+        .collect();
+    inputs
+}
+
+/// Under [`word_bound`] inputs `vwp_vec16`'s every device-address load and store claims 4 and
+/// both arguments state 4 (`RuntimeFact::AddressAlignment`), where its plain module claims and
+/// states 16 ([`device_accesses_claim_at_most_the_proven_alignment`]); `vwp_words`, whose `uint`
+/// arguments' alignment is 4 already, compiles to its plain module's words. Each module passes L3.
+#[test]
+fn a_word_bound_variant_claims_and_states_4() {
+    let Some(bc) = bitcode() else {
+        return;
+    };
+    for (stem, p) in &identity_profiles() {
+        let what = format!("{VEC16} word-bound on {stem}");
+        let a =
+            compile_with(&bc, VEC16, p, &word_bound()).unwrap_or_else(|e| panic!("{what}: {e}"));
+        link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+        let claimed = device_alignments(&a.module.words);
+        assert!(
+            !claimed.is_empty() && claimed.iter().all(|&c| c == 4),
+            "{what}: claimed {claimed:?}"
+        );
+        let stated: Vec<u32> = (a.facts.iter())
+            .filter_map(|f| match f {
+                RuntimeFact::AddressAlignment { align, .. } => Some(*align),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(stated, [4; 2], "{what}: stated alignments");
+        let plain = compile(&bc, WORDS, p).unwrap_or_else(|e| panic!("{WORDS} on {stem}: {e}"));
+        let bound = (compile_with(&bc, WORDS, p, &word_bound()))
+            .unwrap_or_else(|e| panic!("{WORDS} word-bound on {stem}: {e}"));
+        assert_eq!(
+            plain.module.words, bound.module.words,
+            "{WORDS} on {stem}: the word-bound module"
+        );
+    }
+}
+
+/// On the CPU interpreter, with `vwp_vec16`'s `float4` buffers bound 4 and 8 bytes past a
+/// multiple of 16 ([`VEC16_AT_WORDS`]), every buffer above 4 GiB, the [`word_bound`] variant
+/// leaves Metal's words in both buffers, every access at its own address as plain Metal places
+/// it, and no access traps on its `Aligned` operand. The plain module, which claims the 16 its
+/// offsets are proven to be from the buffer's address, traps there.
+#[test]
+fn vec16_answers_metal_bound_at_a_multiple_of_4() {
+    let Some(bc) = bitcode() else {
+        return;
+    };
+    let before = inputs();
+    let (a_at, b_at) = VEC16_AT_WORDS;
+    let want = answer_at(0, VEC16_AT_WORDS);
+    let buffers = || {
+        [
+            (0x3_0000_2000, a_at, before.a.clone()),
+            (0x4_0000_3000, b_at, before.b.clone()),
+        ]
+    };
+    for (stem, p) in identity_profiles()
+        .iter()
+        .filter(|(s, _)| s == "lavapipe" || s == "moltenvk-m3")
+    {
+        let what = format!("{stem}: {VEC16} at {a_at} and {b_at}");
+        let plain = dispatch(&bc, (VEC16, &LowerInputs::new()), p, buffers());
+        assert!(plain.is_err(), "{what}: the plain module ran");
+        let [a, b] = dispatch(&bc, (VEC16, &word_bound()), p, buffers())
+            .unwrap_or_else(|e| panic!("{what}: {e}"));
+        for (buffer, got, want) in [("a", &a, &want.a), ("b", &b, &want.b)] {
+            let words = |b: &[u8]| b.as_chunks::<4>().0.to_vec();
+            let first = words(got)
+                .iter()
+                .zip(&words(want))
+                .position(|(x, y)| x != y);
+            assert!(
+                got.len() == want.len() && first.is_none(),
+                "{what}: {buffer} differs from Metal's words first at word {first:?}"
+            );
+        }
+    }
+}
+
+/// Kernel `name` under `inputs` run once over [`THREADS`] threads in one threadgroup on the
+/// interpreter, its buffer `n` at device address `buffers[n].0` holding `buffers[n].2`, bound at
+/// offset `buffers[n].1`: the buffers' bytes afterwards.
 fn dispatch(
     bc: &[u8],
-    name: &str,
+    (name, inputs): (&str, &LowerInputs),
     p: &DeviceProfile,
     buffers: [(u64, u64, Vec<u8>); 2],
 ) -> Result<[Vec<u8>; 2], String> {
-    let (a, plan, module) = compile_kept(bc, name, p).map_err(|e| e.to_string())?;
+    let (a, plan, module) = compile_kept_with(bc, name, p, inputs).map_err(|e| e.to_string())?;
     assert!(a.interface.descriptors.is_empty(), "{name}: a descriptor");
     let mut push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
     let region = region_bytes([0; 3], [THREADS, 1, 1], [THREADS, 1, 1]).expect("packs");

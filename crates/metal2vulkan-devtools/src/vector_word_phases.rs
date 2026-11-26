@@ -1,17 +1,17 @@
 //! The owned fixture `vector_word_phases`: `uint4` and `float4` accesses at each word phase past a
 //! 4-aligned bound base, and through a 16-aligned `float4` buffer ([`WORDS`], [`VEC16`]; the
 //! fixture's source says what each thread does). Its inputs ([`inputs`]), the bind offsets a run
-//! takes ([`OFFSETS`], [`vec16_offsets`]), and the four buffers' bytes afterwards where every
-//! access lands at its own address ([`answer`]), which is where Metal places it: the
-//! conformance crate's `vector-word-phases-*` cases record Metal's answer on an Apple M3 Max and
-//! hold it equal to [`answer`], the product's CPU-interpreter test and the runtime's device
-//! test hold theirs equal to it too.
+//! takes ([`OFFSETS`], [`vec16_offsets`], [`VEC16_AT_WORDS`]), and the four buffers' bytes
+//! afterwards where every access lands at its own address ([`answer`], [`answer_at`]), which is
+//! where Metal places it: the conformance crate's `vector-word-phases-*` cases record Metal's
+//! answer on an Apple M3 Max and hold it equal to [`answer_at`], the product's CPU-interpreter
+//! test and the runtime's device test hold theirs equal to it too.
 
 /// The fixture.
 pub const FIXTURE: &str = "vector_word_phases";
 /// The kernel over two `uint` buffers bound at a multiple of 4.
 pub const WORDS: &str = "vwp_words";
-/// The kernel over two `float4` buffers bound at a multiple of 16.
+/// The kernel over two `float4` buffers bound at a multiple of 16, or of 4 ([`VEC16_AT_WORDS`]).
 pub const VEC16: &str = "vwp_vec16";
 /// Threads of each kernel's grid, in one threadgroup.
 pub const THREADS: u32 = 64;
@@ -30,10 +30,17 @@ const SIGN: u32 = 0x8000_0000;
 const NOT_EXPONENT: u32 = 0x807f_ffff;
 
 /// The bind offsets of [`VEC16`]'s `a` and `b` in the run that binds [`WORDS`]'s at `offset`:
-/// multiples of 16, as Metal binds a `float4` buffer, that differ from run to run.
+/// multiples of 16, as Metal's API validation asks of a `float4` buffer, that differ from run to
+/// run.
 pub fn vec16_offsets(offset: u64) -> (u64, u64) {
     (16 + 4 * offset, 64 - 4 * offset)
 }
+
+/// Bind offsets of [`VEC16`]'s `a` and `b` 4 and 8 bytes past a multiple of 16: its `float4`
+/// arguments (alignment 16) at multiples of 4 only. Metal's API validation refuses such a bind
+/// ("must be a multiple of 16"); plain Metal runs it with every access at its own address, an
+/// Apple M3 Max under macOS 27.0.1 (the conformance crate's `probes/misaligned_buffer_binds.m`).
+pub const VEC16_AT_WORDS: (u64, u64) = (4, 8);
 
 /// The four buffers' bytes: the inputs before a run, or what a run leaves.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -75,6 +82,11 @@ pub fn inputs() -> Buffers {
 /// `offset`, then [`VEC16`] with `a` and `b` bound at [`vec16_offsets`] of it, from [`inputs`],
 /// every access at its own address.
 pub fn answer(offset: u64) -> Buffers {
+    answer_at(offset, vec16_offsets(offset))
+}
+
+/// [`answer`] with [`VEC16`]'s `a` and `b` bound at `vec16`'s offsets, multiples of 4.
+pub fn answer_at(offset: u64, vec16: (u64, u64)) -> Buffers {
     let mut out = inputs();
     let base = usize::try_from(offset / 4).expect("an offset in a usize");
     let src = words(&out.src);
@@ -92,7 +104,7 @@ pub fn answer(offset: u64) -> Buffers {
         }
     }
     out.dst = bytes(&dst);
-    let (a_at, b_at) = vec16_offsets(offset);
+    let (a_at, b_at) = vec16;
     let (a_at, b_at) = (
         usize::try_from(a_at / 4).expect("an offset in a usize"),
         usize::try_from(b_at / 4).expect("an offset in a usize"),

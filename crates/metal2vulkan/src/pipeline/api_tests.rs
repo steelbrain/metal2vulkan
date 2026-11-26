@@ -402,6 +402,7 @@ mod serde_round_trips {
             object_payload: Some(64),
             region_viewports: true,
             push_base: 24,
+            word_bound_buffers: BTreeSet::from([slot(Stage::Kernel, SlotClass::Buffer, 2)]),
         });
     }
 

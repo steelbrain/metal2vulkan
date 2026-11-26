@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::engine_word_phases::identity_profiles;
 use crate::pipeline::testing::{
-    compile, engine_dir, link_and_validate, llvm_assemble, AssembleError,
+    compile, compile_with, engine_dir, link_and_validate, llvm_assemble, AssembleError,
 };
 use crate::spirv_binary::{parse_bytes, Operand};
 use crate::spv::Op;
@@ -155,5 +155,98 @@ fn no_access_address_is_scaled_in_64_bits() {
             assert!(converts > 0, "{what}: no device-address access");
             assert_eq!(scales, 0, "{what}: an access address scaled in 64 bits");
         }
+    }
+}
+
+/// A kernel over a `ulong` buffer `buf` and a `float4` buffer `vec` (argument alignments 8 and
+/// 16): a 64-bit `atomic_max` on `buf`'s first word, or, where `wide`, on the word at the address
+/// `buf`'s first word holds (a pointer made from an integer, which may reach either buffer), and
+/// `vec[t] = -vec[t]`.
+fn held_kernel(wide: bool) -> String {
+    let target = match wide {
+        true => {
+            "  %w = load i64, ptr addrspace(1) %0, align 8\n  %a = inttoptr i64 %w to ptr addrspace(1)\n"
+        }
+        false => "  %a = getelementptr i8, ptr addrspace(1) %0, i32 0\n",
+    };
+    format!(
+        "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\n\
+target triple = \"air64_v28-apple-macosx26.0.0\"\n\n\
+define void @held(ptr addrspace(1) noundef \"air-buffer-no-alias\" %0, ptr addrspace(1) noundef \"air-buffer-no-alias\" %1, i32 noundef %t) {{\n\
+entry:\n\
+{target}\
+  %v = zext i32 %t to i64\n\
+  call void @air.atomic.global.max.u.i64(ptr addrspace(1) %a, i64 %v, i32 0, i32 2, i1 true)\n\
+  %p = getelementptr inbounds <4 x float>, ptr addrspace(1) %1, i32 %t\n\
+  %x = load <4 x float>, ptr addrspace(1) %p, align 16\n\
+  %y = fneg <4 x float> %x\n\
+  store <4 x float> %y, ptr addrspace(1) %p, align 16\n\
+  ret void\n\
+}}\n\n\
+declare void @air.atomic.global.max.u.i64(ptr addrspace(1), i64, i32, i32, i1)\n\n\
+!air.kernel = !{{!9}}\n!air.version = !{{!17}}\n!air.language_version = !{{!18}}\n\
+!9 = !{{ptr @held, !10, !11}}\n!10 = !{{}}\n!11 = !{{!12, !13, !14}}\n\
+!12 = !{{i32 0, !\"air.buffer\", !\"air.location_index\", i32 0, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 8, !\"air.arg_type_align_size\", i32 8, !\"air.arg_type_name\", !\"ulong\", !\"air.arg_name\", !\"buf\"}}\n\
+!13 = !{{i32 1, !\"air.buffer\", !\"air.location_index\", i32 1, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 16, !\"air.arg_type_align_size\", i32 16, !\"air.arg_type_name\", !\"float4\", !\"air.arg_name\", !\"vec\"}}\n\
+!14 = !{{i32 2, !\"air.thread_position_in_grid\", !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"t\"}}\n\
+!17 = !{{i32 2, i32 8, i32 0}}\n!18 = !{{!\"Metal\", i32 4, i32 0, i32 0}}\n"
+    )
+}
+
+/// The alignment each buffer slot states its address is held to (`RuntimeFact::AddressAlignment`)
+/// is its argument's, 8 and 16, and stays so for a slot bound at its alignment. Under
+/// `LoweringInputs::word_bound_buffers`, both slots bound at a multiple of 4 below their
+/// alignment, it is what the slot's accesses need: the `float4` buffer's 4, which plain Metal
+/// runs bound at any multiple of 4, and the `ulong` buffer's 8, where a 64-bit atomic reaches it,
+/// as Vulkan's 64-bit atomic needs its natural alignment. Where the atomic goes through a pointer
+/// made from an integer, which may reach any buffer, both state 8. Each module passes L3.
+#[test]
+fn a_word_bound_slot_is_held_to_what_its_accesses_need() {
+    use crate::lower::select::LowerInputs;
+    use crate::pipeline::sym::{SlotClass, SlotRef, Stage};
+    let mut bound = LowerInputs::new();
+    bound.word_bound_buffers = (0..2)
+        .map(|index| SlotRef {
+            stage: Stage::Kernel,
+            class: SlotClass::Buffer,
+            index,
+        })
+        .collect();
+    let plain = LowerInputs::new();
+    for (wide, inputs, want) in [
+        (false, &plain, [(0, 8), (1, 16)]),
+        (true, &plain, [(0, 8), (1, 16)]),
+        (false, &bound, [(0, 8), (1, 4)]),
+        (true, &bound, [(0, 8), (1, 8)]),
+    ] {
+        let Some(bc) = assemble_text("held", &held_kernel(wide)) else {
+            return;
+        };
+        let bound = !inputs.word_bound_buffers.is_empty();
+        let mut compiled = 0;
+        for (stem, p) in &identity_profiles() {
+            let what = format!("held (wide {wide}, word-bound {bound}) on {stem}");
+            let a = match compile_with(&bc, "held", p, inputs) {
+                Ok(a) => a,
+                // A profile without 64-bit buffer atomics refuses the kernel.
+                Err(e) if e.to_string().contains("Int64") => continue,
+                Err(e) => panic!("{what}: {e}"),
+            };
+            link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+            let stated: Vec<(u32, u32)> = (a.facts.iter())
+                .filter_map(|f| match f {
+                    crate::pipeline::facts::RuntimeFact::AddressAlignment { slot, align } => {
+                        Some((slot.index, *align))
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(stated, want, "{what}: stated alignments");
+            compiled += 1;
+        }
+        assert!(
+            compiled > 0,
+            "held (wide {wide}, word-bound {bound}): no profile compiled it"
+        );
     }
 }

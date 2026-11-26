@@ -777,6 +777,16 @@ pub struct LoweringInputs {
     /// 0.
     #[cfg_attr(feature = "serde", serde(default))]
     pub push_base: u32,
+    /// Buffer slots bound where their address is a multiple of 4 and not of their argument's
+    /// alignment (`air.arg_type_align_size`, 8 or 16), which Metal's API validation refuses and
+    /// plain Metal runs, each element at its own address (`probes/misaligned_buffer_binds.m` in
+    /// the conformance crate). Under the identity domains each such device-address slot states
+    /// `RuntimeFact::AddressAlignment` as its argument's alignment up to what its accesses need,
+    /// 4, or 8 where a 64-bit atomic may reach it, and its accesses from its address claim no
+    /// more `Aligned` than that. A slot of alignment 4 or less, or that is no device-address slot
+    /// held to its alignment, is ignored.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub word_bound_buffers: BTreeSet<SlotRef>,
 }
 
 /// One channel of the second output a fragment function writes for an attachment held with its

@@ -467,6 +467,12 @@ pub fn function_key(
     if inputs.push_base != 0 {
         h.bytes(b"push-base").u64(u64::from(inputs.push_base));
     }
+    // Appended only when set, as `signed_color_attachments`: a function whose buffers are bound
+    // at their arguments' alignments keeps its key.
+    if !inputs.word_bound_buffers.is_empty() {
+        h.bytes(b"word-bound-buffers")
+            .bytes(format!("{:?}", inputs.word_bound_buffers).as_bytes());
+    }
     // Appended only when present, so a stage that links nothing keeps its key: the tag's length
     // prefix keeps the encoding unambiguous.
     if !linked.is_empty() {

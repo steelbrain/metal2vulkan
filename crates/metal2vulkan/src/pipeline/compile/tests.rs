@@ -698,7 +698,8 @@ fn the_inputs_encoding_is_the_earlier_derived_debug() {
                 .replace(", object_payload: None", "")
                 .replace(", tessellation: None", "")
                 .replace(", region_viewports: false", "")
-                .replace(", push_base: 0", ""),
+                .replace(", push_base: 0", "")
+                .replace(", word_bound_buffers: {}", ""),
             "{derived}"
         );
     }

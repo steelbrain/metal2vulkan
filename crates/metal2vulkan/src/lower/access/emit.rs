@@ -308,18 +308,18 @@ pub(super) fn prepare(
     let lowering = cx.plan.families.access.slots.get(t.slot).copied().flatten();
     let ops = WordOps::of(crate::lower::sync::memory_model::coherence(cx.plan));
     if let Some(SlotLowering::Psb { start }) = lowering {
-        // Under the identity domains a slot whose address the binder holds to its argument's
-        // alignment is reached from that address as it is (its biased word), a leaf at an offset
-        // proven a multiple of 8 or 16 accessed at that alignment; any other from the word below
-        // each access.
-        let aligned = cx.plan.families.access.aligned.contains(&t.slot);
+        // Under the identity domains a slot whose address the binder holds to an alignment is
+        // reached from that address as it is (its biased word), a leaf at an offset proven a
+        // multiple of 8 or 16 accessed at that alignment up to the address's; any other from the
+        // word below each access.
+        let aligned = cx.plan.families.access.aligned.get(&t.slot).copied();
         let a = if cx.plan.families.access.identity {
             match aligned {
-                true => {
+                Some(held) => {
                     let base = super::pointer::biased_slot_address(cx, fb, choice.slot)?;
-                    psb::prepare_direct(base, m)
+                    psb::prepare_direct(base, m, held)
                 }
-                false => {
+                None => {
                     let address = super::pointer::slot_address(cx, fb, choice.slot)?;
                     psb::prepare_at(fb, address, m)?
                 }

@@ -38,7 +38,9 @@
 //! its first word (`memory::leaf`'s whole words; [`PsbMem`]'s `whole_place`), not one per word:
 //! from the word below the access, that word; from a slot's own address, the slot's address plus
 //! the offset, which a leaf proven a multiple of 8 or 16 takes as it is, with that `Aligned`
-//! operand, and any other rounds down to a multiple of 4.
+//! operand up to the alignment the address is held to (4 for a slot bound at a multiple of 4
+//! below its argument's alignment, `LoweringInputs::word_bound_buffers`), and any other rounds
+//! down to a multiple of 4.
 
 use super::SLOT_ADDRESS_BIAS;
 use crate::device::DeviceProfile;
@@ -205,8 +207,9 @@ enum Reach {
     /// `c`'s bytes into the bias: `(x + c) * s + 2^31` is `x * s + (c * s + 2^31)` modulo 2^32.
     /// The bias is one 32-bit add, which a device fuses with the index's shift; the offset is
     /// zero-extended, which a device splits into a scalar base and a vector offset; no shift of
-    /// the offset in 64 bits and no pointer bitcast.
-    Direct,
+    /// the offset in 64 bits and no pointer bitcast. It holds the alignment the binder holds the
+    /// slot's address to (`RuntimeFact::AddressAlignment`).
+    Direct(u32),
 }
 
 /// Prepare an access of a static slot at the `u32` displacement `m` from its bind offset, read as
@@ -234,16 +237,16 @@ pub fn prepare_at(fb: &mut FunctionBuilder<'_>, address: Value, m: Value) -> BRe
 
 /// Prepare an access of a static slot at the `u32` displacement `m` from its bind offset, under
 /// the identity domains, from `base` (a `u64`), the slot's own device address less
-/// [`SLOT_ADDRESS_BIAS`], an address the binder holds to a multiple of the argument's alignment
+/// [`SLOT_ADDRESS_BIAS`], an address the binder holds to a multiple of `held`
 /// (`RuntimeFact::AddressAlignment`): the access is the byte offset `m`, read as signed, from that
 /// address, as a descriptor view's is `m` from its base ([`Reach::Direct`]). Every byte of a
 /// buffer lies within 2^31 bytes of each bind address in it, the runtime making no buffer longer
 /// than 2 GiB (`metal2vulkan_runtime::MAX_BUFFER_LENGTH`), so the offset is exact whatever the slot's
 /// window. Nothing is rounded. The check, where the access takes one, is `emit::prepare`'s.
-pub fn prepare_direct(base: Value, m: Value) -> PsbAccess {
+pub fn prepare_direct(base: Value, m: Value, held: u32) -> PsbAccess {
     PsbAccess {
         mem: PsbMem {
-            reach: Reach::Direct,
+            reach: Reach::Direct(held),
             ..PsbMem::at(base)
         },
         off: m,
@@ -390,7 +393,7 @@ impl PsbMem {
                 let addr = fb.binary(BinOp::IAdd, self.base, d)?;
                 self.place(fb, addr, ty, load)
             }
-            Reach::Direct => {
+            Reach::Direct(_) => {
                 let shift = bytes.trailing_zeros();
                 let (x, c) = fb.sum_of(index).unwrap_or((index, 0));
                 let s = k32(fb, shift)?;
@@ -453,14 +456,15 @@ impl PsbMem {
 
     /// The `PhysicalStorageBuffer` place of a `pointee` (at most 16 bytes) at byte `at` past the
     /// word holding byte `off` of the memory, to load from where `load`, and the `Aligned` operand
-    /// of an access through it: `align` where the memory's base is its Metal address and `off`
-    /// is proven a multiple of `align`, else 4.
+    /// of an access through it: `align` up to the alignment the address is held to where the
+    /// memory's base is its Metal address and `off` is proven a multiple of `align`, else 4.
     ///
     /// A memory based at the word below one access ([`Reach::Rounded`], [`Reach::Below`]) holds
     /// that access's byte offset in the word, below 4: its first word is the base. A slot's own
-    /// address ([`Reach::Direct`]) is held to its argument's alignment, so a proven multiple of 8
-    /// or 16 is the address's own; any other offset is rounded down to a multiple of 4, as the
-    /// word path reads it.
+    /// address ([`Reach::Direct`]) is held to its argument's alignment, or to 4 where the dispatch
+    /// binds it at a multiple of 4 below that (`LoweringInputs::word_bound_buffers`), so a proven
+    /// multiple of 8 or 16 lies at the address plus that offset, aligned as both are; any other
+    /// offset is rounded down to a multiple of 4, as the word path reads it.
     fn whole_place(
         &self,
         fb: &mut FunctionBuilder<'_>,
@@ -479,9 +483,9 @@ impl PsbMem {
                 };
                 Ok((self.place(fb, addr, pointee, load)?, 4))
             }
-            Reach::Direct => {
+            Reach::Direct(held) => {
                 let (off, align) = match align {
-                    8 | 16 => (off, align),
+                    8 | 16 => (off, align.min(held)),
                     _ => {
                         let mask = k32(fb, !3)?;
                         (u32_op(fb, BinOp::BitwiseAnd, off, mask)?, 4)
