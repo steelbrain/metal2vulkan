@@ -623,6 +623,12 @@ consumer's.
 Each call returns the block and the index of the memory type it imported into, and refuses before
 any allocation is attempted.
 
+On Linux 6.11 to 7.1 a udmabuf made over the pages of a large folio is malformed: one of its entries
+is a 4 KiB page at an offset past that page's size, and the AMD kernel driver's import of it then
+binds other pages than the buffer's. Linux 7.2 fixes it. So a consumer hands `import_dma_buf` or
+`import_dma_bufs` a udmabuf over such pages only on Linux 7.2 or later. The runtime does not check
+this, and cannot: it reads no kernel version.
+
 The granule is the alignment in which the device binds a sparse buffer's memory, rounded up to the
 host's page, offered where the device has `sparseBinding`, the runtime's queue family binds sparse
 memory, a sparse buffer of the floor's usage imports a dma-buf with no dedicated allocation, and
