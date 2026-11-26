@@ -20,9 +20,9 @@
 //!   instance at rate 2 without the divisor feature is refused as `Unsupported{VertexStepRate}`,
 //!   needing `vertexAttributeInstanceRateDivisor`; with it, the layout is an instance-rate binding
 //!   of divisor 2 whether or not the device reports `supportsNonZeroFirstInstance`, and at a rate
-//!   past `maxVertexAttribDivisor` it is refused naming the limit. A pulled-vertex-buffer variant
-//!   of the position's layout pulls it through the slot's pushed address at the layout's pushed
-//!   stride (`VertexBufferStride`); the de-indexed and private list forms stay refused.
+//!   past `maxVertexAttribDivisor` it is refused naming the limit. The de-indexed form pulls both
+//!   layouts through their slots' pushed addresses at the layouts' pushed strides
+//!   (`VertexBufferStride`); the private list form stays refused.
 //!
 //! - On `Device::from_queries`' profile of lavapipe, which enables `shaderOutputLayer`, a vertex
 //!   function that writes `[[render_target_array_index]]` (the owned fixture `engine/rt6_layered`'s
@@ -502,52 +502,36 @@ fn from_queries_fetches_a_constant_step_at_vertex_rate_with_stride_zero() {
     }
 }
 
-/// Under the identity domains with no buffer robustness, a pulled-vertex-buffer variant of layout 0
-/// pulls `ima_vertex`'s position: the vertex function reads it through the slot's pushed device
-/// address at the layout's pushed stride (`PushField::VertexBufferStride(0)`, the descriptor's 8
-/// a static stride), with no bind offset and no descriptor, and fetches its `short` mark in fixed
-/// function; both modules L3-valid. The de-indexed form's key, whose fragment function here reads
-/// no primitive ID and so whose draw's indices the vertex function does not read, pulls both
-/// layouts the same way (every attribute, item 8 of `pipeline::link::vertex`); before the fetch
-/// read a source through its own address it was `Unsupported{IdentityDomains}`. The private list
-/// form, which reads the draw's raw indices at `PushField::CaptureIndexAddress`, stays
+/// Under the identity domains with no buffer robustness, the de-indexed form's key, whose fragment
+/// function here reads no primitive ID and so whose draw's indices the vertex function does not
+/// read, pulls both of `ima_vertex`'s layouts (every attribute, item 7 of
+/// `pipeline::link::vertex`): the vertex function reads each through the slot's pushed device
+/// address at the layout's pushed stride (`PushField::VertexBufferStride`, the descriptor's 8 and
+/// 4 static strides), with no bind offset and no descriptor; both modules L3-valid. Before the
+/// fetch read a source through its own address it was `Unsupported{IdentityDomains}`. The private
+/// list form, which reads the draw's raw indices at `PushField::CaptureIndexAddress`, stays
 /// `Unsupported{IdentityDomains}`.
 #[test]
-fn from_queries_pulls_a_pulled_vertex_buffer_variant_s_layout_at_its_pushed_stride() {
+fn from_queries_pulls_the_de_indexed_form_s_layouts_at_their_pushed_strides() {
     use crate::cache::VariantKey;
     let Some(library) = ima_library() else {
         return;
     };
     let d = ima_descriptor(&library);
-    let mut pulled = VariantKey::new();
-    pulled.pulled_vertex_buffers.insert(0);
     let mut de_indexed = VariantKey::new();
     de_indexed.primitive_id_indices = Some(crate::metal::IndexType::UInt16);
     let mut private_list = VariantKey::new();
     private_list.private_list = true;
     for stem in PROFILES {
         let device = fixed_function_device(stem);
-        for (form, v, want_pulled, want_fetched) in [
-            (
-                "pulled",
-                &pulled,
-                &[(0, 0, VertexStride::Static(8))][..],
-                &[vk::Format::R16_SINT][..],
-            ),
-            (
-                "de-indexed",
-                &de_indexed,
-                &[
-                    (0, 0, VertexStride::Static(8)),
-                    (1, 1, VertexStride::Static(4)),
-                ][..],
-                &[][..],
-            ),
-        ] {
-            let p = (device.compile_render_variant(&d, v, &Budget::standard()))
-                .unwrap_or_else(|e| panic!("{stem}: the {form} form: {e:?}"));
-            pulls_at_pushed_strides(stem, form, &device, &p, want_pulled, want_fetched);
-        }
+        let form = "de-indexed";
+        let p = (device.compile_render_variant(&d, &de_indexed, &Budget::standard()))
+            .unwrap_or_else(|e| panic!("{stem}: the {form} form: {e:?}"));
+        let pulled = [
+            (0, 0, VertexStride::Static(8)),
+            (1, 1, VertexStride::Static(4)),
+        ];
+        pulls_at_pushed_strides(stem, form, &device, &p, &pulled, &[]);
         match device.compile_render_variant(&d, &private_list, &Budget::standard()) {
             Err(Error::Unsupported(u)) => assert_eq!(
                 (u.feature, u.needs),

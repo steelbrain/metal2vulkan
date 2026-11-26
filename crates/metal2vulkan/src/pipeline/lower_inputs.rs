@@ -97,8 +97,7 @@ pub struct LoweringInputs {
     /// and a vertex function that fetches an attribute in fixed function are
     /// `Unsupported{GpuEncodedIndirectCommands, NotImplemented}` under it (a replayed command is a
     /// compute dispatch with no stage-in region, or a draw whose buffers no fixed-function input
-    /// reads: a pulled attribute reads its slot table, and the replay pulls every fixed-function
-    /// binding's layout through the pulled-vertex-buffer variant).
+    /// reads: a pulled attribute reads its slot table).
     #[cfg_attr(feature = "serde", serde(default))]
     pub replay_bindings: bool,
     /// With `replay_bindings`, the vertex function of a draw replay merged into one draw

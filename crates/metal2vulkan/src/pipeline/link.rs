@@ -137,13 +137,11 @@ impl LinkInputs {
         LinkInputs::Compute
     }
 
-    /// A render pipeline of `desc`'s fixed-function state under `variant`'s pulled vertex
-    /// buffers. Every attribute is pulled under the de-indexed and private list forms and for a
-    /// descriptor made for indirect command buffers (`supportIndirectCommandBuffers`), as their
-    /// vertex stage is compiled.
+    /// A render pipeline of `desc`'s fixed-function state under `variant`. Every attribute is
+    /// pulled under the de-indexed and private list forms and for a descriptor made for indirect
+    /// command buffers (`supportIndirectCommandBuffers`), as their vertex stage is compiled.
     pub fn render_variant(desc: &RenderPipelineDescriptor, variant: &VariantKey) -> LinkInputs {
         let mut r = RenderLinkInputs::from(desc);
-        r.pulled_vertex_buffers = variant.pulled_vertex_buffers.clone();
         r.pull_every = variant.primitive_id_indices.is_some()
             || variant.private_list
             || desc.support_indirect_command_buffers;
@@ -171,9 +169,6 @@ pub struct RenderLinkInputs {
     pub alpha_to_one: bool,
     pub rasterization_enabled: bool,
     pub input_primitive_topology: metal::PrimitiveTopologyClass,
-    /// The layouts a pulled-vertex-buffer variant pulls (`VariantKey::pulled_vertex_buffers`);
-    /// empty on the common path.
-    pub pulled_vertex_buffers: BTreeSet<u32>,
     /// The variant pulls every attribute (`vertex::vertex_fetch_projection_for`'s `pull_every`):
     /// the de-indexed and private list forms (`VariantKey::primitive_id_indices`,
     /// `VariantKey::private_list`) and a pipeline made for indirect command buffers
@@ -206,7 +201,6 @@ impl RenderLinkInputs {
             alpha_to_one: false,
             rasterization_enabled: true,
             input_primitive_topology: metal::PrimitiveTopologyClass::Unspecified,
-            pulled_vertex_buffers: BTreeSet::new(),
             pull_every: false,
             max_vertex_amplification_count: 1,
             tessellation: None,
@@ -234,7 +228,6 @@ impl From<&RenderPipelineDescriptor> for RenderLinkInputs {
             alpha_to_one: d.alpha_to_one,
             rasterization_enabled: d.rasterization_enabled,
             input_primitive_topology: d.input_primitive_topology,
-            pulled_vertex_buffers: BTreeSet::new(),
             pull_every: false,
             max_vertex_amplification_count: d.max_vertex_amplification_count,
             tessellation: d.tessellation,
@@ -426,7 +419,7 @@ pub fn link(
                     let vi = vertex::vertex_input_state(
                         vs,
                         r.vertex_descriptor.as_ref(),
-                        (&r.pulled_vertex_buffers, r.pull_every),
+                        r.pull_every,
                         &table.locations,
                         p,
                     )?;

@@ -1342,7 +1342,7 @@ codec_struct! {
         immutable_samplers,
     }
     PushConstantRange { stages, offset, size }
-    VertexInputState { bindings, attributes, pulled, variant_pulled }
+    VertexInputState { bindings, attributes, pulled }
     VertexBinding { binding, buffer_index, input_rate, divisor, stride }
     VertexAttribute { location, binding, format, offset }
     PulledAttribute { attribute, buffer_index, format, offset, step_function, step_rate, stride }

@@ -195,7 +195,6 @@ mod serde_round_trips {
         round_trip(&VariantKey {
             storage_images,
             psb_slots: BTreeSet::from([buffer(1)]),
-            pulled_vertex_buffers: BTreeSet::from([2, 5]),
             emulated_simdgroups: true,
             srgb_textures: BTreeSet::from([slot(Stage::Kernel, SlotClass::Texture, 4)]),
             texel_buffer_parts: BTreeMap::from([(slot(Stage::Kernel, SlotClass::Texture, 11), 2)]),
@@ -469,7 +468,6 @@ mod serde_round_trips {
                 step_rate: 2,
                 stride: VertexStride::Static(20),
             }],
-            variant_pulled: BTreeSet::from([3]),
         });
     }
 

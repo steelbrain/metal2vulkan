@@ -1863,8 +1863,8 @@ fn identity_unsourced(f: &RuntimeFact) -> bool {
 /// `PushField::TextureLevelBase`), the compute
 /// encoder's stage-in region (`PushField::StageInRegion`), the stride of a vertex layout whose
 /// attributes the function pulls (`PushField::VertexBufferStride`): a post-tessellation function's
-/// control points and patches, and a plain vertex function's layouts that a pulled-vertex-buffer
-/// variant or the de-indexed and private list forms pull; the render encoder's alpha test
+/// control points and patches, and a plain vertex function's layouts that the de-indexed and
+/// private list forms and a pipeline made for indirect command buffers pull; the render encoder's alpha test
 /// reference code a fragment function under the private alpha test compares with
 /// (`PushField::AlphaTestReference`); the index of the sampled-texture array's element a
 /// fragment function reads a colour attachment through (`PushField::FetchedColor`, framebuffer

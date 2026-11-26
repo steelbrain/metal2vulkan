@@ -145,11 +145,6 @@ pub struct VariantKey {
     #[cfg_attr(feature = "serde", serde(with = "crate::pipeline::serde_pairs"))]
     pub storage_images: BTreeMap<SlotRef, StorageImageChoice>,
     pub psb_slots: BTreeSet<SlotRef>,
-    /// Metal vertex-buffer indices whose layouts the vertex function fetches in the shader
-    /// (`VertexFetch::Pulled`) instead of through fixed-function vertex input: the shape binds
-    /// them at an offset or with a per-bind stride Vulkan's vertex input cannot fetch.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub pulled_vertex_buffers: BTreeSet<u32>,
     /// The kernel's simdgroups run in the emulated tier, which is exact for every threadgroup size:
     /// a dispatch whose threadgroup has a partial simdgroup asks for it where the kernel's own tier
     /// runs simdgroups on whole subgroups.
@@ -366,7 +361,6 @@ impl VariantKey {
     pub fn is_empty(&self) -> bool {
         self.storage_images.is_empty()
             && self.psb_slots.is_empty()
-            && self.pulled_vertex_buffers.is_empty()
             && !self.emulated_simdgroups
             && self.srgb_textures.is_empty()
             && self.texel_buffer_parts.is_empty()
@@ -405,10 +399,8 @@ impl VariantKey {
     /// range and whether its draws' tests are read-only, for a tile function the imageblock bytes
     /// its pass keeps, and for the vertex function the
     /// dropped `Layer` output and the window depth
-    /// (a vertex function's projection is
-    /// derived from the vertex descriptor and
-    /// [`pulled_vertex_buffers`](VariantKey::pulled_vertex_buffers) when the pipeline compiles,
-    /// `Device::render_variant_key`). A key carries no stage-input descriptor: a kernel of a
+    /// (a vertex function's projection is derived from the vertex descriptor when the pipeline
+    /// compiles, `Device::render_variant_key`). A key carries no stage-input descriptor: a kernel of a
     /// compute pipeline with one compiles its variant under these inputs with the pipeline's
     /// `stage_input` added (`LoweringInputs::stage_input`).
     pub fn lowering_inputs(

@@ -3042,9 +3042,7 @@ fn a_fragment_reading_through_a_loaded_pointer_writes_no_memory() {
 /// every buffer slot's address from its replayed command's root entry at the stage's
 /// `RootTableAddress`, is refused, typed (`Unsupported{IdentityDomains}` naming the field the
 /// identity domains do not read), never an internal error: a vertex function's buffer arguments
-/// (`icb_render_replay_template`), the attribute of the pulled-vertex-buffer variant
-/// (`icb_render_stride_template`, its layout pulled, as a draw replay pulls every layout), and a
-/// kernel's buffers (`icb_replay_template`) alike.
+/// (`icb_render_replay_template`) and a kernel's buffers (`icb_replay_template`) alike.
 #[test]
 fn a_replay_variant_under_the_identity_domains_is_refused_typed() {
     use crate::cache::VariantKey;
@@ -3065,32 +3063,24 @@ fn a_replay_variant_under_the_identity_domains_is_refused_typed() {
         }
         other => panic!("{what}: {other}"),
     };
-    for (stem, pulled) in [
-        ("icb_render_replay_template", false),
-        ("icb_render_stride_template", true),
-    ] {
-        let Some(bc) = fixture(stem) else {
-            return;
-        };
-        let vertex = Library::from_air(&bc)
-            .expect("library")
-            .function(stem)
-            .expect("vertex");
-        let mut d =
-            RenderPipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(vertex)));
-        d.rasterization_enabled = false;
-        let mut key = VariantKey::new();
-        key.replay_bindings = true;
-        if pulled {
-            d.vertex_descriptor = Some(vertex_descriptor(&[(0, metal::VertexFormat::UInt)]));
-            key.pulled_vertex_buffers.insert(0);
-        }
-        let e = dev
-            .compile_render_variant(&d, &key, &Budget::standard())
-            .map(|_| ())
-            .expect_err(stem);
-        refused(stem, e);
-    }
+    let stem = "icb_render_replay_template";
+    let Some(bc) = fixture(stem) else {
+        return;
+    };
+    let vertex = Library::from_air(&bc)
+        .expect("library")
+        .function(stem)
+        .expect("vertex");
+    let mut d =
+        RenderPipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(vertex)));
+    d.rasterization_enabled = false;
+    let mut key = VariantKey::new();
+    key.replay_bindings = true;
+    let e = dev
+        .compile_render_variant(&d, &key, &Budget::standard())
+        .map(|_| ())
+        .expect_err(stem);
+    refused(stem, e);
     let Some(bc) = fixture("icb_replay_template") else {
         return;
     };

@@ -84,9 +84,8 @@ pub enum InputsFrom<'a> {
     /// The caller's (`Device::compile_function`, validation, tests).
     Given(&'a LowerInputs),
     /// The vertex stage of a render pipeline under a variant key: the vertex-fetch projection of
-    /// this vertex descriptor over the attributes the specialized entry reads with the key's
-    /// pulled vertex buffers (`link::vertex::vertex_fetch_projection_for`), the key's other
-    /// vertex-stage inputs (`VariantKey::lowering_inputs`), the pipeline's
+    /// this vertex descriptor over the attributes the specialized entry reads
+    /// (`link::vertex::vertex_fetch_projection_for`), the key's vertex-stage inputs (`VariantKey::lowering_inputs`), the pipeline's
     /// `maxVertexCallStackDepth` (the `u32`), whether the pipeline's fragment function reads
     /// `[[primitive_id]]` where the device carries it through a varying
     /// ([`reads_primitive_id_varying`]). A vertex function writes the primitive ID's varying where
@@ -2644,7 +2643,6 @@ fn lower_inputs(
                 desc,
                 &attributes,
                 p,
-                &variant.pulled_vertex_buffers,
                 pull_every,
             )?;
             let mut out = variant.lowering_inputs(crate::pipeline::sym::Stage::Vertex);

@@ -1933,7 +1933,6 @@ field	metal2vulkan::cache::VariantKey.partial_threadgroups	pub partial_threadgro
 field	metal2vulkan::cache::VariantKey.primitive_id_indices	pub primitive_id_indices: Option<crate::metal::IndexType>
 field	metal2vulkan::cache::VariantKey.private_list	pub private_list: bool
 field	metal2vulkan::cache::VariantKey.psb_slots	pub psb_slots: BTreeSet<SlotRef>
-field	metal2vulkan::cache::VariantKey.pulled_vertex_buffers	pub pulled_vertex_buffers: BTreeSet<u32>
 field	metal2vulkan::cache::VariantKey.quad_primitive_ids	pub quad_primitive_ids: bool
 field	metal2vulkan::cache::VariantKey.region_viewports	pub region_viewports: bool
 field	metal2vulkan::cache::VariantKey.replay_bindings	pub replay_bindings: bool
@@ -2709,7 +2708,6 @@ field	metal2vulkan::pipeline::VertexFetchProjection.attributes	pub attributes: B
 field	metal2vulkan::pipeline::VertexInputState.attributes	pub attributes: Vec<VertexAttribute>
 field	metal2vulkan::pipeline::VertexInputState.bindings	pub bindings: Vec<VertexBinding>
 field	metal2vulkan::pipeline::VertexInputState.pulled	pub pulled: Vec<PulledAttribute>
-field	metal2vulkan::pipeline::VertexInputState.variant_pulled	pub variant_pulled: BTreeSet<u32>
 field	metal2vulkan::reflection::DirectArgumentUse.gap	pub gap: Option<LinkedUseGap>
 field	metal2vulkan::reflection::DirectArgumentUse.stage	pub stage: Stage
 field	metal2vulkan::reflection::LinkedUseAnswers.fragment_writes_depth_unattached	pub fragment_writes_depth_unattached: Option<bool>

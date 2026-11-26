@@ -3,8 +3,6 @@
 //! Every format substitution is chosen with the shader's real read width in hand, so the consumer
 //! never guards against `(x, y, z, 1)` versus `(x, y, z, garbage)` reads.
 
-use std::collections::BTreeSet;
-
 use crate::metal;
 use crate::vk;
 
@@ -19,10 +17,6 @@ pub struct VertexInputState {
     pub attributes: Vec<VertexAttribute>,
     /// Attributes fetched in the shader; the plan binds their source buffers.
     pub pulled: Vec<PulledAttribute>,
-    /// The Metal vertex-buffer indices whose layouts fixed-function vertex input fetches in the
-    /// descriptor's own projection but this pipeline pulls, because it was compiled under a
-    /// `VariantKey` naming them (`pulled_vertex_buffers`). Its plans keep listing them.
-    pub variant_pulled: BTreeSet<u32>,
 }
 
 impl VertexInputState {
