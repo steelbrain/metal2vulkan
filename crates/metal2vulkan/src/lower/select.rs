@@ -1852,7 +1852,9 @@ fn identity_unsourced(f: &RuntimeFact) -> bool {
 }
 
 /// Under the identity domains on profile `p`, the plans lowered so far: a kernel, a vertex or a
-/// fragment function that reaches memory only through its buffer slots' device addresses, the
+/// fragment function that reaches memory only through its buffer slots' device addresses (a
+/// kernel on a device that binds its buffer arguments, through its slots' storage views of set 0
+/// at their pushed bind offsets, `AccessPlan::robust_views`), the
 /// device addresses it loads or makes from integers (`access::dynamic`, no root table), its
 /// textures' and runtime samplers' resource IDs and its constexpr samplers' pushed indices, with no
 /// descriptor and no state of a bound texture or sampler but its resource ID's: a texture's
@@ -1901,8 +1903,12 @@ fn identity_refusal(plan: &Plan) -> Option<String> {
             "a function of a stage other than a kernel, vertex or fragment function".to_owned(),
         );
     }
+    // A kernel on a device that binds its buffer arguments reaches each storage view at its
+    // pushed bind offset (`AccessPlan::robust_views`).
+    let views = plan.families.access.robust_views;
     let field = plan.push.fields.iter().find(|f| match (f.field, f.loc) {
         (PushField::ArgumentTableAddress, loc) => !matches!(loc, PushLoc::Push { .. }),
+        (PushField::SlotBindOffset(_), _) => !views,
         (field, _) => !matches!(
             field,
             PushField::SlotGuestBase(_)
@@ -1933,7 +1939,9 @@ fn identity_refusal(plan: &Plan) -> Option<String> {
             f.field
         ));
     }
-    if (plan.slots.iter().flatten()).any(|c| c.form != BufferForm::Psb) {
+    if (plan.slots.iter().flatten())
+        .any(|c| !(c.form == BufferForm::Psb || views && c.form == BufferForm::Descriptor))
+    {
         return Some("a buffer argument not reached through its device address".to_owned());
     }
     let t = &plan.families.texture;
