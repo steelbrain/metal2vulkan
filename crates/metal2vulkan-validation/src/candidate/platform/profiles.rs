@@ -931,9 +931,11 @@ enum Bound {
     /// Describes execution, not capacity (the subgroup size; how lines rasterize, which the
     /// runtime reads to choose how it draws a wide line and never to refuse one): not compared.
     Execution,
-    /// A size-control bound that a device without subgroup size control reports as 0 (no value):
-    /// the profile's range must lie within the device's.
-    SubgroupMin,
+    /// A minimum that a device without the feature or extension reporting it gives as 0 (no
+    /// value): subgroup size control's minimum size, whose range a profile's must lie within, and
+    /// robust buffer access 2's storage-buffer granule. A profile's 0 states none; its value needs
+    /// the device's, and at least it.
+    OptionalMinimum,
     /// An optional member (the generated-commands facts): a profile that states it needs a device
     /// that does; where both do, its members have their own rules.
     Present,
@@ -951,7 +953,7 @@ fn bound(path: &[String]) -> Option<Bound> {
         // the runtime, so a profile's must be within the device's.
         ["allocation", "max_memory_allocation_size" | "max_buffer_size"] => Bound::AtMost,
         ["subgroup", "size"] => Bound::Execution,
-        ["subgroup", "min_size"] => Bound::SubgroupMin,
+        ["subgroup", "min_size"] => Bound::OptionalMinimum,
         ["subgroup", "max_size" | "max_compute_workgroup_subgroups"] => Bound::AtMost,
         ["subgroup", "supported_stages" | "supported_operations" | "required_size_stages"] => {
             Bound::Flags
@@ -992,9 +994,9 @@ fn limit_bound(name: &str) -> Option<Bound> {
         | "independent_resolve"
         | "robust_buffer_access2"
         | "robust_buffer_access_update_after_bind" => Bound::Implies,
-        // The granule robust buffer access rounds a storage buffer's range up to: like an
-        // alignment, a minimum.
-        "robust_storage_buffer_access_size_alignment" => Bound::AtLeast,
+        // The granule robust buffer access 2 rounds a storage buffer's range up to: like an
+        // alignment, a minimum, and 0 where `VK_EXT_robustness2` is not exposed.
+        "robust_storage_buffer_access_size_alignment" => Bound::OptionalMinimum,
         "framebuffer_color_sample_counts"
         | "framebuffer_depth_sample_counts"
         | "framebuffer_integer_color_sample_counts"
@@ -1179,8 +1181,8 @@ fn within(rule: Bound, profile: &Value, device: &Value) -> bool {
                 _ => false,
             }
         }
-        // A profile without size control states no range; a device without it has none to give.
-        Bound::SubgroupMin => match (integer(profile), integer(device)) {
+        // A profile without the member's feature states none; a device without it has none to give.
+        Bound::OptionalMinimum => match (integer(profile), integer(device)) {
             (Some(0), _) => true,
             (Some(p), Some(d)) => d != 0 && p >= d,
             _ => false,

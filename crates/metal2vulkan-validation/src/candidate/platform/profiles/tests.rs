@@ -221,6 +221,19 @@ fn each_kind_of_member_is_bounded_in_its_direction() {
         found[0].starts_with("limits.min_vertex_input_binding_stride_alignment"),
         "{found:?}"
     );
+    // Robust buffer access 2's storage granule: a profile without the extension's structure (0)
+    // states none and a coarser one is within the device; a finer one is named.
+    assert_eq!(device.limits.robust_storage_buffer_access_size_alignment, 1);
+    assert!(gaps(&|p| p.limits.robust_storage_buffer_access_size_alignment = 0).is_empty());
+    assert!(gaps(&|p| p.limits.robust_storage_buffer_access_size_alignment = 4).is_empty());
+    let mut coarse = device.clone();
+    coarse.limits.robust_storage_buffer_access_size_alignment = 4;
+    let found = exceeds(&device, &coarse);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(
+        found[0].starts_with("limits.robust_storage_buffer_access_size_alignment"),
+        "{found:?}"
+    );
     one(
         &|p| p.subgroup.supported_operations |= vk::SubgroupFeatureFlags::from_raw(1 << 30),
         "subgroup.supported_operations",
