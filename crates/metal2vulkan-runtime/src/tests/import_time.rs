@@ -552,7 +552,15 @@ mod on_device {
             let listed = index.map_or(needs.memory_type_bits, |first: u32| {
                 needs.memory_type_bits & (1 << first)
             });
-            let taken = dma_buf_type(properties.memory_type_bits, listed, core.imports.coherent);
+            let offered = properties.memory_type_bits;
+            let shared_coherent = core.coherence.is_none();
+            let taken = dma_buf_type(
+                crate::ImportHandle::DmaBufs,
+                shared_coherent,
+                offered,
+                listed,
+                core.imports.coherent,
+            );
             index = Some(taken.expect("the call's type"));
         }
         times[1] = start.elapsed().as_nanos();

@@ -1040,7 +1040,8 @@ pub(crate) mod on_device {
                         | vk::MemoryPropertyFlags::HOST_COHERENT;
                     assert!(
                         flags.contains(wanted),
-                        "{name}: type {memory_type}, {flags:?}"
+                        "{name}: type {memory_type}, flags {:#x}",
+                        flags.as_raw()
                     );
                     drop(block);
                     wait_until(&device, "the release", || {
