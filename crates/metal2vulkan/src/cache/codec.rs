@@ -985,6 +985,7 @@ codec_enum! {
         MultiDraw,
         ShaderFloat8,
         PointPolygons,
+        PipelineRobustness,
     }
     VkExtension {
         ExtRobustness2, ExtImageRobustness, ExtShaderAtomicFloat, ExtShaderAtomicFloat2,
@@ -1014,6 +1015,7 @@ codec_enum! {
         Ext4444Formats,
         ExtMultiDraw,
         ExtShaderFloat8,
+        ExtPipelineRobustness,
     }
     SubgroupOp { Basic, Vote, Arithmetic, Ballot, Shuffle, ShuffleRelative, Clustered, Quad }
     FloatWidth { F16, F32, F64 }
@@ -1263,11 +1265,13 @@ codec_enum! {
         GridTiles,
         PrivateArena { slot_bytes },
         StencilBitDraws,
+        RobustStorageBuffers,
     }
     Mechanism {
         Specialization, Variant, PushConstant, DynamicState, DynamicStateOrPushConstant,
         Builtin, PlanTimeCheck, BinderView, KeyProjection, RegionSelected,
         SyntheticBinding, RenderPassContract, None, PipelineStateOrPushConstant,
+        PipelineState,
     }
 }
 

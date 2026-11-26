@@ -53,12 +53,18 @@ pub(crate) const BLOCK: u64 = 32 * CHUNK;
 /// The chunks of a block: a take that leaves fewer free asks the block-maker thread for the
 /// next block.
 pub(crate) const SPARE: usize = (BLOCK / CHUNK) as usize;
-/// The alignment of every write: a parameter block's, and Metal's for `setBytes` data.
+/// The least alignment of every write: a parameter block's, and Metal's for `setBytes` data.
 const ALIGN: u64 = 16;
 
 /// The device's ring.
 pub(crate) struct Ring {
     state: Mutex<State>,
+    /// The alignment of every write in its chunk: [`ALIGN`], or the translator's buffer base
+    /// alignment where that is larger (`DeviceProfile::buffer_base_alignment`). A chunk starts
+    /// at a multiple of [`CHUNK`] in its block, so a write lies at a multiple of it in its
+    /// block's buffer too: a `set_bytes` copy a kernel reaches through a storage buffer of set 0
+    /// (`crate::bound`) starts its descriptor at its own first byte.
+    align: u64,
     /// The nil buffer's address, once asked ([`Ring::nil`]), read with no lock.
     nil: OnceLock<u64>,
     /// The zero range's address, once asked ([`Ring::zero`]), read with no lock.
@@ -117,10 +123,11 @@ pub(crate) struct Placed {
 }
 
 impl Ring {
-    /// The ring of a new device, whose first block the block-maker thread makes as its first
-    /// work (`crate::memory::run`).
-    pub(crate) fn new() -> Ring {
+    /// The ring of a new device whose writes lie at multiples of `align` (at least [`ALIGN`]),
+    /// whose first block the block-maker thread makes as its first work (`crate::memory::run`).
+    pub(crate) fn new(align: u64) -> Ring {
         Ring {
+            align: align.max(ALIGN),
             state: Mutex::new(State {
                 blocks: Vec::new(),
                 free: Vec::new(),
@@ -201,6 +208,12 @@ impl Ring {
             state.next = Next::Unasked;
             self.changed.notify_all();
         }
+    }
+
+    /// The alignment of every write in the ring's buffers: the translator's buffer base alignment
+    /// (`DeviceProfile::buffer_base_alignment`), at least 16.
+    pub(crate) fn align(&self) -> u64 {
+        self.align
     }
 
     /// The nil buffer's address (the module docs): a chunk of zeros, taken and zeroed at the
@@ -421,12 +434,12 @@ pub(crate) struct Writes {
 }
 
 impl Writes {
-    /// Copies `bytes`, at most a chunk, into the ring at an address aligned to 16 bytes, and
-    /// returns where it lies.
+    /// Copies `bytes`, at most a chunk, into the ring at the ring's alignment (at least 16
+    /// bytes, `Ring::align`), and returns where it lies.
     pub(crate) fn write(&mut self, core: &Core, bytes: &[u8]) -> Result<Placed, Error> {
         let len = bytes.len() as u64;
         debug_assert!(len <= CHUNK);
-        let start = self.used.next_multiple_of(ALIGN);
+        let start = self.used.next_multiple_of(core.ring.align);
         let chunk = match self.chunks.last() {
             Some(chunk) if start + len <= CHUNK => {
                 self.used = start + len;

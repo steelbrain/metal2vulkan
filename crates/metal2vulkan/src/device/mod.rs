@@ -63,7 +63,7 @@ pub(crate) use mechanism::mechanism;
 pub use metal::{MetalDeviceProperties, SimdSupport, StageSimd};
 pub use policy::DevicePolicy;
 pub(crate) use profile::whole_point_size;
-pub use profile::{DeviceProfile, SpirvValidation};
+pub use profile::{DeviceProfile, SpirvValidation, IDENTITY_BUFFER_BYTES, KERNEL_BUFFER_BINDINGS};
 // The vocabulary the device surface reaches: description and policy inputs, and the requirement
 // vocabulary of `Requirements`, `Capability`, and `DeviceDescription`.
 pub use profile::{

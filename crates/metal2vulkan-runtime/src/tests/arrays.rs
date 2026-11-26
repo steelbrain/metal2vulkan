@@ -258,7 +258,8 @@ mod on_device {
             let core = device.core();
             let start = Instant::now();
             // SAFETY: the device is live and made at the floor.
-            let second = unsafe { Arrays::new(&core.device, &counters, false) }
+            let buffers = core.translator.profile().binds_kernel_buffers();
+            let second = unsafe { Arrays::new(&core.device, &counters, (false, buffers)) }
                 .unwrap_or_else(|error| panic!("{name}: a second set 1: {error}"));
             let micros = start.elapsed().as_micros();
             assert_eq!(counters.gauges().device_samplers, 4, "{name}");

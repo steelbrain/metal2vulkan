@@ -164,6 +164,8 @@ pub fn mechanism(fact: &RuntimeFact, profile: &DeviceProfile) -> Mechanism {
         // The consumer draws each draw once and then once per stencil bit its state can replace,
         // pushing the bit for each.
         RuntimeFact::StencilBitDraws => Mechanism::PushConstant,
+        // The pipeline's robustness, which the consumer states as it makes it.
+        RuntimeFact::RobustStorageBuffers => Mechanism::PipelineState,
         // Keyed by the slots bound to a texture buffer of more texels than one view holds.
         RuntimeFact::TexelBufferParts { .. } => Mechanism::Variant,
         // The runtime refuses a dispatch whose slot address is not a multiple of the alignment.

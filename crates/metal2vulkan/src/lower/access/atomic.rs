@@ -117,7 +117,7 @@ use crate::spirv::ir::{
     Type as SType, UnOp,
 };
 
-use super::emit::{prepare, Mem, Prepared, ViewMem};
+use super::emit::{prepare_atomic, Mem, Prepared, ViewMem};
 use super::local::{self, LocalAccess, LocalPtr};
 use super::{not_lowered, refuse, static_roots, AccessPlan, BufferReach, Target};
 use crate::error::LowerFamily;
@@ -1317,7 +1317,7 @@ pub fn emit(
             let m = fb.composite_extract(fat, &[1])?;
             let mut prepared = Vec::with_capacity(targets.len());
             for t in targets {
-                let prep = prepare(cx, fb, t, m, (bytes, false))?;
+                let prep = prepare_atomic(cx, fb, t, m, bytes)?;
                 if typed.is_some() && !matches!(prep.mem, Mem::Psb(_)) {
                     return Err(cx.fail("a typed atomic through a descriptor view"));
                 }

@@ -329,6 +329,7 @@ struct FeatureChain {
     local_read: avk::PhysicalDeviceDynamicRenderingLocalReadFeaturesKHR<'static>,
     divisor: avk::PhysicalDeviceVertexAttributeDivisorFeaturesKHR<'static>,
     maintenance5: avk::PhysicalDeviceMaintenance5FeaturesKHR<'static>,
+    pipeline_robustness: avk::PhysicalDevicePipelineRobustnessFeaturesEXT<'static>,
     // Extension-only.
     robustness2: avk::PhysicalDeviceRobustness2FeaturesEXT<'static>,
     atomic_float: avk::PhysicalDeviceShaderAtomicFloatFeaturesEXT<'static>,
@@ -374,6 +375,7 @@ const EXT_MAINTENANCE4: &[&str] = &["VK_KHR_maintenance4"];
 const EXT_ROTATE: &[&str] = &["VK_KHR_shader_subgroup_rotate"];
 const EXT_LOCAL_READ: &[&str] = &["VK_KHR_dynamic_rendering_local_read"];
 const EXT_MAINTENANCE5: &[&str] = &["VK_KHR_maintenance5"];
+const EXT_PIPELINE_ROBUSTNESS: &[&str] = &["VK_EXT_pipeline_robustness"];
 const EXT_DIVISOR: &[&str] = &[
     "VK_KHR_vertex_attribute_divisor",
     "VK_EXT_vertex_attribute_divisor",
@@ -432,6 +434,7 @@ pub(crate) struct Chained {
     local_read: bool,
     divisor: bool,
     maintenance5: bool,
+    pipeline_robustness: bool,
     robustness2: bool,
     atomic_float: bool,
     atomic_float2: bool,
@@ -483,6 +486,7 @@ impl Chained {
             local_read: x.promoted(EXT_LOCAL_READ, Some(4)),
             divisor: x.promoted(EXT_DIVISOR, Some(4)),
             maintenance5: x.promoted(EXT_MAINTENANCE5, Some(4)),
+            pipeline_robustness: x.promoted(EXT_PIPELINE_ROBUSTNESS, Some(4)),
             robustness2: x.ext(EXT_ROBUSTNESS2),
             atomic_float: x.ext(EXT_ATOMIC_FLOAT),
             atomic_float2: x.ext(EXT_ATOMIC_FLOAT2),
@@ -556,6 +560,7 @@ impl FeatureChain {
                 local_read,
                 divisor,
                 maintenance5,
+                pipeline_robustness,
                 robustness2,
                 atomic_float,
                 atomic_float2,
@@ -834,6 +839,7 @@ feature_sources! { c, x;
     ShaderFmaFloat32 => on(c.shader_fma.shader_fma_float32);
     ShaderFloat8 => on(c.shader_float8.shader_float8);
     Maintenance5 => on(c.maintenance5.maintenance5);
+    PipelineRobustness => on(c.pipeline_robustness.pipeline_robustness);
     TaskShader => on(c.mesh_shader.task_shader);
     MeshShader => on(c.mesh_shader.mesh_shader);
 }
@@ -856,6 +862,7 @@ struct PropertyChain {
     generated_commands: GeneratedCommandsProperties,
     mesh_shader: avk::PhysicalDeviceMeshShaderPropertiesEXT<'static>,
     maintenance5: avk::PhysicalDeviceMaintenance5PropertiesKHR<'static>,
+    robustness2: avk::PhysicalDeviceRobustness2PropertiesEXT<'static>,
 }
 
 /// Which property structures are chained.
@@ -873,6 +880,7 @@ struct PropertiesChained {
     generated_commands: bool,
     mesh_shader: bool,
     maintenance5: bool,
+    robustness2: bool,
 }
 
 impl PropertiesChained {
@@ -892,6 +900,7 @@ impl PropertiesChained {
             generated_commands: x.ext(EXT_GENERATED_COMMANDS),
             mesh_shader: x.ext(EXT_MESH_SHADER),
             maintenance5: x.promoted(EXT_MAINTENANCE5, Some(4)),
+            robustness2: x.ext(EXT_ROBUSTNESS2),
         }
     }
 }
@@ -930,7 +939,8 @@ impl PropertyChain {
                 acceleration_structure,
                 generated_commands,
                 mesh_shader,
-                maintenance5
+                maintenance5,
+                robustness2
             );
             // SAFETY: as in `FeatureChain::query`.
             unsafe { instance.get_physical_device_properties2(pd, &mut p2) };
@@ -1026,6 +1036,9 @@ impl DeviceDescription {
             &properties,
             &PropertiesChained::of(&exposure),
         );
+        // Supported, not enabled: a pipeline may name it without the feature
+        // (`Limits::robust_buffer_access2`); `false` where the structure is not chained.
+        desc.limits.robust_buffer_access2 = on(features.robustness2.robust_buffer_access2);
         desc.allocation = allocation(&properties, &PropertiesChained::of(&exposure));
         desc.subgroup = subgroup(&properties, &PropertiesChained::of(&exposure));
         desc.float_controls = float_controls(&properties.v12);
@@ -1318,6 +1331,13 @@ fn limits(l: &avk::PhysicalDeviceLimits, p: &PropertyChain, chained: &Properties
             .maintenance5
             .early_fragment_multisample_coverage_after_sample_counting),
         sub_pixel_precision_bits: l.sub_pixel_precision_bits,
+        // A feature, set where the description reads its features (`DeviceDescription::query`).
+        robust_buffer_access2: false,
+        robust_buffer_access_update_after_bind: on(v12.robust_buffer_access_update_after_bind),
+        // 0 where `VK_EXT_robustness2` is not exposed (the structure is not chained).
+        robust_storage_buffer_access_size_alignment: p
+            .robustness2
+            .robust_storage_buffer_access_size_alignment,
     }
 }
 

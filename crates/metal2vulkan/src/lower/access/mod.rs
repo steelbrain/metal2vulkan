@@ -132,7 +132,7 @@ use crate::memory::provenance::{Repr, Root};
 use crate::memory::views::{self, View};
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::interface::{AccessSet, BufferForm, PushLoc, PushPlacement, Window};
-use crate::pipeline::sym::{PushField, SlotRef};
+use crate::pipeline::sym::{PushField, SlotRef, Stage};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
 use crate::spirv::ids::{DemoteTy, TypeId, Value as SValue};
@@ -698,6 +698,12 @@ pub struct AccessPlan {
     /// ([`note_variable`]): each reads its `PushField::SlotBounds`, and each of those accesses
     /// whose emitted offset is not a constant is checked against its buffer (`emit::prepare`).
     pub variable: BTreeSet<SlotRef>,
+    /// Under the identity domains, a kernel on a device that binds its buffer arguments
+    /// (`DeviceProfile::binds_kernel_buffers`): its storage views are its slots' buffers, each
+    /// bound over its buffer, and its pipeline's robust buffer access 2 contains them
+    /// (`RuntimeFact::RobustStorageBuffers`), so a view's load or store is not checked in the
+    /// shader (`emit::prepare`); an atomic is (`emit::prepare_atomic`).
+    pub robust_views: bool,
     /// The arenas the function uses.
     pub local: local::LocalPlan,
     /// The function's index extensions ([`index`]): planned before any instruction is selected
@@ -1185,6 +1191,11 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
         plan_replay(cx, &sources)?;
     }
     let own_addresses = identity(p) && !replay;
+    // Under the identity domains a kernel on a device that binds its buffer arguments reaches
+    // each through its storage view, bound over its buffer and contained by the pipeline's
+    // robustness (`DeviceProfile::binds_kernel_buffers`); a slot a wide pointer, a typed atomic or
+    // the stage-in fetch reaches keeps its device address, as every slot of another stage does.
+    let bound = own_addresses && stage == Stage::Kernel && p.binds_kernel_buffers();
     let shared_slot = |s: SlotRef| {
         memory
             .slots
@@ -1218,9 +1229,13 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
         // reaches needs a typed pointer, which only its device address gives; a replay variant
         // reads every slot through its root entry, which the replay's preprocess writes from the
         // replayed command's record.
-        // Under the identity domains every slot is its device address.
+        // Under the identity domains every slot is its device address, but a kernel's that its
+        // device binds (`bound`), other than one the dispatch binds at a multiple of 4 below its
+        // argument's alignment (`LoweringInputs::word_bound_buffers`): a view's `uvec4` and
+        // `uvec2` units take the bind offset to be a multiple of that alignment (`memory::leaf`).
+        let binds = bound && !shared && !cx.inputs.word_bound_buffers.contains(&plan.slot);
         if replay
-            || identity(p)
+            || (identity(p) && !binds)
             || cx.families.access.dynamic.slots.contains(&i)
             || cx.families.access.typed_slots.contains(&i)
         {
@@ -1228,7 +1243,9 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
             continue;
         }
         let mut l = SlotLowering::View;
-        if !storage_range_fits(window, limits) {
+        // A bound slot's descriptor range holds its buffer: the device's range holds the longest
+        // (`DeviceProfile::binds_kernel_buffers`).
+        if !bound && !storage_range_fits(window, limits) {
             cx.facts
                 .insert(RuntimeFact::BufferRangeLimit { slot: plan.slot });
         }
@@ -1361,7 +1378,23 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
             continue;
         };
         let form = match l {
-            SlotLowering::View => BufferForm::Descriptor,
+            SlotLowering::View => {
+                // A bound slot's accesses are not checked in the shader: the pipeline's
+                // robustness contains them (`AccessPlan::robust_views`).
+                if bound {
+                    cx.families.access.variable.remove(&plan.slot);
+                    cx.push.remove(&PushField::SlotBounds(plan.slot));
+                    // Its view's words and units take its address to be a multiple of its
+                    // argument's alignment: the dispatch checks it, as a device-address slot's.
+                    if let Some(align) = address_alignment(cx, plan).filter(|a| *a >= 2) {
+                        cx.facts.insert(RuntimeFact::AddressAlignment {
+                            slot: plan.slot,
+                            align,
+                        });
+                    }
+                }
+                BufferForm::Descriptor
+            }
             SlotLowering::Psb { .. } => {
                 addressed_slot(cx, plan.slot);
                 if let Some(align) = address_alignment(cx, plan) {
@@ -1409,6 +1442,19 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
     for (slot, l) in &own {
         if let SlotLowering::Psb { .. } = l {
             addressed_slot(cx, *slot);
+        }
+    }
+    let views = slots
+        .iter()
+        .flatten()
+        .any(|c| c.form == BufferForm::Descriptor);
+    if bound && views {
+        cx.families.access.robust_views = true;
+        cx.facts.insert(RuntimeFact::RobustStorageBuffers);
+        // A checked load outside its buffer reads the zero range only where a checked slot is
+        // left.
+        if cx.families.access.variable.is_empty() {
+            cx.push.remove(&PushField::ZeroAddress);
         }
     }
     let counts = census.counts(stage);

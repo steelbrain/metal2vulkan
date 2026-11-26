@@ -346,6 +346,8 @@ pub(crate) struct Core {
     pub(crate) stamps: StampPools,
     /// The occlusion query pools command buffers take their visibility results' queries from.
     pub(crate) occlusion: OcclusionPools,
+    /// The pools command buffers take their sets of set 0 from (`crate::bound`).
+    pub(crate) buffer_sets: crate::bound::SetPools,
     /// The one pipeline layout of every pipeline: the empty set 0, set 1, and the push window
     /// over every stage, the translator's `DeviceProfile::push_window` bytes.
     pub(crate) layout: vk::PipelineLayout,
@@ -594,6 +596,7 @@ impl Device {
             mut generated_commands,
             mut maintenance5,
             mut maintenance8,
+            mut pipeline_robustness,
         } = enabled_features;
         // `sparseBinding` for imports over several dma-bufs (`Device::import_dma_bufs`), only where
         // the device's queries offer that import: it changes no other path, as only that import
@@ -663,6 +666,9 @@ impl Device {
         if enabled(floor::MAINTENANCE8) {
             features = features.push_next(&mut maintenance8);
         }
+        if enabled(ash::ext::pipeline_robustness::NAME) {
+            features = features.push_next(&mut pipeline_robustness);
+        }
         // SAFETY: as for the floor check.
         let listed = unsafe { vk_instance.enumerate_device_extension_properties(raw) }
             .map_err(Error::vulkan("vkEnumerateDeviceExtensionProperties"))?;
@@ -715,9 +721,11 @@ impl Device {
         );
         // The translator's window: the device's `maxPushConstantsSize` up to 256 bytes.
         let window = translator.profile().push_window();
+        // Whether a kernel reaches its buffer arguments through set 0's storage buffers.
+        let buffers = translator.profile().binds_kernel_buffers();
         // SAFETY: the device was made from `raw` with `capabilities.features`, the family is its
         // queues' family, and its push limit holds the window.
-        let made = unsafe { objects(&device, &capabilities, &counters, window) };
+        let made = unsafe { objects(&device, &capabilities, &counters, (window, buffers)) };
         let (memory_types, done, arrays, layout) = match made {
             Ok(made) => made,
             Err(error) => {
@@ -874,6 +882,7 @@ impl Device {
             reaper: Reaper::new(),
             stamps: StampPools::new(),
             occlusion: OcclusionPools::new(),
+            buffer_sets: crate::bound::SetPools::new(),
             layout,
             arrays,
             samplers: Mutex::new(SamplerTable::new(sampler_cap)),
@@ -882,7 +891,7 @@ impl Device {
             texels,
             copied_overs: AtomicUsize::new(0),
             limits,
-            ring: Ring::new(),
+            ring: Ring::new(translator.profile().buffer_base_alignment()),
             spans: crate::fault::Spans::default(),
             ids: Ids::new(),
             heap_ids: HeapIds::default(),
@@ -1501,7 +1510,8 @@ unsafe fn consumer_features(
 }
 
 /// The memory types the floor chooses on a new device, the completion thread's semaphores, set 1's
-/// arrays and the pipeline layout, whose one push range is `window` bytes.
+/// arrays and the pipeline layout, whose one push range is `window` bytes and whose set 0 holds a
+/// kernel's storage buffers where `buffers` (`crate::arrays::buffer_bindings`).
 ///
 /// # Safety
 ///
@@ -1511,7 +1521,7 @@ unsafe fn objects(
     device: &ash::Device,
     capabilities: &floor::Capabilities,
     counters: &Counters,
-    window: u32,
+    (window, buffers): (u32, bool),
 ) -> Result<(floor::MemoryTypes, Done, Arrays, vk::PipelineLayout), Error> {
     // SAFETY: the caller's contract.
     let memory_types =
@@ -1519,7 +1529,9 @@ unsafe fn objects(
     // SAFETY: the device is live.
     let made = unsafe { Done::new(device) }.and_then(|mut done| {
         // SAFETY: the device is live, with the floor's features.
-        let arrays = match unsafe { Arrays::new(device, counters, capabilities.attachment_reads) } {
+        let arrays = match unsafe {
+            Arrays::new(device, counters, (capabilities.attachment_reads, buffers))
+        } {
             Ok(arrays) => arrays,
             Err(error) => {
                 // SAFETY: the completion objects are unused.
@@ -1799,6 +1811,7 @@ impl Drop for Core {
         self.imports.destroy(&self.device);
         self.stamps.destroy(&self.device, &self.counters);
         self.occlusion.destroy(&self.device, &self.counters);
+        self.buffer_sets.destroy(&self.device, &self.counters);
         // SAFETY: the device is idle, and nothing records any more.
         unsafe { self.own.destroy(self) };
         // SAFETY: the device is idle; nothing reads the ring.

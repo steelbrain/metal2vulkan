@@ -417,6 +417,7 @@ pub fn required_features(version: ApiVersion) -> impl Iterator<Item = VkFeature>
         VkFeature::DynamicRenderingLocalRead,
         VkFeature::Maintenance5,
         VkFeature::FullDrawIndexUint32,
+        VkFeature::PipelineRobustness,
     ];
     let tiers: [(u32, &'static [VkFeature]); 4] = [(1, V1_1), (2, V1_2), (3, V1_3), (4, V1_4)];
     tiers

@@ -605,6 +605,14 @@ pub enum RuntimeFact {
     /// buffers, so each draw takes the repeats; anything else refuses the output
     /// (`Feature::StencilExport`).
     StencilBitDraws,
+    /// The kernel reaches its buffer arguments through set 0's storage buffers
+    /// (`DeviceProfile::binds_kernel_buffers`), whose accesses the module does not check: the
+    /// consumer makes its pipeline with `VkPipelineRobustnessCreateInfo` naming robust buffer
+    /// access 2 for storage buffers (its other members the device default), and binds each slot's
+    /// buffer over that buffer alone, from its first byte rounded down to
+    /// `max(minStorageBufferOffsetAlignment, 16)` through its last (`docs/API.md` section 5). A
+    /// read outside the range then reads zero and a write there changes nothing.
+    RobustStorageBuffers,
 }
 
 impl RuntimeFact {
@@ -700,6 +708,7 @@ impl RuntimeFact {
             RuntimeFact::GridTiles => "GridTiles",
             RuntimeFact::PrivateArena { .. } => "PrivateArena",
             RuntimeFact::StencilBitDraws => "StencilBitDraws",
+            RuntimeFact::RobustStorageBuffers => "RobustStorageBuffers",
         }
     }
 }
@@ -738,4 +747,7 @@ pub enum Mechanism {
     /// Static pipeline state for fixed-function layouts (no dynamic stride on the profile), a
     /// push field for pulled ones.
     PipelineStateOrPushConstant,
+    /// Static pipeline state the consumer states as it makes the pipeline
+    /// (`VkPipelineRobustnessCreateInfo`).
+    PipelineState,
 }

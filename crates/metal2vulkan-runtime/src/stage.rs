@@ -675,9 +675,14 @@ unsafe fn compile(core: &Core, request: &Request) -> Result<(Vec<u8>, u64), vk::
     if let Some(required) = &mut required {
         stage = stage.push_next(required);
     }
-    let info = vk::ComputePipelineCreateInfo::default()
+    let mut info = vk::ComputePipelineCreateInfo::default()
         .stage(stage)
         .layout(core.layout);
+    // As the device makes the pipeline (`crate::pipeline::kernel_robustness`).
+    let mut robustness = crate::pipeline::kernel_robustness(core);
+    if let Some(robustness) = &mut robustness {
+        info = info.push_next(robustness);
+    }
     let began = host_time();
     // SAFETY: the module, the layout and the cache are the device's.
     let made = unsafe { device.create_compute_pipelines(cache, &[info], None) };

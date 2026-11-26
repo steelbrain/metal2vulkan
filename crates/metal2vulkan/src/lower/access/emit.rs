@@ -295,12 +295,42 @@ pub(super) struct Prepared {
 /// of its value; a store or atomic outside is in the closed `if_(inb)` and runs nothing. Nil and a
 /// slot shorter than one access push a length the check fails for every offset, so neither reads
 /// nor writes there.
+///
+/// A storage view whose pipeline's robustness contains it (`AccessPlan::robust_views`) is read and
+/// written at its residual plus `m` with no check: outside the view's bound range a load reads
+/// zero and a store changes nothing, by robust buffer access 2.
 pub(super) fn prepare(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     t: &Target,
     m: SValue,
     (n, read): (u32, bool),
+) -> BResult<Prepared> {
+    prepare_access(cx, fb, t, m, (n, read), false)
+}
+
+/// [`prepare`] for an atomic of `n` bytes: a storage view's atomic is checked against its bound
+/// range in the shader even where the pipeline's robustness contains the view
+/// (`AccessPlan::robust_views`), since robust buffer access 2 leaves the value an atomic outside
+/// the range returns undefined, where an atomic outside its buffer here returns zero.
+pub(super) fn prepare_atomic(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    t: &Target,
+    m: SValue,
+    n: u32,
+) -> BResult<Prepared> {
+    prepare_access(cx, fb, t, m, (n, false), true)
+}
+
+/// [`prepare`], a robust storage view checked where `atomic`.
+fn prepare_access(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    t: &Target,
+    m: SValue,
+    (n, read): (u32, bool),
+    atomic: bool,
 ) -> BResult<Prepared> {
     let Some(choice) = cx.plan.slots.get(t.slot).copied().flatten() else {
         return Err(cx.fail("an access names an unplanned slot"));
@@ -362,11 +392,6 @@ pub(super) fn prepare(
     };
     let residual = cx.push_field(fb, PushField::SlotBindOffset(choice.slot))?;
     let off = u32_op(fb, BinOp::IAdd, residual, m)?;
-    let size = views::storage_bytes(fb, view)?;
-    let inb = contain::in_bounds(fb, off, size, u64::from(n))?;
-    // Read at a clamped offset (word 0 exists: a bound range is never empty).
-    let zero = k32(fb, 0)?;
-    let off = fb.select(inb, off, zero)?;
     let units = cx
         .decl
         .families
@@ -375,6 +400,20 @@ pub(super) fn prepare(
         .get(t.slot)
         .copied()
         .unwrap_or(UnitViews::NONE);
+    if cx.plan.families.access.robust_views && !atomic {
+        return Ok(Prepared {
+            mem: Mem::View(ViewMem(view, ops, units)),
+            off,
+            inb: None,
+            guard_store: false,
+            reads_zero: false,
+        });
+    }
+    let size = views::storage_bytes(fb, view)?;
+    let inb = contain::in_bounds(fb, off, size, u64::from(n))?;
+    // Read at a clamped offset (word 0 exists: a bound range is never empty).
+    let zero = k32(fb, 0)?;
+    let off = fb.select(inb, off, zero)?;
     Ok(Prepared {
         mem: Mem::View(ViewMem(view, ops, units)),
         off,

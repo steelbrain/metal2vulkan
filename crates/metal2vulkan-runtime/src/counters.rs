@@ -291,6 +291,14 @@ pub(crate) enum Metric {
     Pushes,
     /// [`Metrics::pushes_held`].
     PushesHeld,
+    /// [`Metrics::bound_dispatches`].
+    BoundDispatches,
+    /// [`Metrics::address_dispatches`].
+    AddressDispatches,
+    /// [`Metrics::buffer_sets_written`].
+    BufferSetsWritten,
+    /// [`Metrics::buffer_sets_held`].
+    BufferSetsHeld,
     /// [`Metrics::upload_waits`].
     UploadWaits,
     /// [`Metrics::staging_sleeps`].
@@ -396,6 +404,10 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::RingWrites,
     Metric::Pushes,
     Metric::PushesHeld,
+    Metric::BoundDispatches,
+    Metric::AddressDispatches,
+    Metric::BufferSetsWritten,
+    Metric::BufferSetsHeld,
     Metric::UploadWaits,
     Metric::StagingSleeps,
     Metric::Synchronizations,
@@ -536,6 +548,8 @@ pub(crate) enum Gauge {
     TimestampPools,
     /// [`Gauges::occlusion_pools`].
     OcclusionPools,
+    /// [`Gauges::buffer_set_pools`].
+    BufferSetPools,
     /// [`Gauges::imports`].
     Imports,
     /// [`Gauges::exports`].
@@ -808,6 +822,10 @@ struct Atomics {
     ring_writes: AtomicU64,
     pushes: AtomicU64,
     pushes_held: AtomicU64,
+    bound_dispatches: AtomicU64,
+    address_dispatches: AtomicU64,
+    buffer_sets_written: AtomicU64,
+    buffer_sets_held: AtomicU64,
     upload_waits: AtomicU64,
     staging_sleeps: AtomicU64,
     synchronizations: AtomicU64,
@@ -923,6 +941,7 @@ struct Atomics {
     textures_copied_over: AtomicU64,
     timestamp_pools: AtomicU64,
     occlusion_pools: AtomicU64,
+    buffer_set_pools: AtomicU64,
     imports: AtomicU64,
     exports: AtomicU64,
     surface_imports: AtomicU64,
@@ -1034,6 +1053,10 @@ impl Counters {
             Metric::RingWrites => &a.ring_writes,
             Metric::Pushes => &a.pushes,
             Metric::PushesHeld => &a.pushes_held,
+            Metric::BoundDispatches => &a.bound_dispatches,
+            Metric::AddressDispatches => &a.address_dispatches,
+            Metric::BufferSetsWritten => &a.buffer_sets_written,
+            Metric::BufferSetsHeld => &a.buffer_sets_held,
             Metric::UploadWaits => &a.upload_waits,
             Metric::StagingSleeps => &a.staging_sleeps,
             Metric::Synchronizations => &a.synchronizations,
@@ -1764,6 +1787,7 @@ impl Counters {
             Gauge::TexturesCopiedOver => &a.textures_copied_over,
             Gauge::TimestampPools => &a.timestamp_pools,
             Gauge::OcclusionPools => &a.occlusion_pools,
+            Gauge::BufferSetPools => &a.buffer_set_pools,
             Gauge::Imports => &a.imports,
             Gauge::Exports => &a.exports,
             Gauge::SurfaceImports => &a.surface_imports,
@@ -2005,6 +2029,10 @@ impl Counters {
             ring_writes: a.ring_writes.load(Relaxed),
             pushes: a.pushes.load(Relaxed),
             pushes_held: a.pushes_held.load(Relaxed),
+            bound_dispatches: a.bound_dispatches.load(Relaxed),
+            address_dispatches: a.address_dispatches.load(Relaxed),
+            buffer_sets_written: a.buffer_sets_written.load(Relaxed),
+            buffer_sets_held: a.buffer_sets_held.load(Relaxed),
             upload_waits: a.upload_waits.load(Relaxed),
             staging_sleeps: a.staging_sleeps.load(Relaxed),
             synchronizations: a.synchronizations.load(Relaxed),
@@ -2172,6 +2200,7 @@ impl Counters {
             textures_copied_over: a.textures_copied_over.load(Relaxed),
             timestamp_pools: a.timestamp_pools.load(Relaxed),
             occlusion_pools: a.occlusion_pools.load(Relaxed),
+            buffer_set_pools: a.buffer_set_pools.load(Relaxed),
             imports: a.imports.load(Relaxed),
             exports: a.exports.load(Relaxed),
             surface_imports: a.surface_imports.load(Relaxed),
@@ -2818,6 +2847,26 @@ pub struct Metrics {
     /// push: every pipeline shares the device's one layout and push range, so a push stays for the
     /// draws and dispatches after it.
     pub pushes_held: u64,
+    /// Dispatches recorded whose kernel reaches its buffer arguments through storage buffers of
+    /// set 0, each bound over its buffer and contained by its pipeline's robust buffer access 2:
+    /// the form a device whose translator profile binds a kernel's buffers
+    /// (`DeviceProfile::binds_kernel_buffers`) gives a kernel that reaches one through its
+    /// storage view. A dispatch split into pieces counts once a piece.
+    pub bound_dispatches: u64,
+    /// Dispatches recorded whose kernel reaches every buffer argument at its device address, each
+    /// access at a run-time offset checked in the shader: every kernel's on a device that does
+    /// not bind them, and on one that does, a kernel whose every argument a wide pointer, a typed
+    /// atomic or its stage-in fetch reaches. A dispatch split into pieces counts once a piece.
+    pub address_dispatches: u64,
+    /// Sets of set 0 written for [`bound_dispatches`](Self::bound_dispatches): a dispatch whose
+    /// buffer slots' descriptors differ from those of the set its command buffer wrote last takes
+    /// the next set of its command buffer's pools, writes it and binds it. A changed bind offset
+    /// alone writes none.
+    pub buffer_sets_written: u64,
+    /// [`bound_dispatches`](Self::bound_dispatches) whose descriptors begin the set their command
+    /// buffer wrote last: none is written, and that set is bound only where the Vulkan command
+    /// buffer does not hold it.
+    pub buffer_sets_held: u64,
     /// Calls that waited for an upload to complete before they recorded: the upload at its
     /// bound of calls or bytes, or the staging region with no room for a copy.
     pub upload_waits: u64,
@@ -3533,6 +3582,11 @@ pub struct Gauges {
     /// results: a command buffer takes them as its encoders set `Boolean` and `Counting` modes,
     /// and gives them back as it retires; at most 16 are kept free, and the rest destroyed.
     pub occlusion_pools: u64,
+    /// The device's pools of sets of set 0, each of 256 sets, on a device whose kernels bind
+    /// their buffers as storage buffers there (`Metrics::bound_dispatches`): a command buffer
+    /// takes them as its dispatches write sets, and gives them back as it retires; at most 16
+    /// are kept free, and the rest destroyed.
+    pub buffer_set_pools: u64,
     /// Imports whose memory is not yet freed: one for each imported block
     /// (`Device::import_dma_buf` on Unix,
     /// [`Device::import_host_memory`](crate::Device::import_host_memory)), and one for each

@@ -13,6 +13,7 @@ mod arena;
 mod arrays;
 mod blit;
 mod block;
+mod bound;
 mod buffer;
 mod cache;
 mod capture;

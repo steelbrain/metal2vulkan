@@ -75,7 +75,7 @@ use crate::stage::{Create, Heavy};
 use crate::times::host_time;
 use ash::vk;
 use metal2vulkan::cache::Hash256;
-use metal2vulkan::device::VkLimit;
+use metal2vulkan::device::{VkLimit, KERNEL_BUFFER_BINDINGS};
 use metal2vulkan::error::{Capability, Error as TranslationError, Feature, Needs, Unsupported};
 use metal2vulkan::library::{CompiledFunction, FunctionCompileKey};
 use metal2vulkan::metal::{BindingAccess, BindingType};
@@ -707,6 +707,10 @@ pub(crate) type Key<'a> = ([u32; 3], &'a Lengths, bool);
 pub(crate) struct Interface {
     /// Each buffer slot the kernel uses, with its access.
     pub(crate) buffers: Vec<(u32, Access)>,
+    /// The buffer slot of each binding of set 0, in binding order: the slots the kernel reaches
+    /// through storage buffers there, on a device that binds them (`crate::bound`); empty where
+    /// it reaches every one at its device address.
+    pub(crate) views: Vec<u32>,
     /// Each texture slot the kernel uses, with its access.
     pub(crate) textures: Vec<(u32, Access)>,
     /// Each texture slot the kernel reads through its storage image (`TextureSlot::storage`, a
@@ -872,6 +876,13 @@ pub(crate) enum FieldValue {
     /// of 4 under a mask past 3, where it runs the variant that holds the slot to what its
     /// accesses need (`LoweringInputs::word_bound_buffers`).
     BufferAddress { slot: u32, mask: u64 },
+    /// A `u32`: the bytes from the first byte of the slot's set-0 descriptor (`crate::bound`) to
+    /// the slot's address, its buffer's first byte rounded down to the buffer base alignment there:
+    /// that distance plus the bind offset for a buffer, 0 for a `set_bytes` copy and where nothing
+    /// is bound (the translator's `PushField::SlotBindOffset`). `mask` is as
+    /// [`FieldValue::BufferAddress`]'s, and the dispatch checks the slot's address against it as
+    /// it checks that field's.
+    BindOffset { slot: u32, mask: u64 },
     /// Two `u32`s: the bytes of the buffer bound at the slot before its bind offset, then its
     /// length (a `set_bytes` copy: 0 and its length; nothing bound: 0 and 0), which the module
     /// checks each access of the slot at an offset that is not a constant against (the
@@ -1639,11 +1650,18 @@ pub(crate) fn interface(
 ) -> Result<Interface, KernelInputKind> {
     let translated = &pipeline.interface;
     let stage = &pipeline.stage;
-    // Every argument is a pushed address, a pushed resource ID or index, or a specialization: no
-    // descriptor but set 1's and no table the binder builds (the translator holds a kernel's
-    // constant data in its module on this device's profile); the stage's flags are its
-    // subgroups'. A `[[stage_in]]` attribute is fetched in the shader from its layout's buffer
-    // slot, at that slot's pushed address, by the pushed stage-in and dispatch regions.
+    // Every argument is a pushed address, a pushed resource ID or index, a specialization, or, on
+    // a device that binds a kernel's buffers, a storage buffer of set 0 with its pushed bind
+    // offset: no other descriptor but set 1's and no table the binder builds (the translator
+    // holds a kernel's constant data in its module on this device's profile); the stage's flags
+    // are its subgroups'. A `[[stage_in]]` attribute is fetched in the shader from its layout's
+    // buffer slot, at that slot's pushed address, by the pushed stage-in and dispatch regions.
+    let robust = (pipeline.dependencies.iter())
+        .any(|dependency| dependency.fact == RuntimeFact::RobustStorageBuffers);
+    let views = match robust {
+        true => kernel_views(&pipeline.layout.sets),
+        false => Some(Vec::new()),
+    };
     let stage_flags = vk::PipelineShaderStageCreateFlags::from_raw(stage.stage_flags.as_raw());
     let subgroups = vk::PipelineShaderStageCreateFlags::REQUIRE_FULL_SUBGROUPS
         | vk::PipelineShaderStageCreateFlags::ALLOW_VARYING_SUBGROUP_SIZE;
@@ -1657,7 +1675,9 @@ pub(crate) fn interface(
             KernelInputKind::HandleTranslation,
         ),
         (
-            !pipeline.layout.sets.iter().all(of_the_device),
+            views.is_none()
+                || !(pipeline.layout.sets.iter())
+                    .all(|set| robust && set.set == 0 || of_the_device(set)),
             KernelInputKind::DescriptorSet,
         ),
         (
@@ -1668,6 +1688,7 @@ pub(crate) fn interface(
     if let Some(&(_, kind)) = unsupplied.iter().find(|(reads, _)| *reads) {
         return Err(kind);
     }
+    let views = views.unwrap_or_default();
     // The bind-time facts the encoder supplies.
     let mut multiples = Vec::new();
     let mut aligned = Vec::new();
@@ -1714,6 +1735,10 @@ pub(crate) fn interface(
             | RuntimeFact::PartialThreadgroups
             | RuntimeFact::GridTiles
             | RuntimeFact::DeviceAddresses { .. } => {}
+            // Every kernel's pipeline on a device that binds its buffers is made with robust
+            // buffer access 2 for its storage buffers (`kernel_robustness`), and each binding of
+            // set 0 is its slot's buffer (`crate::bound`).
+            RuntimeFact::RobustStorageBuffers => {}
             // The stage-in region, which the encoder pushes (`FieldValue::StageInRegion`).
             RuntimeFact::StageInRegion => {}
             // What the translator checks against the descriptor when it compiles, and nothing on
@@ -1859,6 +1884,21 @@ pub(crate) fn interface(
                     }),
                     _,
                 ) => FieldValue::BufferBounds(index),
+                // A slot of set 0's (`crate::bound`).
+                (
+                    PushField::SlotBindOffset(SlotRef {
+                        stage: Stage::Kernel,
+                        class: SlotClass::Buffer,
+                        index,
+                    }),
+                    _,
+                ) if views.contains(&index) => FieldValue::BindOffset {
+                    slot: index,
+                    mask: aligned
+                        .iter()
+                        .find(|&&(slot, _)| slot == index)
+                        .map_or(0, |&(_, mask)| mask),
+                },
                 (PushField::ZeroAddress, _) => FieldValue::ZeroAddress,
                 (PushField::PrivateArenaAddress, _) => FieldValue::PrivateArena,
                 _ => return Err(KernelInputKind::PushField),
@@ -1944,6 +1984,7 @@ pub(crate) fn interface(
     };
     Ok(Interface {
         buffers,
+        views,
         textures,
         storage_reads,
         formatless,
@@ -1975,6 +2016,50 @@ pub(crate) fn interface(
 /// The refusal of a kernel that reads what the compute encoder does not supply, of `kind`.
 pub(crate) fn gap(kind: KernelInputKind) -> Error {
     Error::Unsupported(Gap::KernelInput { kind })
+}
+
+/// The buffer slot of each binding of set 0 among `sets`, a kernel's whose module states
+/// `RuntimeFact::RobustStorageBuffers`, in binding order: each binding one storage buffer of a
+/// kernel buffer slot, within the device's set 0 (`crate::arrays::buffer_bindings`). None where a
+/// binding is anything else.
+fn kernel_views(sets: &[DescriptorSetLayout]) -> Option<Vec<u32>> {
+    let Some(set) = sets.iter().find(|set| set.set == 0) else {
+        return Some(Vec::new());
+    };
+    (set.bindings.iter().enumerate())
+        .map(|(at, binding)| {
+            let ty: vk::DescriptorType = binding.ty.into();
+            match binding.source {
+                BindingSource::Buffer(SlotRef {
+                    stage: Stage::Kernel,
+                    class: SlotClass::Buffer,
+                    index,
+                }) if binding.binding as usize == at
+                    && binding.binding < KERNEL_BUFFER_BINDINGS
+                    && ty == vk::DescriptorType::STORAGE_BUFFER
+                    && binding.count == 1 =>
+                {
+                    Some(index)
+                }
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// The robustness of every kernel's pipeline on `core`'s device: on a device whose kernels bind
+/// their buffer arguments as storage buffers of set 0 (`DeviceProfile::binds_kernel_buffers`),
+/// robust buffer access 2 for storage buffers, which contains each binding at its buffer's bytes
+/// (`crate::bound`: a read past them reads zero, and a write there is dropped), and the device's
+/// own behaviour for the rest; None elsewhere. A kernel that reads no storage buffer is made with
+/// it too, which changes nothing it reaches.
+pub(crate) fn kernel_robustness(
+    core: &Core,
+) -> Option<vk::PipelineRobustnessCreateInfoEXT<'static>> {
+    (core.translator.profile().binds_kernel_buffers()).then(|| {
+        vk::PipelineRobustnessCreateInfoEXT::default()
+            .storage_buffers(vk::PipelineRobustnessBufferBehaviorEXT::ROBUST_BUFFER_ACCESS_2)
+    })
 }
 
 /// Whether `set` of a pipeline's layout is the device's: set 1 the device's texture and sampler
@@ -2732,11 +2817,17 @@ impl Kernel {
                 if let Some(required) = &mut required {
                     stage = stage.push_next(required);
                 }
-                let info = vk::ComputePipelineCreateInfo::default()
+                let mut info = vk::ComputePipelineCreateInfo::default()
                     .flags(flags)
                     .stage(stage)
                     .layout(core.layout);
-                // SAFETY: the module, the layout and the cache are the device's.
+                let mut robustness = kernel_robustness(core);
+                if let Some(robustness) = &mut robustness {
+                    info = info.push_next(robustness);
+                }
+                // SAFETY: the module, the layout and the cache are the device's; the robustness is
+                // the `pipelineRobustness` feature's, which device creation enabled where the
+                // profile binds a kernel's buffers.
                 unsafe { core.device.create_compute_pipelines(cache, &[info], None) }
             };
         match &self.code {

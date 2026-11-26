@@ -60,6 +60,7 @@ use crate::floor::{
 };
 use crate::Device;
 use ash::vk;
+use metal2vulkan::device::KERNEL_BUFFER_BINDINGS;
 use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Mutex;
@@ -307,8 +308,9 @@ impl Grants {
 
 /// Set 1, its layouts, its default samplers, and the grants of its indices.
 pub(crate) struct Arrays {
-    /// The empty layout of set 0, which no pipeline reads.
-    empty: vk::DescriptorSetLayout,
+    /// Set 0's layout: empty, or, on a device that binds a kernel's buffer arguments
+    /// ([`buffer_bindings`]), the kernel's storage buffers.
+    first: vk::DescriptorSetLayout,
     /// Set 1's layout.
     layout: vk::DescriptorSetLayout,
     /// The pool of the one set, which destroying it frees.
@@ -330,7 +332,8 @@ pub(crate) struct Arrays {
 
 impl Arrays {
     /// Makes set 1 and writes every element its default; with `seconds`, the sampled-texture
-    /// array holds the second elements too.
+    /// array holds the second elements too. With `buffers`, set 0's layout holds a kernel's
+    /// storage buffers ([`buffer_bindings`]); without, it is empty.
     ///
     /// # Safety
     ///
@@ -339,11 +342,11 @@ impl Arrays {
     pub(crate) unsafe fn new(
         device: &ash::Device,
         counters: &Counters,
-        seconds: bool,
+        (seconds, buffers): (bool, bool),
     ) -> Result<Arrays, Error> {
         let mut made = Made::default();
         // SAFETY: the caller's contract; what was made is destroyed where a later step fails.
-        let arrays = unsafe { made.make(device, counters, seconds) };
+        let arrays = unsafe { made.make(device, counters, (seconds, buffers)) };
         if arrays.is_err() {
             // SAFETY: nothing else holds what was made.
             unsafe { made.destroy(device, counters) };
@@ -356,9 +359,15 @@ impl Arrays {
         self.set
     }
 
-    /// The set layouts of every pipeline: the empty set 0, then set 1.
+    /// The set layouts of every pipeline: set 0, then set 1.
     pub(crate) fn set_layouts(&self) -> [vk::DescriptorSetLayout; 2] {
-        [self.empty, self.layout]
+        [self.first, self.layout]
+    }
+
+    /// Set 0's layout, of a kernel's storage buffers on a device that binds them
+    /// (`crate::bound`).
+    pub(crate) fn buffer_layout(&self) -> vk::DescriptorSetLayout {
+        self.first
     }
 
     /// Places a texture at `index` ([`Grants::place`]) and writes its elements before another
@@ -947,7 +956,7 @@ impl Arrays {
     /// The device is idle, and no pipeline layout made with [`Arrays::set_layouts`] is used again.
     pub(crate) unsafe fn destroy(&self, device: &ash::Device, counters: &Counters) {
         let made = Made {
-            empty: Some(self.empty),
+            first: Some(self.first),
             layout: Some(self.layout),
             pool: Some(self.pool),
             plain: Some(self.plain),
@@ -961,7 +970,7 @@ impl Arrays {
 /// What [`Arrays::new`] has made so far.
 #[derive(Default)]
 struct Made {
-    empty: Option<vk::DescriptorSetLayout>,
+    first: Option<vk::DescriptorSetLayout>,
     layout: Option<vk::DescriptorSetLayout>,
     pool: Option<vk::DescriptorPool>,
     plain: Option<vk::Sampler>,
@@ -976,16 +985,21 @@ impl Made {
         &mut self,
         device: &ash::Device,
         counters: &Counters,
-        seconds: bool,
+        (seconds, buffers): (bool, bool),
     ) -> Result<Arrays, Error> {
         let sampled = sampled_images(seconds);
-        let empty = vk::DescriptorSetLayoutCreateInfo::default();
+        let bindings = buffer_bindings();
+        let first = vk::DescriptorSetLayoutCreateInfo::default().bindings(if buffers {
+            &bindings[..]
+        } else {
+            &[]
+        });
         // SAFETY: the device is live.
-        unsafe { supported(device, &empty, 0) }?;
+        unsafe { supported(device, &first, 0) }?;
         // SAFETY: the device is live.
-        let empty = unsafe { device.create_descriptor_set_layout(&empty, None) }
+        let first = unsafe { device.create_descriptor_set_layout(&first, None) }
             .map_err(Error::vulkan("vkCreateDescriptorSetLayout"))?;
-        self.empty = Some(empty);
+        self.first = Some(first);
         // SAFETY: the device is live, with the update-after-bind features of each binding's type
         // (the floor's).
         let layout = unsafe {
@@ -1057,7 +1071,7 @@ impl Made {
         // SAFETY: the set is the device's and no command buffer uses it yet.
         unsafe { fill(device, set, sampled, plain, compare) };
         Ok(Arrays {
-            empty,
+            first,
             layout,
             pool,
             set,
@@ -1084,11 +1098,27 @@ impl Made {
             if let Some(pool) = self.pool {
                 device.destroy_descriptor_pool(pool, None);
             }
-            for layout in [self.layout, self.empty].into_iter().flatten() {
+            for layout in [self.layout, self.first].into_iter().flatten() {
                 device.destroy_descriptor_set_layout(layout, None);
             }
         }
     }
+}
+
+/// Set 0's bindings on a device that binds a kernel's buffer arguments
+/// (`DeviceProfile::binds_kernel_buffers`): one storage buffer for each of Metal's 31 buffer
+/// slots, at the compute stage alone, bindings `0..31`. A kernel reads the first of them, one
+/// for each buffer argument it reaches through its storage view, in slot order (the translator's
+/// dense set 0); a draw's stages read none.
+pub(crate) fn buffer_bindings(
+) -> [vk::DescriptorSetLayoutBinding<'static>; KERNEL_BUFFER_BINDINGS as usize] {
+    std::array::from_fn(|binding| {
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(binding as u32)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::COMPUTE)
+    })
 }
 
 /// Runs `f` with set 1's layout, `counts` elements in each binding of [`BINDINGS`].

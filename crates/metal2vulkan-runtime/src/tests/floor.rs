@@ -2309,6 +2309,7 @@ fn every_device_the_loader_lists_is_above_the_floor() {
             mut generated_commands,
             mut maintenance5,
             mut maintenance8,
+            mut pipeline_robustness,
         } = capabilities.features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .features(core)
@@ -2360,6 +2361,9 @@ fn every_device_the_loader_lists_is_above_the_floor() {
         }
         if enabled(crate::floor::MAINTENANCE8) {
             features = features.push_next(&mut maintenance8);
+        }
+        if enabled(ash::ext::pipeline_robustness::NAME) {
+            features = features.push_next(&mut pipeline_robustness);
         }
         let extensions: Vec<*const c_char> = capabilities
             .extensions

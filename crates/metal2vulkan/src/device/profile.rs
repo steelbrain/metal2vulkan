@@ -116,6 +116,39 @@ impl DeviceProfile {
         (self.fields.limits.max_push_constants_size).min(crate::lower::push::MOST_BYTES)
     }
 
+    /// Whether a kernel compiled for the profile reaches its buffer arguments through set 0's
+    /// storage buffers, each bound over its buffer (`docs/API.md` section 5), its pipeline made
+    /// with robust buffer access 2 for storage buffers (`RuntimeFact::RobustStorageBuffers`), in
+    /// place of their device addresses with each access at a run-time offset checked in the
+    /// shader. It is the device's answer to five queries, under the identity domains alone:
+    /// `pipelineRobustness` enabled, `robustBufferAccess2` supported (it is not enabled:
+    /// [`Limits::robust_buffer_access2`]), `robustBufferAccessUpdateAfterBind`,
+    /// `maxPerStageDescriptorStorageBuffers` of [`KERNEL_BUFFER_BINDINGS`] or more, and a
+    /// `maxStorageBufferRange` that holds a buffer of [`IDENTITY_BUFFER_BYTES`] with the bytes a
+    /// descriptor starts before it, `max(minStorageBufferOffsetAlignment, 16) - 1`. Every other
+    /// stage, and a kernel on a device that answers any of them otherwise, reaches each argument
+    /// at its device address.
+    pub fn binds_kernel_buffers(&self) -> bool {
+        let f = &self.fields;
+        let l = &f.limits;
+        let ahead = self.buffer_base_alignment() - 1;
+        f.pointer_domain == PointerDomain::Identity
+            && f.enabled.features.contains(&VkFeature::PipelineRobustness)
+            && l.robust_buffer_access2
+            && l.robust_buffer_access_update_after_bind
+            && l.max_per_stage_descriptor_storage_buffers >= KERNEL_BUFFER_BINDINGS
+            && u64::from(l.max_storage_buffer_range) >= IDENTITY_BUFFER_BYTES.saturating_add(ahead)
+    }
+
+    /// The alignment at which a binder starts a buffer argument's descriptor range in the
+    /// `VkBuffer` it binds: `max(minStorageBufferOffsetAlignment, 16)`. With that buffer's first
+    /// byte at a multiple of 16 in the Metal address space, a descriptor byte is congruent to its
+    /// Metal address modulo 16, which a view's `uvec4` and `uvec2` units take (`docs/API.md`
+    /// section 5).
+    pub fn buffer_base_alignment(&self) -> u64 {
+        crate::memory::views::base_alignment(self.fields.limits.min_storage_buffer_offset_alignment)
+    }
+
     /// The fragment-stage and fixed-function capabilities the profile enables.
     pub fn fragment(&self) -> &FragmentCaps {
         &self.fields.fragment
@@ -327,6 +360,16 @@ fn fingerprint_of(fields: &ProfileFields) -> Hash256 {
     let _ = write!(h, "{:?}", fields);
     h.0.finalize().into()
 }
+
+/// The buffer arguments a kernel has, Metal's `[[buffer(0)]]` to `[[buffer(30)]]`: set 0's
+/// storage buffers where a device binds them ([`DeviceProfile::binds_kernel_buffers`]), the
+/// bindings a consumer's set-0 layout holds for every kernel, and the
+/// `maxPerStageDescriptorStorageBuffers` that form asks.
+pub const KERNEL_BUFFER_BINDINGS: u32 = 31;
+
+/// The longest buffer the identity domains reach: 2^31 bytes, the runtime's `MAX_BUFFER_LENGTH`,
+/// whose accesses add 32-bit offsets read as signed to its address (`docs/API.md` section 1).
+pub const IDENTITY_BUFFER_BYTES: u64 = 1 << 31;
 
 /// Every field of a profile, policy included. The fingerprint hashes all of them.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -786,6 +829,21 @@ pub struct Limits {
     /// `subPixelPrecisionBits`: the bits of a framebuffer coordinate's fraction the rasterizer
     /// keeps (4 at least).
     pub sub_pixel_precision_bits: u32,
+    /// `robustBufferAccess2` (`VK_EXT_robustness2`) as the device reports it, whether or not the
+    /// consumer enables it: a pipeline may name robust buffer access 2 in its
+    /// `VkPipelineRobustnessCreateInfo` where it is supported
+    /// (VUID-VkPipelineRobustnessCreateInfo-robustBufferAccess2-06931), the feature itself left
+    /// off. `false` where the extension is not exposed.
+    pub robust_buffer_access2: bool,
+    /// `robustBufferAccessUpdateAfterBind` (Vulkan 1.2): a pipeline may name robust buffer access
+    /// on a device that enables an update-after-bind buffer descriptor feature
+    /// (VUID-VkPipelineRobustnessCreateInfo-storageBuffers-10636).
+    pub robust_buffer_access_update_after_bind: bool,
+    /// `robustStorageBufferAccessSizeAlignment` (`VkPhysicalDeviceRobustness2PropertiesEXT`, 1 or
+    /// 4): under robust buffer access 2 a storage buffer's range is checked rounded up to it, so
+    /// up to that many bytes less 1 past a range read as inside it. 0 where `VK_EXT_robustness2`
+    /// is not exposed.
+    pub robust_storage_buffer_access_size_alignment: u64,
 }
 
 /// The limits of `VK_EXT_mesh_shader` (`VkPhysicalDeviceMeshShaderPropertiesEXT`) the task and mesh

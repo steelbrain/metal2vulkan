@@ -374,6 +374,12 @@ pub enum VkFeature {
     /// encoder's `TriangleFillMode::Points` draws. Like every portability member, a device without
     /// `VK_KHR_portability_subset` has no such restriction.
     PointPolygons,
+    // Appended.
+    /// `pipelineRobustness` (`VK_EXT_pipeline_robustness`, core in 1.4): a pipeline states its own
+    /// robustness (`VkPipelineRobustnessCreateInfo`) whatever the device enables. A kernel whose
+    /// buffer arguments are bound as storage buffers is made with robust buffer access 2 for its
+    /// storage buffers (`RuntimeFact::RobustStorageBuffers`).
+    PipelineRobustness,
 }
 
 /// A Vulkan device extension the new core can require.
@@ -507,6 +513,9 @@ pub enum VkExtension {
     /// `VK_EXT_shader_float8` (never promoted): the 8-bit float types of `SPV_EXT_float8`, whose
     /// `shaderFloat8` Vulkan requires of every device that lists it. The core reads none of it.
     ExtShaderFloat8,
+    // Appended.
+    /// `VK_EXT_pipeline_robustness` (core in 1.4): [`VkFeature::PipelineRobustness`].
+    ExtPipelineRobustness,
 }
 
 /// One subgroup operation class (`VkSubgroupFeatureFlagBits`).

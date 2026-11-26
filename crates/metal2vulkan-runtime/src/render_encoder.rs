@@ -3900,7 +3900,12 @@ fn fill_push(
             FieldValue::IndirectRange => bytes[at..at + 8].copy_from_slice(&whole.to_le_bytes()),
             FieldValue::IndirectSequence | FieldValue::IndirectBase => bytes[at..at + 4].fill(0),
             // A render content has no dispatch or stage-in region (`render::draws`).
-            FieldValue::DispatchRegion | FieldValue::StageInRegion | FieldValue::PrivateArena => {}
+            // A render content has none of these (`crate::render`): its stages reach every buffer
+            // at its address.
+            FieldValue::DispatchRegion
+            | FieldValue::StageInRegion
+            | FieldValue::PrivateArena
+            | FieldValue::BindOffset { .. } => {}
         }
     }
 }

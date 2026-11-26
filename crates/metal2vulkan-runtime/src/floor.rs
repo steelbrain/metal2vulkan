@@ -58,8 +58,11 @@ pub const TIME_DOMAINS: [vk::TimeDomainKHR; 2] =
 /// reports it, through which an opaque handle's surface plane whose `LINEAR` tiling renders only
 /// as a linear colour attachment lies in place, `VK_EXT_device_fault`, with its `deviceFault`
 /// feature, which Vulkan requires of a device that lists it, through which a lost device's fault
-/// report is read once, at its first loss ([`DeviceLoss::fault`](crate::DeviceLoss::fault)), and
-/// `VK_KHR_maintenance8` ([`MAINTENANCE8`]), for the optional feature of its own.
+/// report is read once, at its first loss ([`DeviceLoss::fault`](crate::DeviceLoss::fault)),
+/// `VK_EXT_pipeline_robustness`, with its `pipelineRobustness` feature where the device reports it,
+/// through which a kernel's pipeline contains its buffer arguments' storage buffers by robust
+/// buffer access 2 ([`PIPELINE_ROBUSTNESS`]), and `VK_KHR_maintenance8` ([`MAINTENANCE8`]), for the
+/// optional feature of its own.
 pub const OPTIONAL_EXTENSIONS: &[&CStr] = &[
     ash::khr::shader_maximal_reconvergence::NAME,
     ash::khr::shader_subgroup_uniform_control_flow::NAME,
@@ -77,6 +80,7 @@ pub const OPTIONAL_EXTENSIONS: &[&CStr] = &[
     ash::ext::image_drm_format_modifier::NAME,
     ash::nv::linear_color_attachment::NAME,
     ash::ext::device_fault::NAME,
+    ash::ext::pipeline_robustness::NAME,
     MAINTENANCE8,
 ];
 
@@ -420,6 +424,9 @@ pub struct Features {
     /// `VkPhysicalDeviceMaintenance8FeaturesKHR`, of `VK_KHR_maintenance8` ([`MAINTENANCE8`]):
     /// read and enabled only where the device lists it, and then only `maintenance8`.
     pub maintenance8: Maintenance8Features,
+    /// `VkPhysicalDevicePipelineRobustnessFeaturesEXT`, of `VK_EXT_pipeline_robustness`: read and
+    /// enabled only where the device lists it ([`OPTIONAL_EXTENSIONS`], [`PIPELINE_ROBUSTNESS`]).
+    pub pipeline_robustness: vk::PhysicalDevicePipelineRobustnessFeaturesEXT<'static>,
 }
 
 /// One feature: the Vulkan structure that reports it, its member as ash spells it, the member, and
@@ -491,6 +498,9 @@ macro_rules! feature {
     };
     (@structure maintenance5) => {
         "VkPhysicalDeviceMaintenance5FeaturesKHR"
+    };
+    (@structure pipeline_robustness) => {
+        "VkPhysicalDevicePipelineRobustnessFeaturesEXT"
     };
     (@translator) => {
         None
@@ -789,6 +799,16 @@ pub(crate) const LINEAR_ATTACHMENTS: &[Feature] =
 /// work ([`DeviceLoss::fault`](crate::DeviceLoss::fault)). The translator does not name it.
 pub(crate) const FAULT_REPORTS: &[Feature] = &[feature!(fault.device_fault)];
 
+/// The feature of `VK_EXT_pipeline_robustness` (one of [`OPTIONAL_EXTENSIONS`]): enabled where the
+/// device lists the extension and reports it. With it, where the translator's profile binds a
+/// kernel's buffer arguments (`DeviceProfile::binds_kernel_buffers`: robust buffer access 2
+/// supported, though never enabled for the device, and its other terms), a kernel reaches each
+/// buffer argument through a storage buffer of set 0 that its pipeline's robust buffer access 2
+/// contains (`VkPipelineRobustnessCreateInfo`), in place of its checked device address: the
+/// twelfth form a query chooses.
+pub(crate) const PIPELINE_ROBUSTNESS: &[Feature] =
+    &[feature!(pipeline_robustness.pipeline_robustness => PipelineRobustness)];
+
 /// The features of [`INDIRECT_COMMANDS`]: enabled together where the device offers indirect
 /// command buffers ([`IndirectCommandLimits`]), and neither otherwise. The translator is told of
 /// neither `maintenance5` nor `VK_KHR_maintenance5`: told, it would hold `A8Unorm` in `A8_UNORM`
@@ -818,6 +838,7 @@ pub(crate) const ENABLED: &[&[Feature]] = &[
     BORDER_SWIZZLE,
     LINEAR_ATTACHMENTS,
     FAULT_REPORTS,
+    PIPELINE_ROBUSTNESS,
     INDIRECT_COMMAND_FEATURES,
 ];
 
@@ -1215,6 +1236,7 @@ unsafe fn query(
         let line_rasterization_listed = listed(ash::ext::line_rasterization::NAME);
         let maintenance5_listed = listed(ash::khr::maintenance5::NAME);
         let maintenance8_listed = listed(MAINTENANCE8);
+        let pipeline_robustness_listed = listed(ash::ext::pipeline_robustness::NAME);
 
         let Features {
             core,
@@ -1237,6 +1259,7 @@ unsafe fn query(
             generated_commands,
             maintenance5,
             maintenance8,
+            pipeline_robustness,
         } = &mut queried.features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .push_next(&mut *vulkan11)
@@ -1290,6 +1313,9 @@ unsafe fn query(
         if maintenance8_listed {
             features = features.push_next(&mut *maintenance8);
         }
+        if pipeline_robustness_listed {
+            features = features.push_next(&mut *pipeline_robustness);
+        }
         instance.get_physical_device_features2(physical, &mut features);
         *core = features.features;
         vulkan11.p_next = std::ptr::null_mut();
@@ -1311,6 +1337,7 @@ unsafe fn query(
         generated_commands.p_next = std::ptr::null_mut();
         maintenance5.p_next = std::ptr::null_mut();
         maintenance8.p_next = std::ptr::null_mut();
+        pipeline_robustness.p_next = std::ptr::null_mut();
 
         queried.families = instance.get_physical_device_queue_family_properties(physical);
         queried.memory = instance.get_physical_device_memory_properties(physical);
@@ -1436,6 +1463,11 @@ pub(crate) fn decide(device: &Queried) -> Result<Capabilities, BelowFloor> {
     }
     if listed(ash::ext::device_fault::NAME) {
         for feature in FAULT_REPORTS {
+            *(feature.field)(&mut features) = *(feature.field)(&mut reported);
+        }
+    }
+    if listed(ash::ext::pipeline_robustness::NAME) {
+        for feature in PIPELINE_ROBUSTNESS {
             *(feature.field)(&mut features) = *(feature.field)(&mut reported);
         }
     }

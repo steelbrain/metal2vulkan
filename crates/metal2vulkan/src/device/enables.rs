@@ -251,6 +251,7 @@ exposures! {
     ];
     promoted(4, ROTATE) => [ShaderSubgroupRotate, ShaderSubgroupRotateClustered];
     promoted(4, &[E::KhrMaintenance5]) => [Maintenance5];
+    promoted(4, &[E::ExtPipelineRobustness]) => [PipelineRobustness];
     // Extension-only.
     Extension(ROBUSTNESS2) => [RobustImageAccess2, NullDescriptor];
     Extension(&[E::ExtShaderImageAtomicInt64]) => [ShaderImageInt64Atomics];
@@ -379,7 +380,8 @@ fn facts(ext: VkExtension) -> ExtensionFacts {
         }
         E::ExtVertexAttributeDivisor
         | E::KhrVertexAttributeDivisor
-        | E::KhrShaderSubgroupRotate => fact(true, Some(4), &[]),
+        | E::KhrShaderSubgroupRotate
+        | E::ExtPipelineRobustness => fact(true, Some(4), &[]),
         // Described, never enabled: a pipeline layout states no push-descriptor eligibility, so
         // the core reads none of it.
         E::KhrPushDescriptor => fact(false, Some(4), &[]),

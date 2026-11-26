@@ -2,6 +2,7 @@
 
 use crate::alias::Placement;
 use crate::arena;
+use crate::bound::{Descriptor, NULL};
 use crate::buffer::{Buffer, BufferInner, BufferObject};
 use crate::coherence::Range;
 use crate::command::{Building, CommandBuffer, Owed};
@@ -21,7 +22,7 @@ use crate::pipeline::{
     VariantRefusal, Which, PUSH_STAGES, SQUARE,
 };
 use crate::record::Reach;
-use crate::ring::CHUNK;
+use crate::ring::{Placed, CHUNK};
 use crate::sampler::SamplerState;
 use crate::texture::{Region, StorageGap, Texture, TextureObject};
 use ash::vk;
@@ -106,8 +107,8 @@ enum Slot {
         buffer: Lent<Buffer>,
         offset: u64,
     },
-    /// The address of a `set_bytes` copy in the parameter ring, and its length.
-    Bytes(u64, u32),
+    /// Where a `set_bytes` copy lies in the parameter ring, and its length.
+    Bytes(Placed, u32),
 }
 
 /// [`Refusal::BufferOffsetAlignment`] where `buffer`, bound at `offset` to buffer argument
@@ -765,14 +766,16 @@ impl ComputeCommandEncoder {
                 max: CHUNK,
             }));
         }
-        let address = self.building().write_ring(bytes)?;
+        // At the ring's alignment, which a storage buffer of set 0 over the copy starts at
+        // (`crate::bound`).
+        let placed = self.building().write_ring_placed(bytes)?;
         // Bytes are aligned, of no Managed or Shared buffer: a dispatch's facts change only where
         // the slot held a buffer.
         if !matches!(self.slots[slot], Slot::Bytes(..)) {
             self.changed();
         }
         // At most one chunk, 64 KiB.
-        self.slots[slot] = Slot::Bytes(address, bytes.len() as u32);
+        self.slots[slot] = Slot::Bytes(placed, bytes.len() as u32);
         Ok(())
     }
 
@@ -1356,6 +1359,8 @@ impl ComputeCommandEncoder {
             .ok_or(Error::Refused(Refusal::ThreadgroupSize { size, max }))
         };
         let ids = &state.numbered.ids;
+        // Where a slot's set-0 descriptor starts (`view`).
+        let align = core.ring.align();
         let recorded = match (direct, grid) {
             (Some((threads, groups, ragged)), _) => {
                 // A count past the device's limit on an axis is split, and so is one whose slots
@@ -1389,8 +1394,12 @@ impl ComputeCommandEncoder {
                             let bound = (&self.slots[..], &self.textures[..], &self.samplers[..]);
                             let address = arena.map_or(0, |(address, _)| address);
                             let regions = (&region, self.stage_in_region.as_ref(), address);
-                            self.parameters
-                                .fill(kernel, (bound, self.facts.nil), ids, regions);
+                            self.parameters.fill(
+                                kernel,
+                                (bound, self.facts.nil, align),
+                                ids,
+                                regions,
+                            );
                             let building = recording(&mut self.building);
                             // The piece reuses the slots the commands before it may have used:
                             // all but the first in a block the dispatch took new, which nothing
@@ -1423,7 +1432,7 @@ impl ComputeCommandEncoder {
                 let bound = (&self.slots[..], &self.textures[..], &self.samplers[..]);
                 let regions = (&region, self.stage_in_region.as_ref(), 0);
                 self.parameters
-                    .fill(kernel, (bound, self.facts.nil), ids, regions);
+                    .fill(kernel, (bound, self.facts.nil, align), ids, regions);
                 recording(&mut self.building).record_dispatch(
                     core,
                     vk_pipeline,
@@ -1719,6 +1728,12 @@ fn check_alignments(
     for field in &interface.fields {
         let (slot, mask) = match field.value {
             FieldValue::BufferAddress { slot, mask } => (slot, mask),
+            // A slot of set 0's: its address is checked as a pushed one's, and nothing bound
+            // there is a null descriptor.
+            FieldValue::BindOffset { slot, mask } => match slots.get(slot as usize) {
+                Some(Slot::Buffer { .. }) => (slot, mask),
+                _ => continue,
+            },
             FieldValue::ZeroAddress => {
                 zero = core.ring.zero(core)?;
                 continue;
@@ -1774,7 +1789,7 @@ impl Parameters {
     fn fill(
         &mut self,
         kernel: &Kernel,
-        (bound, (nil, zero)): (Bound<'_>, (u64, u64)),
+        (bound, (nil, zero), align): (Bound<'_>, (u64, u64), u64),
         sampler_ids: &[u32],
         (region, stage_in, arena): (&[u8; 32], Option<&[u8; 32]>, u64),
     ) {
@@ -1785,6 +1800,9 @@ impl Parameters {
             .resize(interface.push_len.next_multiple_of(4) as usize, 0);
         self.block.clear();
         self.block.resize(interface.block_len as usize, 0);
+        self.views.clear();
+        self.views
+            .extend((interface.views.iter()).map(|&slot| view(slots, slot, align).0));
         for field in &interface.fields {
             let (bytes, at) = match field.place {
                 Place::Push(offset) => (&mut self.push, offset as usize),
@@ -1796,11 +1814,15 @@ impl Parameters {
                         Some(Slot::Buffer { buffer, offset }) => {
                             buffer.gpu_address().wrapping_add(*offset)
                         }
-                        Some(Slot::Bytes(address, _)) => *address,
+                        Some(Slot::Bytes(placed, _)) => placed.address,
                         Some(Slot::Empty) | None => nil,
                     };
                     let word = address_word(address);
                     bytes[at..at + 8].copy_from_slice(&word.to_le_bytes());
+                }
+                FieldValue::BindOffset { slot, .. } => {
+                    let word = view(slots, slot, align).1;
+                    bytes[at..at + 4].copy_from_slice(&word.to_le_bytes());
                 }
                 FieldValue::BufferBounds(slot) => {
                     let bounds = match slots.get(slot as usize) {
@@ -1901,13 +1923,47 @@ impl ComputeCommandEncoder {
     }
 }
 
-/// A dispatch's parameters: the push window's bytes, and the ring block's with where its address
-/// goes in the window.
+/// A dispatch's parameters: the push window's bytes, the ring block's with where its address
+/// goes in the window, and the descriptors of set 0's bindings (`crate::bound`).
 #[derive(Default)]
 struct Parameters {
     push: Vec<u8>,
     block: Vec<u8>,
     block_address: Option<u32>,
+    views: Vec<Descriptor>,
+}
+
+/// The descriptor of buffer slot `slot` of `slots` as a storage buffer of set 0 (`crate::bound`),
+/// and the slot's bind offset word, the bytes from the descriptor's first byte to the slot's
+/// address, for a device whose buffer base alignment (`DeviceProfile::buffer_base_alignment`, a
+/// power of two) is `align`:
+///
+/// - a buffer: the `VkBuffer` shaders reach it through, from its first byte there rounded down
+///   to `align`, through its last byte, with its first byte's distance from that start plus the
+///   bind offset. A buffer's first byte in that `VkBuffer` is where the placement put it, which
+///   may be any byte of a buffer over memory the consumer brought; every `VkBuffer` of the device
+///   starts at a multiple of 16 in the Metal address space (its memory requirements' alignment
+///   on every lab driver: 16, 64 or 256), so the descriptor's bytes are congruent to their Metal
+///   addresses modulo 16, as a view's `uvec4` and `uvec2` units take them;
+/// - a `set_bytes` copy: its bytes, from its own first byte, at a multiple of `align` in the
+///   ring's buffer (`crate::ring`), with 0;
+/// - nothing bound, or a buffer or a copy of no bytes: a null descriptor, with 0.
+fn view(slots: &[Slot], slot: u32, align: u64) -> (Descriptor, u32) {
+    match slots.get(slot as usize) {
+        Some(Slot::Buffer { buffer, offset }) if buffer.length() > 0 => {
+            let (reached, at) = buffer.device_range();
+            let start = at & !(align - 1);
+            let ahead = at - start;
+            // A buffer is at most 2 GiB long, and its bind offset within it.
+            let word = u32::try_from(ahead + offset).unwrap_or(u32::MAX);
+            ((reached, start, ahead + buffer.length()), word)
+        }
+        Some(Slot::Bytes(placed, length)) if *length > 0 => {
+            debug_assert!(placed.offset % align == 0);
+            ((placed.buffer, placed.offset, u64::from(*length)), 0)
+        }
+        _ => (NULL, 0),
+    }
 }
 
 impl Drop for ComputeCommandEncoder {
@@ -2172,9 +2228,14 @@ impl Building {
         })?;
         // SAFETY: the command buffer is the current segment's, recording outside any render pass;
         // the pipeline is the device's, of its layout, and the window lies in the layout's one
-        // push range, of `PUSH_STAGES`.
+        // push range, of `PUSH_STAGES`; every buffer a view names is bound in the encoder's slots,
+        // which the command buffer keeps, or is the ring's.
         unsafe {
             self.bind_compute(core, command, pipeline);
+            match parameters.views.is_empty() {
+                true => self.count(Metric::AddressDispatches),
+                false => self.bind_views(core, command, &parameters.views)?,
+            }
             if !push.is_empty() && self.push_needed(push) {
                 device.cmd_push_constants(command, core.layout, PUSH_STAGES, 0, push);
             }

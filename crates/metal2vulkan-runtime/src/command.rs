@@ -256,6 +256,9 @@ pub(crate) struct Building {
     /// The compute pipeline bound in the current segment's command buffer; set 1 is bound at the
     /// compute bind point with the first ([`bind_compute`](Self::bind_compute)).
     bound: Option<vk::Pipeline>,
+    /// The set of set 0 written last, and whether the current segment's command buffer has it
+    /// bound at the compute bind point (`crate::bound`).
+    views: crate::bound::Held,
     /// The graphics pipeline bound in the current segment's command buffer.
     drawn: Option<vk::Pipeline>,
     /// The push constant bytes the current segment's command buffer holds.
@@ -331,6 +334,9 @@ pub(crate) struct Gpu {
     /// The occlusion queries of its render encoders' visibility results, from pools of its own,
     /// each given back to the device as it retires (`crate::visibility`).
     pub(crate) queries: Queries,
+    /// The sets of set 0 its dispatches bound their kernels' storage buffers through, from pools
+    /// of its own, each given back to the device as it retires (`crate::bound`).
+    pub(crate) sets: crate::bound::Sets,
     /// What it holds of Shared memory, where the device's Shared type is not host-coherent:
     /// what its commands may write and, from its commit, what they reach (`crate::coherence`),
     /// boxed from its make. `None` where the type is host-coherent: one pointer, as each hand-off
@@ -466,6 +472,7 @@ impl CommandBuffer {
                             fences: Fences::default(),
                             executed: Vec::new(),
                             queries: Queries::default(),
+                            sets: crate::bound::Sets::default(),
                             coherence,
                         },
                         handlers: Handlers {
@@ -478,6 +485,7 @@ impl CommandBuffer {
                         owed_all: false,
                         args_unordered: false,
                         bound: None,
+                        views: crate::bound::Held::default(),
                         drawn: None,
                         pushed: Pushed::default(),
                         host_written: false,
@@ -1085,6 +1093,7 @@ impl Building {
         }
         self.last().command = Some(command);
         self.bound = None;
+        self.views.unbound();
         self.drawn = None;
         self.pushed = Pushed::default();
         self.vertex.clear();
@@ -1441,6 +1450,34 @@ impl Building {
             }
         }
         self.bound = Some(pipeline);
+    }
+
+    /// Binds a set of set 0 whose first bindings hold `descriptors` into `command`, the current
+    /// segment's command buffer, at the compute bind point: the set written last where it begins
+    /// with them, else a new one of the command buffer's, written (`crate::bound`). Counted as
+    /// a bound dispatch, and as a set written or held.
+    ///
+    /// # Safety
+    ///
+    /// `command` is the current segment's, recording outside any render pass; every buffer a
+    /// descriptor names is kept by the command buffer until it retires.
+    pub(crate) unsafe fn bind_views(
+        &mut self,
+        core: &Core,
+        command: vk::CommandBuffer,
+        descriptors: &[crate::bound::Descriptor],
+    ) -> Result<(), Error> {
+        // SAFETY: by the caller; the sets are the command buffer's.
+        let written = unsafe {
+            self.views
+                .bind(core, (command, &mut self.gpu.sets), descriptors)
+        }?;
+        self.tally.count(Metric::BoundDispatches);
+        self.tally.count(match written {
+            true => Metric::BufferSetsWritten,
+            false => Metric::BufferSetsHeld,
+        });
+        Ok(())
     }
 
     /// Whether the graphics pipeline `pipeline` needs binding in the current command buffer, and
@@ -1953,6 +1990,7 @@ pub(crate) fn retire(
         fences,
         executed,
         queries,
+        sets,
         coherence: _,
     } = gpu;
     if let Some(recorder) = recorder {
@@ -1961,6 +1999,7 @@ pub(crate) fn retire(
     ring.give_back(core);
     drop((segments, blocks, images, fences, executed));
     queries.give_back(core);
+    sets.give_back(core);
     kept.clear();
     if let Some(pair) = stamps {
         times::reset(&core.device, pair.pool, pair.first, written);
@@ -2026,6 +2065,7 @@ impl Drop for CbInner {
                 mut kept,
                 ring,
                 queries,
+                sets,
                 ..
             } = gpu;
             if let Some(recorder) = recorder {
@@ -2036,6 +2076,7 @@ impl Drop for CbInner {
                 core.stamps.give_back(pair);
             }
             queries.give_back(core);
+            sets.give_back(core);
             kept.clear();
             self.queue.release(kept);
         }
