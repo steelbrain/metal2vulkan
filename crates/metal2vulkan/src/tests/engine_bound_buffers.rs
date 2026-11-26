@@ -9,8 +9,8 @@
 //!   no slot pushes its address or its bounds (`PushField::SlotGuestBase`,
 //!   `PushField::SlotBounds`), and no load reads the zero range (`PushField::ZeroAddress`). The
 //!   module states `RuntimeFact::RobustStorageBuffers` and each slot's alignment
-//!   (`RuntimeFact::AddressAlignment`: 4 for a `uint` buffer, 16 for a `float4` one), and passes
-//!   L3.
+//!   (`RuntimeFact::AddressAlignment`: 4 for a `uint` buffer, 16 for a `float4` one), requires the
+//!   pipeline-robustness feature (`VkFeature::PipelineRobustness`), and passes L3.
 //! - A slot the dispatch binds at a multiple of 4 below its argument's alignment
 //!   (`LoweringInputs::word_bound_buffers`) keeps its device address, held to 4: a view's `uvec4`
 //!   units take the bind offset to be a multiple of the argument's alignment.
@@ -21,6 +21,7 @@
 use std::collections::BTreeSet;
 
 use super::engine_word_phases::{bound_identity_profiles, device_alignments};
+use crate::device::requirements::VkFeature;
 use crate::lower::select::LowerInputs;
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::sym::{PushField, ResourceKind, SlotClass, SlotRef, Stage};
@@ -113,6 +114,11 @@ fn a_kernel_reaches_its_buffers_through_set_0_views_at_their_bind_offsets() {
                 "{what}: {:?}",
                 a.facts
             );
+            assert!(
+                (a.requirements.features).contains(&VkFeature::PipelineRobustness),
+                "{what}: {:?}",
+                a.requirements.features
+            );
             let stated: Vec<u32> = (a.facts.iter())
                 .filter_map(|f| match f {
                     RuntimeFact::AddressAlignment { align, .. } => Some(*align),
@@ -146,6 +152,11 @@ fn a_word_bound_slot_keeps_its_device_address() {
             !a.facts.contains(&RuntimeFact::RobustStorageBuffers),
             "{what}: {:?}",
             a.facts
+        );
+        assert!(
+            !(a.requirements.features).contains(&VkFeature::PipelineRobustness),
+            "{what}: {:?}",
+            a.requirements.features
         );
     }
 }

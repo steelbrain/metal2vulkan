@@ -3203,6 +3203,14 @@ fn lower_bounded<K>(
             .properties
             .insert(crate::device::requirements::VkProperty::DeviceSampling);
     }
+    // A kernel that reaches its buffers through storage views of set 0 is contained by its
+    // pipeline's robust buffer access 2 (`RuntimeFact::RobustStorageBuffers`), which a pipeline
+    // states only where the device enables the pipeline-robustness feature.
+    if plan.families.access.robust_views {
+        requirements
+            .features
+            .insert(crate::device::requirements::VkFeature::PipelineRobustness);
+    }
     // The set-1 heap's binding flags need their features beside the module's.
     requirements
         .features

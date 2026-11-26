@@ -9,7 +9,9 @@
 //!   only what the case says ([`containment`]): a buffer is a storage buffer through its
 //!   descriptor, or a device address; a buffer slot the product reaches through a descriptor view,
 //!   a slot reached by its device address and the threadgroup arena are checked in the shader in
-//!   every leg; a texel buffer and an image follow the product's texel containment
+//!   every leg, except that a kernel whose buffer arguments are bound as storage buffers of set 0
+//!   (`ModuleFacts::robust_views`) leaves its views' loads and stores to its pipeline's
+//!   `robustBufferAccess2` and checks only their atomics in the shader; a texel buffer and an image follow the product's texel containment
 //!   (`DeviceProfile::device_reads_texels` and `device_drops_texel_writes`): a texel buffer is
 //!   checked in the shader; an image's reads are left to `robustImageAccess2` and its writes to
 //!   `robustImageAccess` at either level, each otherwise checked in the shader. A buffer reached through a pointer loaded from an argument buffer is a
@@ -340,6 +342,11 @@ pub struct ModuleFacts<'a> {
     /// (`Device::policy`).
     pub policy: DevicePolicy,
     pub strategies: &'a StrategyCensus,
+    /// The module's storage views are contained by its pipeline's robust buffer access 2, not by
+    /// a check in the shader: a kernel whose buffer arguments are bound as storage buffers of set
+    /// 0, which requires the pipeline-robustness feature (`VkFeature::PipelineRobustness` in its
+    /// requirements). Its atomics keep their check in the shader.
+    pub robust_views: bool,
 }
 
 impl ModuleFacts<'_> {
@@ -452,7 +459,10 @@ pub fn containment(
                     BufferForm::Descriptor => made(
                         ContainmentForm::StorageBuffer,
                         Medium::DescriptorView,
-                        Check::Shader,
+                        match module.robust_views {
+                            true => Check::Robust2,
+                            false => Check::Shader,
+                        },
                         written,
                     ),
                     _ => unknown(),

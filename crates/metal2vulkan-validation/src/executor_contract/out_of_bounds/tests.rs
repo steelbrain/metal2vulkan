@@ -778,6 +778,7 @@ fn thread_memory_is_contained_by_the_typed_arrays_check_only() {
             handle_table: true,
             policy: DevicePolicy::RESIDENT_TABLES,
             strategies: &strategies,
+            robust_views: false,
         };
         let target = OutOfBoundsTarget {
             resource,
@@ -894,6 +895,7 @@ fn the_identity_domains_leave_a_loaded_pointer_unchecked_and_mask_a_resource_id(
         handle_table: false,
         policy,
         strategies: &strategies,
+        robust_views: false,
     };
     let target = |resource, form| OutOfBoundsTarget {
         resource,
@@ -990,6 +992,7 @@ fn a_draws_targets_are_contained_by_their_fetch() {
             handle_table: false,
             policy: DevicePolicy::RESIDENT_TABLES,
             strategies,
+            robust_views: false,
         };
         let target = OutOfBoundsTarget {
             resource,
@@ -1097,4 +1100,77 @@ fn a_draws_targets_are_contained_by_their_fetch() {
         read_rule(ContainmentForm::HandleArrayIndex, handle_array, false),
         ReadRule::ResidentTexels
     );
+}
+
+/// A kernel's storage view is contained by its pipeline's robust buffer access 2 where the module
+/// binds its buffers as storage buffers of set 0 (`ModuleFacts::robust_views`), and by a check in
+/// the shader where it does not; an atomic on the view keeps its check in the shader either way.
+/// The read rule is zero in each.
+#[test]
+fn a_bound_kernel_s_storage_view_is_contained_by_robust_buffer_access_2() {
+    use metal2vulkan::pipeline::StrategyCensus;
+    let profiles = crate::coverage::tier_table::committed_profiles().unwrap();
+    let profile = &profiles
+        .iter()
+        .find(|entry| entry.tier.stem == "intel-irisxe-anv")
+        .unwrap()
+        .profile;
+    let slots = BTreeMap::from([(
+        SlotRef {
+            stage: SymStage::Kernel,
+            class: SlotClass::Buffer,
+            index: 1,
+        },
+        // A written buffer slot reached through its storage view (the interface has no
+        // constructor outside the product).
+        serde_json::from_value::<SlotInterface>(serde_json::json!({"Buffer": {
+            "access": {"read": true, "write": true},
+            "window": "Whole",
+            "form": "Descriptor",
+            "kind": "Buffer",
+        }}))
+        .unwrap(),
+    )]);
+    let strategies = StrategyCensus::default();
+    let attributes = BTreeMap::new();
+    let mut identity = DevicePolicy::default();
+    identity.pointer_domain = PointerDomain::Identity;
+    identity.handle_domain = HandleDomain::Identity;
+    let contained = |robust_views, form| {
+        let module = ModuleFacts {
+            stage: SymStage::Kernel,
+            slots: &slots,
+            attributes: &attributes,
+            resident_roots: false,
+            handle_table: false,
+            policy: identity,
+            strategies: &strategies,
+            robust_views,
+        };
+        let target = OutOfBoundsTarget {
+            resource: OutOfBoundsResource::Buffer { binding: 1 },
+            form,
+            reach_before: 0,
+            reach_after: 256,
+        };
+        containment(&target, &module, profile).unwrap()
+    };
+    for (robust_views, form, check) in [
+        (true, ContainmentForm::StorageBuffer, Check::Robust2),
+        (false, ContainmentForm::StorageBuffer, Check::Shader),
+        (true, ContainmentForm::BufferAtomic, Check::Shader),
+        (false, ContainmentForm::BufferAtomic, Check::Shader),
+    ] {
+        let what = format!("{form:?} with robust views {robust_views}");
+        let c = contained(robust_views, form);
+        assert_eq!(c.form, form, "{what}");
+        assert_eq!(c.mechanism.medium, Medium::DescriptorView, "{what}");
+        assert_eq!(c.mechanism.check, check, "{what}");
+        assert!(c.written, "{what}");
+        assert_eq!(
+            read_rule(c.form, c.mechanism, true),
+            ReadRule::Zero,
+            "{what}"
+        );
+    }
 }

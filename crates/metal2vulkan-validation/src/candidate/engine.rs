@@ -906,6 +906,9 @@ pub(crate) fn draw_out_of_bounds_run(
             handle_table: pipeline.interface.needs_handle_translation,
             policy: *device.policy(),
             strategies: &graphics::vertex_module(pipeline)?.strategies,
+            // A render stage reaches its buffers at their addresses or through views checked in
+            // the shader.
+            robust_views: false,
         },
         &case.out_of_bounds,
     )

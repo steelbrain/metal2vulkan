@@ -80,6 +80,8 @@ pub(super) fn contained(
             handle_table: lowered.resolves_handles(),
             policy: *translator.policy(),
             strategies: lowered.strategies(),
+            robust_views: (lowered.requirements().features)
+                .contains(&metal2vulkan::device::VkFeature::PipelineRobustness),
         };
         let run = out_of_bounds_run(translator.profile(), &module, &case.out_of_bounds);
         runs.push((variant, run));

@@ -266,6 +266,8 @@ pub fn compile_module(
         // Every committed profile's device takes the resident-table domains (`committed_profiles`).
         policy: DevicePolicy::RESIDENT_TABLES,
         strategies: function.strategies(),
+        robust_views: (function.requirements().features)
+            .contains(&metal2vulkan::device::VkFeature::PipelineRobustness),
     };
     let out_of_bounds = inputs
         .out_of_bounds
