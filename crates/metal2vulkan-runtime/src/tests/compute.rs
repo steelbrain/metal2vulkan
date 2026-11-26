@@ -16,7 +16,8 @@ pub(crate) mod on_device {
     use crate::tests::kernels;
     use crate::{
         Buffer, CommandBuffer, ComputeCommandEncoder, ComputePipelineState, Device, DispatchType,
-        Error, Gap, HeapRange, Limit, MemoryClass, Refusal, RefusalBasis,
+        Error, Gap, HeapRange, Limit, LoadAction, MemoryClass, PixelFormat, Refusal, RefusalBasis,
+        RenderPassDescriptor, StoreAction, TextureDescriptor, TextureType, TextureUsage,
     };
     use metal2vulkan::pipeline::{Axis, SpecKey};
 
@@ -146,6 +147,53 @@ pub(crate) mod on_device {
         command_buffer.commit().expect("a commit");
         finished(name, command_buffer);
         assert_eq!(command_buffer.error(), None, "{name}");
+    }
+
+    /// The dispatches' barriers by source grown from `before` to `after`, in their order: after
+    /// a write, a write after a read, an encoder's end, a render pass's end, an indirect
+    /// dispatch, an access outside every resource, a Private-arena piece, a heap's one id and
+    /// another (`Metrics::dispatch_after_write_barriers` and the rest). Their sum is the
+    /// dispatches' barriers grown (`Metrics::dispatch_hazard_barriers`).
+    fn sources(after: &crate::Metrics, before: &crate::Metrics) -> [u64; 9] {
+        let of = |m: &crate::Metrics| {
+            [
+                m.dispatch_after_write_barriers,
+                m.dispatch_write_after_read_barriers,
+                m.dispatch_encoder_end_barriers,
+                m.dispatch_pass_end_barriers,
+                m.dispatch_indirect_barriers,
+                m.dispatch_unbound_barriers,
+                m.dispatch_arena_piece_barriers,
+                m.dispatch_heap_barriers,
+                m.dispatch_other_barriers,
+            ]
+        };
+        let (grown, was) = (of(after), of(before));
+        let grown: [u64; 9] = std::array::from_fn(|at| grown[at] - was[at]);
+        assert_eq!(
+            grown.iter().sum::<u64>(),
+            after.dispatch_hazard_barriers - before.dispatch_hazard_barriers,
+            "the sources {grown:?} sum to the dispatches' barriers"
+        );
+        grown
+    }
+
+    /// `n` barriers in source `at` of [`sources`], and none in the others.
+    fn only(at: usize, n: u64) -> [u64; 9] {
+        std::array::from_fn(|source| if source == at { n } else { 0 })
+    }
+
+    /// Binds `state` and `buffers` at slots from 0, and dispatches 4 threadgroups of 16.
+    fn dispatch(
+        encoder: &mut ComputeCommandEncoder,
+        state: &ComputePipelineState,
+        buffers: &[&Buffer],
+    ) {
+        encoder.set_compute_pipeline_state(state).expect("a state");
+        for (slot, buffer) in buffers.iter().enumerate() {
+            (encoder.set_buffer(Some(buffer), 0, slot as u32)).expect("a buffer");
+        }
+        (encoder.dispatch_threadgroups([4, 1, 1], [16, 1, 1])).expect("a dispatch");
     }
 
     /// A dispatch reads bound buffers and `set_bytes` data by address and writes a bound buffer.
@@ -380,6 +428,9 @@ pub(crate) mod on_device {
                 ]
             };
             assert_eq!(causes(&after, &before), [count - 1, 1], "{name}: dependent");
+            // Each after the write of the dispatch before it.
+            let split = sources(&after, &before);
+            assert_eq!(split, only(0, count - 1), "{name}: dependent, by source");
             let chained = |start: u32| (0..count).fold(start, |x, _| x * 2 + 1);
             let expected: Vec<u32> = (0..WORDS as u32).map(chained).collect();
             assert_eq!(words(&x), expected, "{name}: dependent");
@@ -406,6 +457,11 @@ pub(crate) mod on_device {
             let after = device.counters().metrics();
             assert_eq!(after.barriers - before.barriers, 1, "{name}: independent");
             assert_eq!(causes(&after, &before), [0, 1], "{name}: independent");
+            assert_eq!(
+                sources(&after, &before),
+                [0; 9],
+                "{name}: independent, by source"
+            );
             let expected: Vec<u32> = (0..WORDS as u32).map(|x| x * 2 + 1).collect();
             for buffer in &buffers {
                 assert_eq!(words(buffer), expected, "{name}: independent");
@@ -436,12 +492,15 @@ pub(crate) mod on_device {
                 count,
                 "{name}: concurrent"
             );
-            // Each memory barrier is owed, and paid by the dispatch after it.
+            // Each memory barrier is owed, and paid by the dispatch after it, which reads the
+            // write before it: counted as that dependency.
             assert_eq!(
                 causes(&after, &before),
                 [count - 1, 1],
                 "{name}: concurrent"
             );
+            let split = sources(&after, &before);
+            assert_eq!(split, only(0, count - 1), "{name}: concurrent, by source");
             let expected: Vec<u32> = (0..WORDS as u32).map(chained).collect();
             assert_eq!(words(&x), expected, "{name}: concurrent");
         });
@@ -450,8 +509,10 @@ pub(crate) mod on_device {
     /// A heap's resources are one resource in the hazard sets, as Metal tracks a heap's: in a
     /// serial encoder, a dispatch that uses a heap's buffer after one that wrote another of the
     /// heap gets a barrier, the two over the same bytes or apart, and the second sees the first's
-    /// writes; two heaps' buffers get none. A buffer past its heap's end is refused, and the
-    /// device's map of heaps stays bounded as heaps come and go.
+    /// writes; two heaps' buffers get none. The barrier counts in the heap's source, and one
+    /// after a write of the same buffer of the heap in the dependency on a write. A buffer past
+    /// its heap's end is refused, and the device's map of heaps stays bounded as heaps come and
+    /// go.
     #[test]
     fn every_device_orders_a_heap_s_resources_as_one() {
         each_device("compute_heap_ids", |name, _, device| {
@@ -468,8 +529,8 @@ pub(crate) mod on_device {
                     .unwrap_or_else(|error| panic!("{name}: {error}"))
             };
             // Two dispatches of `step`, each over one buffer: the barriers they take, the
-            // segment's end among them.
-            let barriers = |buffers: [&Buffer; 2]| -> u64 {
+            // segment's end among them, and the dispatches' by source.
+            let barriers = |buffers: [&Buffer; 2]| -> (u64, [u64; 9]) {
                 let before = device.counters().metrics();
                 let command_buffer = queue.command_buffer().expect("a command buffer");
                 let mut encoder = command_buffer
@@ -484,22 +545,38 @@ pub(crate) mod on_device {
                 }
                 encoder.end_encoding();
                 run(name, &command_buffer);
-                device.counters().metrics().barriers - before.barriers
+                let after = device.counters().metrics();
+                (after.barriers - before.barriers, sources(&after, &before))
             };
             let (a, b) = (placed(heap(0, 1024), 0), placed(heap(0, 1024), 0));
             let apart = placed(heap(0, 1024), 512);
             let other = placed(heap(4096, 1024), 0);
 
             // Over the same bytes: the second step reads the first's words.
+            let heap_source = (2, only(7, 1));
             write_words(&a, |index| index);
-            assert_eq!(barriers([&a, &b]), 2, "{name}: one heap, the same bytes");
+            assert_eq!(
+                barriers([&a, &b]),
+                heap_source,
+                "{name}: one heap, the same bytes"
+            );
             let twice: Vec<u32> = (0..WORDS as u32).map(|x| (x * 2 + 1) * 2 + 1).collect();
             assert_eq!(words(&b), twice, "{name}: one heap, the same bytes");
 
             // Apart in one heap: still one resource.
-            assert_eq!(barriers([&a, &apart]), 2, "{name}: one heap, apart");
+            assert_eq!(
+                barriers([&a, &apart]),
+                heap_source,
+                "{name}: one heap, apart"
+            );
+            // One buffer of a heap twice: the dependency on its write.
+            assert_eq!(
+                barriers([&a, &a]),
+                (2, only(0, 1)),
+                "{name}: one heap's buffer"
+            );
             // Two heaps of one block: two resources.
-            assert_eq!(barriers([&apart, &other]), 1, "{name}: two heaps");
+            assert_eq!(barriers([&apart, &other]), (1, [0; 9]), "{name}: two heaps");
 
             match device.new_heap_buffer(heap(0, 1024), 1000, 256) {
                 Err(Error::Refused(refusal)) => assert_eq!(
@@ -523,6 +600,129 @@ pub(crate) mod on_device {
                 entries <= 64 + 4,
                 "{name}: {entries} heaps mapped after 200 came and went"
             );
+        });
+    }
+
+    /// Each of the dispatches' barriers counts in one source, the sources summing to
+    /// `Metrics::dispatch_hazard_barriers`: a write of a buffer the dispatch before only read; an
+    /// encoder's end before a dispatch of another buffer, and before one of the buffer the
+    /// encoder before wrote, which counts as that dependency; a render pass's end that moved
+    /// nothing home; an indirect dispatch after a write of another buffer; a read outside every
+    /// resource after a write; and a memory barrier in a concurrent encoder before a dispatch of
+    /// another buffer. A barrier with several causes counts once.
+    #[test]
+    fn every_device_counts_each_dispatch_barrier_in_one_source() {
+        each_device("compute_barrier_sources", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let (add, step) = (add(&device), step(&device));
+            let fields = vec![region(), address(0, Place::Push(32))];
+            let mut wild = interface(vec![(0, Access::ReadWrite)], fields, 40);
+            wild.reads_unbound = true;
+            let wild = (ComputePipelineState::for_test(&device, &kernels::STEP, wild))
+                .expect("the step kernel, reading outside its resources");
+            let queue = device.new_command_queue(4).expect("a queue");
+            let counters = device.counters();
+            // The sources the commands `record` encodes into one command buffer add, and every
+            // barrier they and the segment's end add.
+            let grown = |record: &dyn Fn(&CommandBuffer)| -> ([u64; 9], u64) {
+                let before = counters.metrics();
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                record(&command_buffer);
+                run(name, &command_buffer);
+                let after = counters.metrics();
+                (sources(&after, &before), after.barriers - before.barriers)
+            };
+            let serial = |command_buffer: &CommandBuffer| {
+                (command_buffer.compute_command_encoder(DispatchType::Serial)).expect("an encoder")
+            };
+            let [a, b, c, d, o, x, y, args] = std::array::from_fn(|_| arena.buffer());
+            for buffer in [&a, &b, &c, &d, &o, &x, &y] {
+                write_words(buffer, |index| index);
+            }
+            write_words(&args, |index| u32::from(index < 3));
+
+            // A write of a buffer the dispatch before only read, and the segment's end.
+            let split = grown(&|command_buffer| {
+                let mut encoder = serial(command_buffer);
+                dispatch(&mut encoder, &add, &[&a, &b, &o]);
+                dispatch(&mut encoder, &add, &[&c, &d, &a]);
+                encoder.end_encoding();
+            });
+            assert_eq!(split, (only(1, 1), 2), "{name}: a write after a read");
+
+            // Three encoders that write: the second's dispatch pays the first's end, the third's
+            // the second's and reads the second's write.
+            let split = grown(&|command_buffer| {
+                for buffer in [&x, &y, &y] {
+                    let mut encoder = serial(command_buffer);
+                    dispatch(&mut encoder, &step, &[buffer]);
+                    encoder.end_encoding();
+                }
+            });
+            let mut ends = only(2, 1);
+            ends[0] = 1;
+            assert_eq!(split, (ends, 3), "{name}: encoders' ends");
+
+            // A render pass whose attachment renders at home owes its barrier to the dispatch
+            // after it: its start's barrier, the dispatch's and the segment's end.
+            let mut described =
+                TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 4, 4);
+            described.usage = TextureUsage::RENDER_TARGET;
+            let target = device.new_texture_for_views(&described).expect("a texture");
+            let mut pass = RenderPassDescriptor::default();
+            let color = &mut pass.color_attachments[0];
+            color.texture = Some(target.clone());
+            color.load_action = LoadAction::Clear;
+            color.store_action = StoreAction::Store;
+            let homes = counters.metrics().pass_home_barriers;
+            let split = grown(&|command_buffer| {
+                (command_buffer.render_command_encoder(&pass))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"))
+                    .end_encoding();
+                let mut encoder = serial(command_buffer);
+                dispatch(&mut encoder, &step, &[&y]);
+                encoder.end_encoding();
+            });
+            let moved = counters.metrics().pass_home_barriers - homes;
+            assert_eq!(moved, 0, "{name}: the pass moves nothing home");
+            assert_eq!(split.0, only(3, 1), "{name}: a render pass's end");
+
+            // An indirect dispatch over another buffer after a write.
+            let split = grown(&|command_buffer| {
+                let mut encoder = serial(command_buffer);
+                dispatch(&mut encoder, &step, &[&x]);
+                encoder.set_buffer(Some(&y), 0, 0).expect("a buffer");
+                (encoder.dispatch_threadgroups_with_indirect_buffer(&args, 0, [16, 1, 1]))
+                    .expect("an indirect dispatch");
+                encoder.end_encoding();
+            });
+            assert_eq!(split, (only(4, 1), 2), "{name}: an indirect dispatch");
+
+            // A read outside every resource after a write of another buffer.
+            let split = grown(&|command_buffer| {
+                let mut encoder = serial(command_buffer);
+                dispatch(&mut encoder, &step, &[&x]);
+                dispatch(&mut encoder, &wild, &[&y]);
+                encoder.end_encoding();
+            });
+            assert_eq!(
+                split,
+                (only(5, 1), 2),
+                "{name}: a read outside every resource"
+            );
+
+            // A memory barrier in a concurrent encoder, before a dispatch of another buffer.
+            let split = grown(&|command_buffer| {
+                let mut encoder = (command_buffer
+                    .compute_command_encoder(DispatchType::Concurrent))
+                .expect("an encoder");
+                dispatch(&mut encoder, &step, &[&x]);
+                encoder.memory_barrier();
+                dispatch(&mut encoder, &step, &[&y]);
+                encoder.end_encoding();
+            });
+            assert_eq!(split, (only(8, 1), 2), "{name}: a memory barrier");
+            drop((target, add, step, wild));
         });
     }
 

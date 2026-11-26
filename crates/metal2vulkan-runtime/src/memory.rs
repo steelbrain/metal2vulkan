@@ -919,6 +919,12 @@ impl Carve {
 }
 
 impl Pool {
+    /// The alignment of a buffer of the pool's usage, which Vulkan's memory requirements gave at
+    /// the device's making ([`buffer_alignment`]).
+    pub(crate) fn alignment(&self) -> u64 {
+        self.alignment
+    }
+
     /// The pool of a device whose `bufferImageGranularity` is `granularity`, and whose buffers of
     /// the pool's usage have the alignment `alignment`.
     pub(crate) fn new(

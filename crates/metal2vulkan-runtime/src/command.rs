@@ -196,6 +196,39 @@ impl CbState {
     }
 }
 
+/// Why a barrier is owed before the next command ([`Building::owe`]), in the order a dispatch's
+/// barrier that has several causes is counted by: an owed barrier a dispatch pays is counted in
+/// its source's bucket where the dispatch has no dependency of its own on the sets
+/// ([`Metrics::dispatch_hazard_barriers`](crate::Metrics::dispatch_hazard_barriers)).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Owed {
+    /// An encoder that wrote ended.
+    EncoderEnd,
+    /// A render pass ended with no attachment to move home ([`Building::owe_pass`]).
+    PassEnd,
+    /// A dispatch wrote through an address outside its resources.
+    Unbound,
+    /// A dispatch over a Private arena records a piece after its first.
+    ArenaPiece,
+    /// A memory barrier was asked for, a block was released to another API, or a concurrent
+    /// encoder began after commands that touched anything.
+    Other,
+}
+
+impl Owed {
+    /// The bucket a dispatch's barrier that pays it is counted in, where the dispatch has no
+    /// dependency of its own.
+    pub(crate) fn metric(self) -> Metric {
+        match self {
+            Owed::EncoderEnd => Metric::DispatchEncoderEndBarriers,
+            Owed::PassEnd => Metric::DispatchPassEndBarriers,
+            Owed::Unbound => Metric::DispatchUnboundBarriers,
+            Owed::ArenaPiece => Metric::DispatchArenaPieceBarriers,
+            Owed::Other => Metric::DispatchOtherBarriers,
+        }
+    }
+}
+
 /// What a command buffer records until its commit; an open encoder holds it.
 pub(crate) struct Building {
     pub(crate) device: Device,
@@ -207,10 +240,11 @@ pub(crate) struct Building {
     /// Its pair of timestamp queries, from its first record; None before it and where it runs
     /// untimed.
     stamps: Option<Pair>,
-    /// A barrier owed before the next command: an encoder that wrote ended, a memory barrier was
-    /// asked for, a dispatch wrote through an address outside its resources, a render pass
-    /// ended, or a block was released to another API. The segment's own end barrier pays it too.
-    owed: bool,
+    /// A barrier owed before the next command, by the first of its causes in [`Owed`]'s order: an
+    /// encoder that wrote ended, a memory barrier was asked for, a dispatch wrote through an
+    /// address outside its resources, a render pass ended, or a block was released to another
+    /// API. The segment's own end barrier pays it too.
+    owed: Option<Owed>,
     /// The barrier owed orders a render pass ([`Building::owe_pass`]) or a release
     /// ([`Building::release_command`]) before what follows it: it reaches every later command
     /// ([`Reach::Commands`]), whatever the command that pays it names.
@@ -440,7 +474,7 @@ impl CommandBuffer {
                         },
                         started: false,
                         stamps: None,
-                        owed: false,
+                        owed: None,
                         owed_all: false,
                         args_unordered: false,
                         bound: None,
@@ -1086,7 +1120,7 @@ impl Building {
                     self.host_written |= back.iter().any(|copy| copy.shared);
                 }
                 // Its end barrier pays what is owed and starts the hazard sets again.
-                self.owed = false;
+                self.owed = None;
                 self.owed_all = false;
                 self.args_unordered = false;
                 if let Some(recorder) = &mut self.gpu.recorder {
@@ -1138,14 +1172,29 @@ impl Building {
 
     /// The current segment's command buffer, with the barrier owed recorded first, reaching what
     /// the caller records next (`reach`): a dispatch's, counted as its barrier
-    /// ([`Metrics::dispatch_hazard_barriers`](crate::Metrics::dispatch_hazard_barriers)). Commands
-    /// after a signal go in a new segment.
+    /// ([`Metrics::dispatch_hazard_barriers`](crate::Metrics::dispatch_hazard_barriers)) in its
+    /// cause's bucket ([`Owed::metric`]), after which the hazard sets start again. Commands after a
+    /// signal go in a new segment.
     pub(crate) fn command(&mut self, reach: Reach) -> Result<vk::CommandBuffer, Error> {
         let command = self.current()?;
-        if self.owed {
-            self.barrier(command, reach, Metric::DispatchHazardBarriers);
+        if let Some(owed) = self.owed {
+            self.barrier(command, reach, owed.metric());
+            self.hazards().clear();
         }
         Ok(command)
+    }
+
+    /// The current segment's command buffer, with what is owed left for the caller to pay
+    /// ([`owed`](Self::owed)): a dispatch's, which counts its barrier by all of its causes.
+    /// Commands after a signal go in a new segment.
+    pub(crate) fn current_command(&mut self) -> Result<vk::CommandBuffer, Error> {
+        self.current()
+    }
+
+    /// The barrier owed before the next command, by the first of its causes; `None` where none
+    /// is.
+    pub(crate) fn owed(&self) -> Option<Owed> {
+        self.owed
     }
 
     /// The current segment's command buffer, for commands that record a barrier of their own
@@ -1153,7 +1202,7 @@ impl Building {
     /// visible to them (a blit's): it pays what is owed, and the hazard sets start again.
     pub(crate) fn ordered_command(&mut self) -> Result<vk::CommandBuffer, Error> {
         let command = self.current()?;
-        self.owed = false;
+        self.owed = None;
         self.owed_all = false;
         self.args_unordered = false;
         self.hazards().clear();
@@ -1178,13 +1227,13 @@ impl Building {
     pub(crate) fn barrier(&mut self, command: vk::CommandBuffer, reach: Reach, cause: Metric) {
         // One owed after a render pass or a release reaches every later command, whatever the
         // caller names.
-        let reach = match self.owed && self.owed_all {
+        let reach = match self.owed.is_some() && self.owed_all {
             true => Reach::Commands,
             false => reach,
         };
         record::barrier(&self.device.core().device, command, reach);
         self.tally.count(cause);
-        self.owed = false;
+        self.owed = None;
         self.owed_all = false;
         if reach.reaches_indirect() {
             self.args_unordered = false;
@@ -1304,13 +1353,12 @@ impl Building {
             .hazards
     }
 
-    /// Owes a barrier before the next command, and starts the hazard sets again: it orders
-    /// everything before it.
-    pub(crate) fn owe(&mut self) {
-        self.owed = true;
-        if let Some(recorder) = &mut self.gpu.recorder {
-            recorder.hazards.clear();
-        }
+    /// Owes a barrier before the next command, for `cause`, kept with the first of the causes
+    /// owed in [`Owed`]'s order. The hazard sets start again where it is paid, which orders
+    /// everything before it: the command that pays it reads them first, to count it by what that
+    /// command depends on.
+    pub(crate) fn owe(&mut self, cause: Owed) {
+        self.owed = Some(self.owed.map_or(cause, |owed| owed.min(cause)));
     }
 
     /// A render pass ended with no attachment to move home: the barrier that orders it before
@@ -1318,7 +1366,7 @@ impl Building {
     /// command, or paid by the segment's end barrier where none follows. A command buffer that
     /// ends with a pass records one barrier after it, its end's.
     pub(crate) fn owe_pass(&mut self) {
-        self.owe();
+        self.owe(Owed::PassEnd);
         self.owed_all = true;
     }
 
@@ -1332,7 +1380,8 @@ impl Building {
     /// follows.
     pub(crate) fn release_command(&mut self) -> Result<vk::CommandBuffer, Error> {
         let command = self.current()?;
-        self.owe_pass();
+        self.owe(Owed::Other);
+        self.owed_all = true;
         Ok(command)
     }
 
@@ -1353,7 +1402,7 @@ impl Building {
             .as_ref()
             .is_some_and(|recorder| recorder.hazards.touched())
         {
-            self.owe();
+            self.owe(Owed::Other);
         }
     }
 

@@ -147,6 +147,14 @@ fn every_device_of_the_cfgs_kind_opens_presents_and_tears_down_to_zero() {
             );
         }
         println!("{name}: memory types chosen {memory_types:?}");
+        // The buffers' alignment, a power of two (Vulkan's memory requirements), printed for the
+        // leg's log.
+        let alignment = device.buffer_alignment();
+        assert!(
+            alignment.is_power_of_two(),
+            "{name}: buffer alignment {alignment}"
+        );
+        println!("{name}: buffer alignment {alignment}");
         assert_eq!(
             device.has_unified_memory(),
             matches!(

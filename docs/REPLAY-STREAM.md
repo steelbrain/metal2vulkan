@@ -734,8 +734,14 @@ records as text, and
     and the rest. The barriers are counted in their causes too, which sum to `barriers`:
     `pass_start_barriers`, `pass_home_barriers`, `blit_barriers`, `dispatch_hazard_barriers`,
     `segment_end_barriers`, `upload_barriers` and `other_barriers` (`Metrics::pass_start_barriers`
-    and the rest). They differ between commits, and between plays of one commit where what the
-    runtime records depends on timing. Only the stream's counts are compared between plays.
+    and the rest), and a dispatch's barriers in their sources too, which sum to
+    `dispatch_hazard_barriers`: `dispatch_after_write_barriers`,
+    `dispatch_write_after_read_barriers`, `dispatch_encoder_end_barriers`,
+    `dispatch_pass_end_barriers`, `dispatch_indirect_barriers`, `dispatch_unbound_barriers`,
+    `dispatch_arena_piece_barriers`, `dispatch_heap_barriers` and `dispatch_other_barriers`
+    (`Metrics::dispatch_after_write_barriers` and the rest). They differ between commits, and
+    between plays of one commit where what the runtime records depends on timing. Only the
+    stream's counts are compared between plays.
 
   Its own readbacks are not counted. The backend reads a Private buffer, which has no CPU
   mapping, through a blit copy of it into a Shared buffer of the play's own, on a queue of the
@@ -993,7 +999,8 @@ stream may differ from what the program did` where the stream's header lacks bit
 6), then `range last-frame F (SOURCE); the play ends there`, `range last-frame F (SOURCE);
 --past-range yes plays past it` or `range whole (SOURCE)`, where `SOURCE` is `the stream's
 sidecar`, `the player's table, stream LABEL` or `no sidecar and no table row`, then
-`device NAME runtime rt`, then on a device that keeps a
+`device NAME runtime rt buffer alignment N` (the alignment Vulkan's memory requirements give the
+runtime's buffers, `Device::buffer_alignment`), then on a device that keeps a
 device copy of each Managed buffer, `managed digests: ...` (above), then
 `addresses address_looking_words=N misaligned_address_words=N noted_words=N address_arguments=N
 relocated_words=N differing_ids=N: written words play as recorded, the noted ones moved; NOTES`

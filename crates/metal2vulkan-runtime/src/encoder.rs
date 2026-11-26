@@ -4,14 +4,14 @@ use crate::alias::Placement;
 use crate::arena;
 use crate::buffer::{Buffer, BufferInner, BufferObject};
 use crate::coherence::Range;
-use crate::command::{Building, CommandBuffer};
+use crate::command::{Building, CommandBuffer, Owed};
 use crate::counters::Metric;
 use crate::device::Core;
 use crate::error::{Error, Gap, Limit, PartialThreadgroupsSite, Refusal, StageInKind};
 use crate::fence::Fence;
 use crate::floor;
 use crate::function_table::VisibleFunctionTable;
-use crate::hazard::Access;
+use crate::hazard::{Access, Dependency};
 use crate::indirect::IndirectCommandBuffer;
 use crate::kept::{Handle, Lent, Uncounted};
 use crate::memory::BlockId;
@@ -932,7 +932,7 @@ impl ComputeCommandEncoder {
     /// `memoryBarrierWithScope:` and `memoryBarrierWithResources:count:`: one global memory
     /// barrier either way, before the next dispatch.
     pub fn memory_barrier(&mut self) {
-        self.building().owe();
+        self.building().owe(Owed::Other);
     }
 
     /// `updateFence:`: encoders that wait on `fence` after this one, of any queue, see what this
@@ -1061,7 +1061,7 @@ impl ComputeCommandEncoder {
     fn end(&mut self) {
         if let Some(mut building) = self.building.take() {
             if self.wrote {
-                building.owe();
+                building.owe(Owed::EncoderEnd);
             }
             self.command_buffer.close_encoder(building);
         }
@@ -1397,7 +1397,7 @@ impl ComputeCommandEncoder {
                             // reached before.
                             if let Some((_, fresh)) = arena {
                                 if !(first && fresh) {
-                                    building.owe();
+                                    building.owe(Owed::ArenaPiece);
                                 }
                                 building.count(Metric::PrivateArenaPieces);
                             }
@@ -1938,14 +1938,17 @@ pub(crate) struct Accesses<'a> {
 impl Accesses<'_> {
     /// Each resource the dispatch of a kernel of `interface` touches, with its access, by its id
     /// in the hazard sets ([`Buffer::tracked_id`], [`Texture::tracked_id`]: a heap's resources
-    /// take the heap's).
+    /// take the heap's) and its own as bytes ([`Buffer::id`], [`Texture::hazard_id`]), the two
+    /// equal but for a resource that takes a shared id.
     pub(crate) fn each<'b>(
         &'b self,
         interface: &'b Interface,
-    ) -> impl Iterator<Item = (u32, Access)> + 'b {
+    ) -> impl Iterator<Item = ([u32; 2], Access)> + 'b {
         let slots = interface.buffers.iter().filter_map(move |&(slot, access)| {
             match self.slots.get(slot as usize) {
-                Some(Slot::Buffer { buffer, .. }) => Some((buffer.tracked_id(), access)),
+                Some(Slot::Buffer { buffer, .. }) => {
+                    Some(([buffer.tracked_id(), buffer.id()], access))
+                }
                 _ => None,
             }
         });
@@ -1954,16 +1957,16 @@ impl Accesses<'_> {
             .iter()
             .filter_map(move |&(slot, access)| {
                 let texture = self.textures.get(slot as usize)?.as_ref()?;
-                Some((texture.tracked_id(), access))
+                Some(([texture.tracked_id(), texture.hazard_id()], access))
             });
         slots
             .chain(textures)
             .chain(
                 self.declared
                     .iter()
-                    .map(move |&(ids, access, ..)| (ids[1], access)),
+                    .map(move |&([own, tracked], access, ..)| ([tracked, own], access)),
             )
-            .chain(self.indirect.map(|(ids, _)| (ids[1], Access::Read)))
+            .chain((self.indirect).map(|([own, tracked], _)| ([tracked, own], Access::Read)))
     }
 
     /// Each resource the dispatch of a kernel of `interface` reaches, as the copies over buffers
@@ -2024,9 +2027,32 @@ impl Accesses<'_> {
     }
 }
 
+/// What a dispatch depends on in the hazard sets, where Metal orders it after what they hold.
+#[derive(Default)]
+struct Depends {
+    /// It reads or writes a resource written, by the resource's own id.
+    write: bool,
+    /// It writes a resource only read, by the resource's own id.
+    read: bool,
+    /// It conflicts through a shared id alone ([`HeapId`](crate::hazard::HeapId)): a heap's
+    /// resources, or an exported surface's, whose own ids find no dependency.
+    shared: bool,
+}
+
+impl Depends {
+    fn any(&self) -> bool {
+        self.write || self.read || self.shared
+    }
+}
+
 impl Building {
     /// Places a dispatch's barrier where it needs one, and adds what it touches to the sets.
     /// True where the dispatch writes.
+    ///
+    /// The barrier, one whatever its causes, is counted in one bucket of
+    /// [`Metrics::dispatch_hazard_barriers`](crate::Metrics::dispatch_hazard_barriers): the
+    /// dispatch's own dependency on a write or on a read where it has one, and otherwise the first
+    /// of its other causes in the buckets' order.
     fn dispatch_hazards(
         &mut self,
         serial: bool,
@@ -2035,24 +2061,64 @@ impl Building {
     ) -> Result<bool, Error> {
         let indirect = accesses.indirect.is_some();
         let reach = Reach::Dispatches { indirect };
-        let command = self.command(reach)?;
-        let hazards = self.hazards();
-        let conflict = serial
-            && (accesses
-                .each(interface)
-                .any(|(id, access)| hazards.conflicts(id, access))
-                || (interface.reads_unbound && hazards.wrote())
-                || (interface.writes_unbound && hazards.touched()));
+        let command = self.current_command()?;
+        let owed = self.owed();
         // In either kind of encoder: the barriers since a write may have left indirect argument
         // reads out.
-        if conflict || (indirect && self.args_unordered()) {
-            self.barrier(command, reach, Metric::DispatchHazardBarriers);
+        let args = indirect && self.args_unordered();
+        let hazards = self.hazards();
+        // Metal orders the dispatch after what the sets hold in a serial encoder, and after what
+        // an owed barrier orders in either kind.
+        let ordered = serial || owed.is_some();
+        let mut depends = Depends::default();
+        for ([tracked, own], access) in accesses.each(interface).filter(|_| ordered) {
+            let Some(on) = hazards.dependency(tracked, access) else {
+                continue;
+            };
+            let on = match own == tracked {
+                true => Some(on),
+                false => hazards.own_dependency(own, access),
+            };
+            match on {
+                Some(Dependency::Write) => depends.write = true,
+                Some(Dependency::Read) => depends.read = true,
+                None => depends.shared = true,
+            }
+        }
+        let unbound = ordered
+            && ((interface.reads_unbound && hazards.wrote())
+                || (interface.writes_unbound && hazards.touched()));
+        let conflict = serial && (depends.any() || unbound);
+        if owed.is_some() || conflict || args {
+            let cause = if depends.write {
+                Metric::DispatchAfterWriteBarriers
+            } else if depends.read {
+                Metric::DispatchWriteAfterReadBarriers
+            } else if owed == Some(Owed::EncoderEnd) {
+                Metric::DispatchEncoderEndBarriers
+            } else if owed == Some(Owed::PassEnd) {
+                Metric::DispatchPassEndBarriers
+            } else if args {
+                Metric::DispatchIndirectBarriers
+            } else if unbound || owed == Some(Owed::Unbound) {
+                Metric::DispatchUnboundBarriers
+            } else if owed == Some(Owed::ArenaPiece) {
+                Metric::DispatchArenaPieceBarriers
+            } else if depends.shared {
+                Metric::DispatchHeapBarriers
+            } else {
+                Metric::DispatchOtherBarriers
+            };
+            self.barrier(command, reach, cause);
             self.hazards().clear();
         }
         let hazards = self.hazards();
         let mut wrote = false;
-        for (id, access) in accesses.each(interface) {
-            hazards.mark(id, access);
+        for ([tracked, own], access) in accesses.each(interface) {
+            hazards.mark(tracked, access);
+            if own != tracked {
+                hazards.mark_own(own, access);
+            }
             wrote |= access.writes();
         }
         if interface.reads_unbound {
@@ -2063,7 +2129,7 @@ impl Building {
             wrote = true;
             if serial {
                 // Such a write conflicts with everything after it.
-                self.owe();
+                self.owe(Owed::Unbound);
             }
         }
         if wrote {

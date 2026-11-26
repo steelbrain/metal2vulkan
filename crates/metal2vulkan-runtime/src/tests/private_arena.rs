@@ -230,6 +230,10 @@ entry:
                     assert!(taken <= 1, "{what}: {taken} blocks");
                     let ordered = 2 * pieces - taken;
                     assert_eq!(barriers, one + ordered, "{what}: barriers");
+                    // Each counted in its source, the arena's pieces.
+                    let pieced =
+                        after.dispatch_arena_piece_barriers - before.dispatch_arena_piece_barriers;
+                    assert_eq!(pieced, ordered, "{what}: barriers before arena pieces");
                     println!(
                         "{what}: {pieces} pieces a dispatch, {taken} block taken, {ordered} \
                          barriers before arena pieces"

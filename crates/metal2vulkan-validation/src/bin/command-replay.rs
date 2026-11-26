@@ -29,7 +29,8 @@
 //! header lacks `FLAG_COMPLETION_BYTES_RECORDED`, the line `recorded before the recorder's
 //! completion fix: the stream may differ from what the program did` by itself, then `range ...`
 //! (the recording range, where it came from, and whether the play ends there), then `device NAME
-//! runtime rt`, each frame's `frame` and `end` lines as the frame ends
+//! runtime rt buffer alignment N` (the device's buffer alignment, `Device::buffer_alignment`), each
+//! frame's `frame` and `end` lines as the frame ends
 //! (flushed, so a play that never ends leaves the frames it finished), `addresses ...` (the
 //! written words that look like addresses, which play as recorded but those a noted buffer's range
 //! holds, which move, the address arguments and those moved, and the objects whose ID differs from
@@ -601,8 +602,10 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
     };
     let cache = PathBuf::from(&options["shader-cache"]);
     let mut backend = match open_rt(device_type, cache) {
-        Ok((backend, name)) => {
-            report.line(&format!("device {name} runtime rt"));
+        Ok((backend, name, alignment)) => {
+            report.line(&format!(
+                "device {name} runtime rt buffer alignment {alignment}"
+            ));
             let backend = match device_copies {
                 true => backend.reading_device_copies(),
                 false => backend,
@@ -720,9 +723,10 @@ fn state_options(
 }
 
 /// The runtime's backend on the first physical device of `device_type` that opens (a GPU:
-/// discrete, then integrated, then virtual), its compiled kernels kept in `cache`, and its name.
-/// A GPU opens only while the hang tripwire is absent.
-fn open_rt(device_type: DeviceType, cache: PathBuf) -> Result<(NewRuntime, String), String> {
+/// discrete, then integrated, then virtual), its compiled kernels kept in `cache`, its name and
+/// its buffers' alignment (`Device::buffer_alignment`). A GPU opens only while the hang tripwire is
+/// absent.
+fn open_rt(device_type: DeviceType, cache: PathBuf) -> Result<(NewRuntime, String, u64), String> {
     use ash::vk::PhysicalDeviceType as Kind;
     if device_type == DeviceType::Gpu {
         metal2vulkan_validation::gpu::tripwire::refuse_if_tripped()?;
@@ -756,10 +760,12 @@ fn open_rt(device_type: DeviceType, cache: PathBuf) -> Result<(NewRuntime, Strin
     for (_, name, physical) in candidates {
         let mut options = metal2vulkan_runtime::DeviceOptions::default();
         options.pipeline_cache_dir = Some(cache.clone());
-        let opened = metal2vulkan_runtime::Device::new(&physical, options)
-            .and_then(|device| NewRuntime::new(device, device_type));
+        let opened = metal2vulkan_runtime::Device::new(&physical, options).and_then(|device| {
+            let alignment = device.buffer_alignment();
+            NewRuntime::new(device, device_type).map(|backend| (backend, alignment))
+        });
         match opened {
-            Ok(backend) => return Ok((backend, name)),
+            Ok((backend, alignment)) => return Ok((backend, name, alignment)),
             Err(why) => refused.push(format!("{name}: {why}")),
         }
     }

@@ -994,6 +994,14 @@ impl Device {
         &self.shared.core.consumer_features
     }
 
+    /// No Metal counterpart: the alignment of the device's buffers of the runtime's usage, which
+    /// Vulkan's memory requirements give (`vkGetDeviceBufferMemoryRequirements`) and the device
+    /// read once at its making: Vulkan holds it the same for every such buffer, and every block's
+    /// first byte is a multiple of it.
+    pub fn buffer_alignment(&self) -> u64 {
+        self.shared.core.pool.alignment()
+    }
+
     /// No Metal counterpart: the memory types the device's buffers are allocated from, as the
     /// floor chose them on the device.
     pub fn memory_types(&self) -> floor::MemoryTypes {

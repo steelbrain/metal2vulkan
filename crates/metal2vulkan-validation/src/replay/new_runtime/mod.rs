@@ -3107,6 +3107,36 @@ impl Backend for NewRuntime {
             ("pass_home_barriers", metrics.pass_home_barriers),
             ("blit_barriers", metrics.blit_barriers),
             ("dispatch_hazard_barriers", metrics.dispatch_hazard_barriers),
+            (
+                "dispatch_after_write_barriers",
+                metrics.dispatch_after_write_barriers,
+            ),
+            (
+                "dispatch_write_after_read_barriers",
+                metrics.dispatch_write_after_read_barriers,
+            ),
+            (
+                "dispatch_encoder_end_barriers",
+                metrics.dispatch_encoder_end_barriers,
+            ),
+            (
+                "dispatch_pass_end_barriers",
+                metrics.dispatch_pass_end_barriers,
+            ),
+            (
+                "dispatch_indirect_barriers",
+                metrics.dispatch_indirect_barriers,
+            ),
+            (
+                "dispatch_unbound_barriers",
+                metrics.dispatch_unbound_barriers,
+            ),
+            (
+                "dispatch_arena_piece_barriers",
+                metrics.dispatch_arena_piece_barriers,
+            ),
+            ("dispatch_heap_barriers", metrics.dispatch_heap_barriers),
+            ("dispatch_other_barriers", metrics.dispatch_other_barriers),
             ("segment_end_barriers", metrics.segment_end_barriers),
             ("upload_barriers", metrics.upload_barriers),
             ("other_barriers", metrics.other_barriers),

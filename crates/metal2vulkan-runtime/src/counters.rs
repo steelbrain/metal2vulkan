@@ -221,8 +221,24 @@ pub(crate) enum Metric {
     PassHomeBarriers,
     /// [`Metrics::blit_barriers`].
     BlitBarriers,
-    /// [`Metrics::dispatch_hazard_barriers`].
-    DispatchHazardBarriers,
+    /// [`Metrics::dispatch_after_write_barriers`].
+    DispatchAfterWriteBarriers,
+    /// [`Metrics::dispatch_write_after_read_barriers`].
+    DispatchWriteAfterReadBarriers,
+    /// [`Metrics::dispatch_encoder_end_barriers`].
+    DispatchEncoderEndBarriers,
+    /// [`Metrics::dispatch_pass_end_barriers`].
+    DispatchPassEndBarriers,
+    /// [`Metrics::dispatch_indirect_barriers`].
+    DispatchIndirectBarriers,
+    /// [`Metrics::dispatch_unbound_barriers`].
+    DispatchUnboundBarriers,
+    /// [`Metrics::dispatch_arena_piece_barriers`].
+    DispatchArenaPieceBarriers,
+    /// [`Metrics::dispatch_heap_barriers`].
+    DispatchHeapBarriers,
+    /// [`Metrics::dispatch_other_barriers`].
+    DispatchOtherBarriers,
     /// [`Metrics::segment_end_barriers`].
     SegmentEndBarriers,
     /// [`Metrics::upload_barriers`].
@@ -345,7 +361,15 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::PassStartBarriers,
     Metric::PassHomeBarriers,
     Metric::BlitBarriers,
-    Metric::DispatchHazardBarriers,
+    Metric::DispatchAfterWriteBarriers,
+    Metric::DispatchWriteAfterReadBarriers,
+    Metric::DispatchEncoderEndBarriers,
+    Metric::DispatchPassEndBarriers,
+    Metric::DispatchIndirectBarriers,
+    Metric::DispatchUnboundBarriers,
+    Metric::DispatchArenaPieceBarriers,
+    Metric::DispatchHeapBarriers,
+    Metric::DispatchOtherBarriers,
     Metric::SegmentEndBarriers,
     Metric::UploadBarriers,
     Metric::OtherBarriers,
@@ -418,11 +442,11 @@ const _: () = {
 pub(crate) struct Tally {
     counts: [u64; METRICS],
     /// The metrics counted since the tally was last added, a bit each at its index.
-    counted: u64,
+    counted: u128,
 }
 
 // Each metric has its bit in a tally's `counted`.
-const _: () = assert!(METRICS <= u64::BITS as usize);
+const _: () = assert!(METRICS <= u128::BITS as usize);
 
 impl Default for Tally {
     fn default() -> Self {
@@ -703,7 +727,15 @@ struct Atomics {
     pass_start_barriers: AtomicU64,
     pass_home_barriers: AtomicU64,
     blit_barriers: AtomicU64,
-    dispatch_hazard_barriers: AtomicU64,
+    dispatch_after_write_barriers: AtomicU64,
+    dispatch_write_after_read_barriers: AtomicU64,
+    dispatch_encoder_end_barriers: AtomicU64,
+    dispatch_pass_end_barriers: AtomicU64,
+    dispatch_indirect_barriers: AtomicU64,
+    dispatch_unbound_barriers: AtomicU64,
+    dispatch_arena_piece_barriers: AtomicU64,
+    dispatch_heap_barriers: AtomicU64,
+    dispatch_other_barriers: AtomicU64,
     segment_end_barriers: AtomicU64,
     upload_barriers: AtomicU64,
     other_barriers: AtomicU64,
@@ -967,7 +999,15 @@ impl Counters {
             Metric::PassStartBarriers => &a.pass_start_barriers,
             Metric::PassHomeBarriers => &a.pass_home_barriers,
             Metric::BlitBarriers => &a.blit_barriers,
-            Metric::DispatchHazardBarriers => &a.dispatch_hazard_barriers,
+            Metric::DispatchAfterWriteBarriers => &a.dispatch_after_write_barriers,
+            Metric::DispatchWriteAfterReadBarriers => &a.dispatch_write_after_read_barriers,
+            Metric::DispatchEncoderEndBarriers => &a.dispatch_encoder_end_barriers,
+            Metric::DispatchPassEndBarriers => &a.dispatch_pass_end_barriers,
+            Metric::DispatchIndirectBarriers => &a.dispatch_indirect_barriers,
+            Metric::DispatchUnboundBarriers => &a.dispatch_unbound_barriers,
+            Metric::DispatchArenaPieceBarriers => &a.dispatch_arena_piece_barriers,
+            Metric::DispatchHeapBarriers => &a.dispatch_heap_barriers,
+            Metric::DispatchOtherBarriers => &a.dispatch_other_barriers,
             Metric::SegmentEndBarriers => &a.segment_end_barriers,
             Metric::UploadBarriers => &a.upload_barriers,
             Metric::OtherBarriers => &a.other_barriers,
@@ -1802,18 +1842,33 @@ impl Counters {
         };
         let stage = |stage: Stage| (a.stages[stage as usize].each_ref()).map(|n| n.load(Relaxed));
         let stage_nanos = |stage: Stage| a.stage_nanos[stage as usize].load(Relaxed);
-        // Each barrier counts in one cause; their sum is every barrier.
-        let causes = [
-            &a.pass_start_barriers,
-            &a.pass_home_barriers,
-            &a.blit_barriers,
-            &a.dispatch_hazard_barriers,
-            &a.segment_end_barriers,
-            &a.upload_barriers,
-            &a.other_barriers,
+        // A dispatch's barrier counts in one source, and each barrier in one cause; their sums
+        // are every dispatch's barriers and every barrier.
+        let sources = [
+            &a.dispatch_after_write_barriers,
+            &a.dispatch_write_after_read_barriers,
+            &a.dispatch_encoder_end_barriers,
+            &a.dispatch_pass_end_barriers,
+            &a.dispatch_indirect_barriers,
+            &a.dispatch_unbound_barriers,
+            &a.dispatch_arena_piece_barriers,
+            &a.dispatch_heap_barriers,
+            &a.dispatch_other_barriers,
         ]
         .map(|n| n.load(Relaxed));
-        let [pass_start, pass_home, blit, dispatch_hazard, segment_end, upload, other] = causes;
+        let dispatch_hazard = sources.iter().sum();
+        let causes = [
+            a.pass_start_barriers.load(Relaxed),
+            a.pass_home_barriers.load(Relaxed),
+            a.blit_barriers.load(Relaxed),
+            dispatch_hazard,
+            a.segment_end_barriers.load(Relaxed),
+            a.upload_barriers.load(Relaxed),
+            a.other_barriers.load(Relaxed),
+        ];
+        let [pass_start, pass_home, blit, _, segment_end, upload, other] = causes;
+        let [on_write, on_read, encoder_end, pass_end, indirect, unbound, arena, heap, rest] =
+            sources;
         Metrics {
             submissions: a.submissions.load(Relaxed),
             submit_infos: a.submit_infos.load(Relaxed),
@@ -1855,6 +1910,15 @@ impl Counters {
             pass_home_barriers: pass_home,
             blit_barriers: blit,
             dispatch_hazard_barriers: dispatch_hazard,
+            dispatch_after_write_barriers: on_write,
+            dispatch_write_after_read_barriers: on_read,
+            dispatch_encoder_end_barriers: encoder_end,
+            dispatch_pass_end_barriers: pass_end,
+            dispatch_indirect_barriers: indirect,
+            dispatch_unbound_barriers: unbound,
+            dispatch_arena_piece_barriers: arena,
+            dispatch_heap_barriers: heap,
+            dispatch_other_barriers: rest,
             segment_end_barriers: segment_end,
             upload_barriers: upload,
             other_barriers: other,
@@ -2328,8 +2392,40 @@ pub struct Metrics {
     /// Of [`barriers`](Self::barriers), those a dispatch records before it: at a hazard with an
     /// earlier dispatch of its encoder, or paying one an earlier command owed (an encoder that
     /// wrote, a memory barrier call, a write through an address outside a dispatch's resources, a
-    /// render pass that moved nothing home, a release to another API).
+    /// render pass that moved nothing home, a release to another API). Each counts in one of the
+    /// nine sources below, whose sum this is: where it has several, in the dependency on a write
+    /// or on a read where the dispatch has one at its resources' level, and otherwise in the first
+    /// of the other seven, in their order.
     pub dispatch_hazard_barriers: u64,
+    /// Of [`dispatch_hazard_barriers`](Self::dispatch_hazard_barriers), those where the dispatch
+    /// reads or writes a resource of its own (not through a heap's or a surface's one id) that a
+    /// command since the last barrier wrote.
+    pub dispatch_after_write_barriers: u64,
+    /// Of those, the ones where the dispatch writes such a resource that a command since the last
+    /// barrier read, and none wrote.
+    pub dispatch_write_after_read_barriers: u64,
+    /// Of those, the ones owed by an encoder that wrote anything, paid by the next encoder's first
+    /// dispatch, which has neither dependency.
+    pub dispatch_encoder_end_barriers: u64,
+    /// Of those, the ones owed by a render pass that moved nothing home, or that copied a resolve
+    /// into a buffer, paid by a dispatch with neither dependency.
+    pub dispatch_pass_end_barriers: u64,
+    /// Of those, the ones before an indirect dispatch after a write since the last barrier that
+    /// reached indirect argument reads, whatever buffer was written.
+    pub dispatch_indirect_barriers: u64,
+    /// Of those, the ones for an access through an address outside every resource: a read after
+    /// a write, a write after any access, or the barrier such a write owes the next dispatch.
+    pub dispatch_unbound_barriers: u64,
+    /// Of those, the ones before each piece of a dispatch split for its Private-arena slots but
+    /// the first in a block taken new: the piece reuses slots an earlier command may have used.
+    pub dispatch_arena_piece_barriers: u64,
+    /// Of those, the ones at a conflict through the one id of a heap's resources (or an exported
+    /// surface's buffer and planes), which Metal tracks as one resource.
+    pub dispatch_heap_barriers: u64,
+    /// Of those, the rest: owed by a memory barrier call, a release to another API, or a
+    /// concurrent encoder after commands that touched resources, and paid by a dispatch with
+    /// neither dependency.
+    pub dispatch_other_barriers: u64,
     /// Of [`barriers`](Self::barriers), the one that ends each segment with commands of a command
     /// buffer, paying what is owed.
     pub segment_end_barriers: u64,

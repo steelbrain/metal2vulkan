@@ -40,11 +40,24 @@ impl Access {
     }
 }
 
+/// What an access depends on in the sets ([`Hazards::dependency`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Dependency {
+    /// A write of the resource: the access reads or writes what was written.
+    Write,
+    /// Only a read of it: the access writes what was read.
+    Read,
+}
+
 /// The sets.
 pub(crate) struct Hazards {
     /// Per resource id, the generations it was last read and last written in; a mark of an older
     /// generation is in neither set.
     marks: Vec<[u32; 2]>,
+    /// The same marks by a resource's own id, of each resource that takes a shared id in
+    /// `marks` (a heap's, [`HeapId`]): they place no barrier, and only tell a dependency on the
+    /// resource itself from a conflict through the shared id alone, for the barrier's count.
+    own: Vec<[u32; 2]>,
     /// The current generation, from 1.
     generation: u32,
     /// Since the last barrier: something was written, through a resource or through an address
@@ -58,6 +71,7 @@ impl Default for Hazards {
     fn default() -> Hazards {
         Hazards {
             marks: Vec::new(),
+            own: Vec::new(),
             generation: 1,
             wrote: false,
             touched: false,
@@ -66,32 +80,32 @@ impl Default for Hazards {
 }
 
 impl Hazards {
-    /// Whether `access` of resource `id` conflicts with the sets: it reads or writes a resource
-    /// in the written set, or writes one in the read set.
-    pub(crate) fn conflicts(&self, id: u32, access: Access) -> bool {
-        match self.marks.get(id as usize) {
-            Some(&[read, written]) => {
-                written == self.generation || (access.writes() && read == self.generation)
-            }
-            None => false,
-        }
+    /// What `access` of resource `id` depends on in the sets, where it conflicts with them: it
+    /// reads or writes a resource in the written set (`Write`), or writes one in the read set
+    /// alone (`Read`).
+    pub(crate) fn dependency(&self, id: u32, access: Access) -> Option<Dependency> {
+        depends(&self.marks, self.generation, id, access)
+    }
+
+    /// [`dependency`](Self::dependency) by the own id of a resource that takes a shared id, from
+    /// its [`mark_own`](Self::mark_own) marks.
+    pub(crate) fn own_dependency(&self, id: u32, access: Access) -> Option<Dependency> {
+        depends(&self.own, self.generation, id, access)
     }
 
     /// Adds `access` of resource `id` to the sets.
     pub(crate) fn mark(&mut self, id: u32, access: Access) {
-        let index = id as usize;
-        if index >= self.marks.len() {
-            self.marks.resize(index + 1, [0, 0]);
-        }
-        let mark = &mut self.marks[index];
-        if access.reads() {
-            mark[0] = self.generation;
-        }
+        set(&mut self.marks, self.generation, id, access);
         if access.writes() {
-            mark[1] = self.generation;
             self.wrote = true;
         }
         self.touched = true;
+    }
+
+    /// Adds `access` by the own id of a resource that takes a shared id, which [`mark`](Self::mark)
+    /// adds by the shared one.
+    pub(crate) fn mark_own(&mut self, id: u32, access: Access) {
+        set(&mut self.own, self.generation, id, access);
     }
 
     /// A write through an address outside every resource.
@@ -119,11 +133,40 @@ impl Hazards {
     pub(crate) fn clear(&mut self) {
         if self.generation == u32::MAX {
             self.marks.fill([0, 0]);
+            self.own.fill([0, 0]);
             self.generation = 0;
         }
         self.generation += 1;
         self.wrote = false;
         self.touched = false;
+    }
+}
+
+/// What `access` of resource `id` depends on in `marks` at `generation`: a write of it, or a read
+/// of it alone where the access writes.
+fn depends(marks: &[[u32; 2]], generation: u32, id: u32, access: Access) -> Option<Dependency> {
+    let &[read, written] = marks.get(id as usize)?;
+    if written == generation {
+        Some(Dependency::Write)
+    } else if access.writes() && read == generation {
+        Some(Dependency::Read)
+    } else {
+        None
+    }
+}
+
+/// Marks `access` of resource `id` in `marks` at `generation`.
+fn set(marks: &mut Vec<[u32; 2]>, generation: u32, id: u32, access: Access) {
+    let index = id as usize;
+    if index >= marks.len() {
+        marks.resize(index + 1, [0, 0]);
+    }
+    let mark = &mut marks[index];
+    if access.reads() {
+        mark[0] = generation;
+    }
+    if access.writes() {
+        mark[1] = generation;
     }
 }
 
