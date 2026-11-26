@@ -1,20 +1,21 @@
 //! The over-copies by cause: each counted copy of a texture over a buffer counts in the `Metrics`
 //! pair of the cause the texture's making decided, and in no other, and the counters name each
 //! kind of copied texture (cause, pixel format, size, usage) once, up to their 256 kinds.
-//! Device-free, each cause's copy moves its own pair alone, and the kinds fill past their bound.
-//! Under a device cfg, on every device of the cfg's kind, four RGBA8Unorm
-//! textures over a buffer, each read once by a blit in a command buffer of its own: one whose rows
-//! lie one linear rounding past the device's own pitch, one a texel off its linear image's memory
-//! alignment, a render target of 3 rows whose subresource the device may advertise past them, and
-//! one over host memory's import (where the device imports host memory). A copied one moves the
-//! totals by its one copy in, its texels' bytes, and its cause's pair alike, every other cause's
-//! pair still; one in place moves nothing. On lavapipe each is copied for the cause it was made
-//! for: pitch, alignment, render reach and host memory. lavapipe's linear tiling has its optimal
-//! tiling's features for every color format (Mesa's `lvp_formats.c`), so no texture here is
-//! copied for a format or usage.
+//! Device-free, each cause's copy moves its own pair alone, each memory class's its own bytes
+//! alone, and the kinds fill past their bound. Under a device cfg, on every device of the cfg's
+//! kind, five RGBA8Unorm textures over a buffer, each read once by a blit in a command buffer of
+//! its own: one whose rows lie one linear rounding past the device's own pitch, the same over a
+//! Private buffer, one a texel off its linear image's memory alignment, a render target of 3 rows
+//! whose subresource the device may advertise past them, and one over host memory's import
+//! (where the device imports host memory). A copied one moves the totals by its one copy in, its
+//! texels' bytes, its cause's pair and its buffer's memory class's bytes alike, every other
+//! cause's pair and the other class's bytes still; one in place moves nothing. On lavapipe each is
+//! copied for the cause it was made for: pitch (twice), alignment, render reach and host memory.
+//! lavapipe's linear tiling has its optimal tiling's features for every color format (Mesa's
+//! `lvp_formats.c`), so no texture here is copied for a format or usage.
 
 use crate::counters::{Counters, OverCause, OverCopyKind, OVER_COPY_KINDS};
-use crate::{Metrics, PixelFormat, TextureUsage};
+use crate::{MemoryClass, Metrics, PixelFormat, TextureUsage};
 
 /// Every cause.
 const CAUSES: [OverCause; 12] = [
@@ -84,7 +85,7 @@ fn each_cause_counts_in_its_own_pair_alone() {
         let counters = Counters::new();
         let before = counters.metrics();
         let bytes = 64 * (at as u64 + 1);
-        counters.over_copied(bytes, false, kind(cause, 16));
+        counters.over_copied(bytes, false, None, kind(cause, 16));
         let after = counters.metrics();
         for (other, pair) in moved(&before, &after) {
             let expected = match other == cause {
@@ -102,6 +103,31 @@ fn each_cause_counts_in_its_own_pair_alone() {
     }
 }
 
+/// A copy over Private memory moves the Private bytes alone, one over Shared memory the Shared
+/// bytes alone, and one over a Managed buffer's device copy neither; each moves the totals.
+#[test]
+fn each_memory_class_counts_its_copies_bytes_alone() {
+    for (class, bytes) in [
+        (Some(MemoryClass::Private), 64),
+        (Some(MemoryClass::Shared), 128),
+        (None, 256),
+    ] {
+        let counters = Counters::new();
+        counters.over_copied(bytes, false, class, kind(OverCause::Pitch, 16));
+        let after = counters.metrics();
+        let of = |c| match class == Some(c) {
+            true => bytes,
+            false => 0,
+        };
+        assert_eq!(
+            (after.over_copy_bytes_private, after.over_copy_bytes_shared),
+            (of(MemoryClass::Private), of(MemoryClass::Shared)),
+            "{class:?}"
+        );
+        assert_eq!(after.over_copy_bytes, bytes, "{class:?}");
+    }
+}
+
 /// The counters name each kind once, at its first copy, in that order, up to 256 kinds; a read
 /// from a number answers the kinds from it on. Filled past the bound, a copy of a kind first
 /// copied after the 256th counts as unkept, each time, and a copy of a kept kind never does.
@@ -111,20 +137,20 @@ fn the_counters_name_each_copied_kind_once_up_to_their_bound() {
     let kinds: Vec<OverCopyKind> = (0..OVER_COPY_KINDS as u32 + 3)
         .map(|at| kind(CAUSES[at as usize % CAUSES.len()], 1 + at))
         .collect();
-    counters.over_copied(64, false, kinds[0]);
-    counters.over_copied(64, true, kinds[1]);
-    counters.over_copied(64, false, kinds[0]);
+    counters.over_copied(64, false, None, kinds[0]);
+    counters.over_copied(64, true, None, kinds[1]);
+    counters.over_copied(64, false, None, kinds[0]);
     assert_eq!(counters.over_copy_kinds(0), kinds[..2]);
     assert_eq!(counters.over_copy_kinds(1), kinds[1..2]);
     assert!(counters.over_copy_kinds(2).is_empty());
     assert!(counters.over_copy_kinds(3).is_empty());
     for &kind in &kinds {
-        counters.over_copied(64, false, kind);
+        counters.over_copied(64, false, None, kind);
     }
     assert_eq!(counters.over_copy_kinds(0), kinds[..OVER_COPY_KINDS]);
     assert_eq!(counters.metrics().over_copies_unkept_kind, 3);
-    counters.over_copied(64, false, kinds[OVER_COPY_KINDS]);
-    counters.over_copied(64, false, kinds[OVER_COPY_KINDS - 1]);
+    counters.over_copied(64, false, None, kinds[OVER_COPY_KINDS]);
+    counters.over_copied(64, false, None, kinds[OVER_COPY_KINDS - 1]);
     let m = counters.metrics();
     assert_eq!(m.over_copies_unkept_kind, 4);
     assert_eq!(m.over_copies, kinds.len() as u64 + 5);
@@ -167,7 +193,8 @@ mod on_device {
     /// Reads `texture` (`height` rows) by a blit into a Shared buffer, in a command buffer of its
     /// own, and checks the copies it counted: a copied texture moves the totals by its one copy
     /// in, of its texels' bytes, and its cause's pair (and the imported pair, where `imported`)
-    /// alike, every other cause's pair still, and the counters name its kind (its cause,
+    /// alike, and the bytes of its buffer's memory class (`class`) alike, every other cause's
+    /// pair and the other class's bytes still, and the counters name its kind (its cause,
     /// RGBA8Unorm, its size and usage) once, where no texture before named it; one in place moves
     /// nothing and names none. Returns the texture's cause, `None` in place.
     fn read_once(
@@ -175,7 +202,7 @@ mod on_device {
         device: &Device,
         queue: &CommandQueue,
         texture: &Texture,
-        (height, imported): (u32, bool),
+        (height, imported, class): (u32, bool, MemoryClass),
     ) -> Option<OverCause> {
         let kind = texture.copied_over().map(|(_, copy)| copy.kind);
         let cause = kind.map(|kind| kind.cause);
@@ -230,6 +257,18 @@ mod on_device {
             imported_moved, imported_expected,
             "{name}: {what}: the imported pair"
         );
+        let of = |c| match c == class {
+            true => copy_bytes,
+            false => 0,
+        };
+        assert_eq!(
+            (
+                after.over_copy_bytes_private - before.over_copy_bytes_private,
+                after.over_copy_bytes_shared - before.over_copy_bytes_shared,
+            ),
+            (of(MemoryClass::Private), of(MemoryClass::Shared)),
+            "{name}: {what}: the bytes by memory class"
+        );
         for (other, pair) in moved(&before, &after) {
             let expected = match Some(other) == cause {
                 true => (copies, copy_bytes),
@@ -270,7 +309,7 @@ mod on_device {
             let pitch = ROW.next_multiple_of(answer);
             let queue = device.new_command_queue(4).expect("a queue");
             let first = IndexClass::Texture.range().start;
-            (device.grant_indices(IndexClass::Texture, first, 4)).expect("a grant");
+            (device.grant_indices(IndexClass::Texture, first, 5)).expect("a grant");
             let lavapipe = cfg!(m2v_cpu_icd);
             let mut found = Vec::new();
 
@@ -288,12 +327,37 @@ mod on_device {
                 ("alignment", first + 1, (4, pitch), OverCause::Alignment),
             ] {
                 let texture = over(name, &buffer, (height, usage), index, place);
-                let cause = read_once((name, what), &device, &queue, &texture, (height, false));
+                let shared = (height, false, MemoryClass::Shared);
+                let cause = read_once((name, what), &device, &queue, &texture, shared);
                 if lavapipe {
                     assert_eq!(cause, Some(made_for), "{name}: {what}");
                 }
                 found.push((what, cause));
             }
+
+            // Rows past the device's pitch over a Private buffer: its copies count as Private.
+            let private_block = (device.take_block(MemoryClass::Private, AT + len))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let private = (device.new_buffer(private_block.id, AT, len, None))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let texture = over(
+                name,
+                &private,
+                (height, usage),
+                first + 4,
+                (0, pitch + answer),
+            );
+            let cause = read_once(
+                (name, "private pitch"),
+                &device,
+                &queue,
+                &texture,
+                (height, false, MemoryClass::Private),
+            );
+            if lavapipe {
+                assert_eq!(cause, Some(OverCause::Pitch), "{name}: private pitch");
+            }
+            found.push(("private pitch", cause));
 
             // A render target of 3 rows over a buffer of its rows alone.
             let height = 3;
@@ -309,7 +373,7 @@ mod on_device {
                 &device,
                 &queue,
                 &target,
-                (height, false),
+                (height, false, MemoryClass::Shared),
             );
             if lavapipe {
                 assert_eq!(cause, Some(OverCause::RenderReach), "{name}: render reach");
@@ -334,7 +398,7 @@ mod on_device {
                     &device,
                     &queue,
                     &texture,
-                    (height, true),
+                    (height, true, MemoryClass::Shared),
                 );
                 assert_eq!(cause, Some(OverCause::HostMemory), "{name}: host memory");
                 found.push(("host memory", cause));

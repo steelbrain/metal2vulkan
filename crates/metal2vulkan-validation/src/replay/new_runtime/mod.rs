@@ -3101,6 +3101,9 @@ impl Backend for NewRuntime {
             ("over_copy_bytes", metrics.over_copy_bytes),
             ("over_copies_imported", metrics.over_copies_imported),
             ("over_copy_bytes_imported", metrics.over_copy_bytes_imported),
+            ("over_copy_bytes_private", metrics.over_copy_bytes_private),
+            ("over_copy_bytes_shared", metrics.over_copy_bytes_shared),
+            ("rendering_interrupts", metrics.rendering_interrupts),
             ("over_copies_host_memory", metrics.over_copies_host_memory),
             (
                 "over_copy_bytes_host_memory",

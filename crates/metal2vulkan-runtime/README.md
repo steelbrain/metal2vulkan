@@ -1694,7 +1694,9 @@ made, with no lock, and never rewritten for layouts.
   `bytes_per_row` apart, with no CPU copy. Each copy counts in `Metrics::over_copies` and its
   bytes in `Metrics::over_copy_bytes` and `Metrics::bytes_copied`; one over a buffer in an
   imported block counts in `Metrics::over_copies_imported` and `Metrics::over_copy_bytes_imported`
-  too. Each copy also counts in the pair of the cause the texture's making found, the first that
+  too, and its bytes count in `Metrics::over_copy_bytes_private` or
+  `Metrics::over_copy_bytes_shared` by the memory class the buffer's bytes are in (neither over a
+  Managed buffer's device copy). Each copy also counts in the pair of the cause the texture's making found, the first that
   holds: the buffer's memory (`over_copies_host_memory`, `_dma_buf`, `_dma_bufs`, `_dedicated`
   for an exported block's, `_surface` for an exported surface's buffer), a spilled block
   (`_spilled`), no linear image of the format, usage and size (`_linear`), a format feature the
@@ -4588,7 +4590,8 @@ cache is answered compile-required on both.
   after what the earlier draws rendered. A draw that needs a copy first, of a texture over a
   buffer in an image of its own or over a
   Managed buffer's device copy, records it the same way, between the rendering's end and its new
-  beginning. Fences record nothing, as in a compute encoder.
+  beginning. Each such end and new beginning inside one encoder counts in
+  `Metrics::rendering_interrupts`. Fences record nothing, as in a compute encoder.
 - Refused, as Metal's validation stops them: a draw with no pipeline state
   (`Refusal::NoPipeline`), a vertex buffer the vertex descriptor reads that is not bound
   (`Refusal::NoBufferAtIndex`) or bound at an offset past its length

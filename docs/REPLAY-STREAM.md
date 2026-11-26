@@ -607,7 +607,11 @@ records as text, and
   `over_copy_bytes_imported` those over an imported one alone; the rest are over the runtime's own
   blocks, where the device's linear image does not take the texture. `over_copies_host_memory`,
   `over_copies_pitch` and the ten like them, each beside its `over_copy_bytes_` sum, split them by
-  the runtime's cause (`Metrics::over_copies_host_memory` and the rest). The report's `no-copy
+  the runtime's cause (`Metrics::over_copies_host_memory` and the rest), and its
+  `over_copy_bytes_private` and `over_copy_bytes_shared` split their bytes by the memory class
+  the buffer's bytes are in, the rest being over a Managed buffer's device copy. Each frame's
+  `rendering_interrupts` counts the renderings a render encoder ended and began again inside
+  itself (`Metrics::rendering_interrupts`). The report's `no-copy
   buffers` line counts the descriptor-form ones in a block, those outside every block and their
   bytes, and the bytes-form ones and their bytes imported, apart; its `textures over buffers` line
   counts the textures over buffers it made (not substituted), in place and in an image of their

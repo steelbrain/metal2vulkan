@@ -1504,7 +1504,9 @@ field	metal2vulkan-runtime::Metrics.over_copy_bytes_imported	pub over_copy_bytes
 field	metal2vulkan-runtime::Metrics.over_copy_bytes_linear	pub over_copy_bytes_linear: u64
 field	metal2vulkan-runtime::Metrics.over_copy_bytes_linear_features	pub over_copy_bytes_linear_features: u64
 field	metal2vulkan-runtime::Metrics.over_copy_bytes_pitch	pub over_copy_bytes_pitch: u64
+field	metal2vulkan-runtime::Metrics.over_copy_bytes_private	pub over_copy_bytes_private: u64
 field	metal2vulkan-runtime::Metrics.over_copy_bytes_render_reach	pub over_copy_bytes_render_reach: u64
+field	metal2vulkan-runtime::Metrics.over_copy_bytes_shared	pub over_copy_bytes_shared: u64
 field	metal2vulkan-runtime::Metrics.over_copy_bytes_spilled	pub over_copy_bytes_spilled: u64
 field	metal2vulkan-runtime::Metrics.over_copy_bytes_surface	pub over_copy_bytes_surface: u64
 field	metal2vulkan-runtime::Metrics.overlapping_copies_refused	pub overlapping_copies_refused: u64
@@ -1536,6 +1538,7 @@ field	metal2vulkan-runtime::Metrics.render_makes_past_kernel_bound	pub render_ma
 field	metal2vulkan-runtime::Metrics.render_records_read	pub render_records_read: u64
 field	metal2vulkan-runtime::Metrics.render_records_stale	pub render_records_stale: u64
 field	metal2vulkan-runtime::Metrics.render_weight_past_kernel_bound_max	pub render_weight_past_kernel_bound_max: u64
+field	metal2vulkan-runtime::Metrics.rendering_interrupts	pub rendering_interrupts: u64
 field	metal2vulkan-runtime::Metrics.resolve_copies	pub resolve_copies: u64
 field	metal2vulkan-runtime::Metrics.resolve_copy_bytes	pub resolve_copy_bytes: u64
 field	metal2vulkan-runtime::Metrics.resolves	pub resolves: u64

@@ -5821,6 +5821,7 @@ pub(crate) trait TextureObject {
             },
             bytes: u64::from(d.width) * u64::from(d.height) * u64::from(unit.bytes),
             shared: named.buffer.is_shared(),
+            class: device_copy.is_none().then_some(block.memory.class),
             imported: device_copy.is_none() && block.memory.imported(),
             exported: device_copy.is_none() && block.memory.exported(),
             kind: OverCopyKind {
@@ -6310,6 +6311,9 @@ pub(crate) struct OverCopy {
     pub(crate) bytes: u64,
     /// The buffer is Shared: the host reads what a copy back writes.
     pub(crate) shared: bool,
+    /// The class of the memory the bytes shaders reach are in, `None` for a Managed buffer's
+    /// device copy (`Metrics::over_copy_bytes_private`, `Metrics::over_copy_bytes_shared`).
+    pub(crate) class: Option<MemoryClass>,
     /// The bytes shaders reach are in an imported block (`Metrics::over_copies_imported`).
     pub(crate) imported: bool,
     /// The bytes shaders reach are in an exported block, whose copies in wait for an event that

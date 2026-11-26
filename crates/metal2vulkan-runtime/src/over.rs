@@ -512,7 +512,7 @@ pub(crate) unsafe fn record_side(
                     copy_out::regions(&copy.unit, copy.region).as_slice(),
                 ),
             }
-            counters.over_copied(copy.bytes, copy.imported, copy.kind);
+            counters.over_copied(copy.bytes, copy.imported, copy.class, copy.kind);
         }
         device.cmd_pipeline_barrier2(
             command,

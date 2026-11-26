@@ -3569,7 +3569,8 @@ impl RenderCommandEncoder {
 
     /// Ends the pass's rendering, has `record` record into the command buffer, and begins the
     /// rendering again, loading what it stored; the rendering's draws since it began are
-    /// unwritten again.
+    /// unwritten again. Counted in
+    /// [`Metrics::rendering_interrupts`](crate::Metrics::rendering_interrupts).
     fn interrupt(
         &mut self,
         record: impl FnOnce(&mut Building, &Core) -> Result<(), Error>,
@@ -3584,6 +3585,7 @@ impl RenderCommandEncoder {
         // SAFETY: the command buffer is inside the pass's rendering, which nothing else records
         // into while the encoder holds it.
         unsafe { core.device.cmd_end_rendering(self.command) };
+        building.count(Metric::RenderingInterrupts);
         let recorded = record(building, core);
         // SAFETY: the command buffer records outside any rendering and keeps each attachment's
         // texture until it retires; each attachment stays in the layout the pass renders it in,

@@ -4,7 +4,7 @@
 //! to its own; nothing turns them on or off.
 
 use crate::pipeline::DispatchVariant;
-use crate::{PixelFormat, TextureUsage};
+use crate::{MemoryClass, PixelFormat, TextureUsage};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -319,10 +319,12 @@ pub(crate) enum Metric {
     HeapMoves,
     /// [`Metrics::stencil_bit_draws`].
     StencilBitDraws,
+    /// [`Metrics::rendering_interrupts`].
+    RenderingInterrupts,
 }
 
 /// The number of [`Metric`]s.
-const METRICS: usize = Metric::StencilBitDraws as usize + 1;
+const METRICS: usize = Metric::RenderingInterrupts as usize + 1;
 
 /// Every [`Metric`], in its order: each at its own index.
 const METRIC_ORDER: [Metric; METRICS] = [
@@ -380,6 +382,7 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::OverlappingCopiesRefused,
     Metric::HeapMoves,
     Metric::StencilBitDraws,
+    Metric::RenderingInterrupts,
 ];
 
 // Each metric of the order is at its own index.
@@ -758,6 +761,8 @@ struct Atomics {
     over_copy_bytes: AtomicU64,
     over_copies_imported: AtomicU64,
     over_copy_bytes_imported: AtomicU64,
+    over_copy_bytes_private: AtomicU64,
+    over_copy_bytes_shared: AtomicU64,
     /// Each [`OverCause`]'s over-copies, at its index: their count and bytes.
     over_by_cause: [[AtomicU64; 2]; OVER_CAUSES],
     /// The first [`OVER_COPY_KINDS`] kinds copied, in that order ([`Counters::over_copy_kinds`]).
@@ -808,6 +813,7 @@ struct Atomics {
     overlapping_copies_refused: AtomicU64,
     heap_moves: AtomicU64,
     stencil_bit_draws: AtomicU64,
+    rendering_interrupts: AtomicU64,
     /// Each [`Part`]'s calls, at its index: their count, bytes, total and longest nanoseconds,
     /// and those over each of [`OVER_NANOS`].
     parts: [[AtomicU64; 7]; PARTS],
@@ -986,6 +992,7 @@ impl Counters {
             Metric::OverlappingCopiesRefused => &a.overlapping_copies_refused,
             Metric::HeapMoves => &a.heap_moves,
             Metric::StencilBitDraws => &a.stencil_bit_draws,
+            Metric::RenderingInterrupts => &a.rendering_interrupts,
         }
     }
 
@@ -1415,10 +1422,18 @@ impl Counters {
     /// ([`Metrics::over_copies`], [`Metrics::over_copy_bytes`]), which count in
     /// [`Metrics::bytes_copied`] too, and where the bytes shaders reach of the buffer are in an
     /// imported block (`imported`), in [`Metrics::over_copies_imported`] and
-    /// [`Metrics::over_copy_bytes_imported`]; in the pair of the texture's cause; and its `kind`
-    /// kept where it is new and fewer than [`OVER_COPY_KINDS`] are kept, else, new,
-    /// [`Metrics::over_copies_unkept_kind`].
-    pub(crate) fn over_copied(&self, bytes: u64, imported: bool, kind: OverCopyKind) {
+    /// [`Metrics::over_copy_bytes_imported`]; by the class of the memory those bytes are in
+    /// (`class`, `None` for a Managed buffer's device copy), in
+    /// [`Metrics::over_copy_bytes_private`] or [`Metrics::over_copy_bytes_shared`]; in the pair of
+    /// the texture's cause; and its `kind` kept where it is new and fewer than
+    /// [`OVER_COPY_KINDS`] are kept, else, new, [`Metrics::over_copies_unkept_kind`].
+    pub(crate) fn over_copied(
+        &self,
+        bytes: u64,
+        imported: bool,
+        class: Option<MemoryClass>,
+        kind: OverCopyKind,
+    ) {
         let a = &self.atomics;
         a.over_copies.fetch_add(1, Relaxed);
         a.over_copy_bytes.fetch_add(bytes, Relaxed);
@@ -1426,6 +1441,13 @@ impl Counters {
         if imported {
             a.over_copies_imported.fetch_add(1, Relaxed);
             a.over_copy_bytes_imported.fetch_add(bytes, Relaxed);
+        }
+        if let Some(class) = class {
+            let class_bytes = match class {
+                MemoryClass::Private => &a.over_copy_bytes_private,
+                MemoryClass::Shared => &a.over_copy_bytes_shared,
+            };
+            class_bytes.fetch_add(bytes, Relaxed);
         }
         let [copies, copy_bytes] = &a.over_by_cause[kind.cause as usize];
         copies.fetch_add(1, Relaxed);
@@ -1879,6 +1901,8 @@ impl Counters {
             over_copy_bytes: a.over_copy_bytes.load(Relaxed),
             over_copies_imported: a.over_copies_imported.load(Relaxed),
             over_copy_bytes_imported: a.over_copy_bytes_imported.load(Relaxed),
+            over_copy_bytes_private: a.over_copy_bytes_private.load(Relaxed),
+            over_copy_bytes_shared: a.over_copy_bytes_shared.load(Relaxed),
             over_copies_host_memory: over(OverCause::HostMemory)[0],
             over_copy_bytes_host_memory: over(OverCause::HostMemory)[1],
             over_copies_dma_buf: over(OverCause::DmaBuf)[0],
@@ -1951,6 +1975,7 @@ impl Counters {
             overlapping_copies_refused: a.overlapping_copies_refused.load(Relaxed),
             heap_moves: a.heap_moves.load(Relaxed),
             stencil_bit_draws: a.stencil_bit_draws.load(Relaxed),
+            rendering_interrupts: a.rendering_interrupts.load(Relaxed),
             takes: part(Part::Take),
             take_lock_waits: part(Part::TakeLock),
             take_makes: part(Part::TakeMake),
@@ -2678,6 +2703,15 @@ pub struct Metrics {
     pub over_copies_imported: u64,
     /// The bytes of those copies, which count in [`over_copy_bytes`](Self::over_copy_bytes) too.
     pub over_copy_bytes_imported: u64,
+    /// Of [`over_copy_bytes`](Self::over_copy_bytes), those of a texture whose buffer's bytes
+    /// shaders reach are in Private memory ([`MemoryClass::Private`], `MTLStorageModePrivate`),
+    /// which no host write reaches: an exported block's
+    /// ([`Device::new_exported_block`](crate::Device::new_exported_block)) among them.
+    pub over_copy_bytes_private: u64,
+    /// Of [`over_copy_bytes`](Self::over_copy_bytes), those of a texture whose buffer's bytes
+    /// shaders reach are in Shared memory ([`MemoryClass::Shared`], `MTLStorageModeShared`), an
+    /// imported block's among them; the rest are over a Managed buffer's device copy.
+    pub over_copy_bytes_shared: u64,
     /// Of [`over_copies`](Self::over_copies), those of a texture over a buffer in host memory's import
     /// ([`Device::import_host_memory`](crate::Device::import_host_memory)): Vulkan shares that memory's
     /// ownership with the host, and an image made for it starts undefined, a layout whose move
@@ -2979,6 +3013,14 @@ pub struct Metrics {
     /// ([`DrawKind::StencilOutput`](crate::DrawKind::StencilOutput) says where they are refused).
     /// 0 on a device with the extension. Metal draws once.
     pub stencil_bit_draws: u64,
+    /// Renderings a render encoder ended and began again inside itself, loading what it stored,
+    /// to record work between its draws (`crate::render_encoder`): a barrier (a memory barrier
+    /// after a draw that wrote memory, or the one owed before a draw that reads an attachment),
+    /// copies a draw or a visibility result mode needs first (of textures over a buffer in images
+    /// of their own or over a Managed buffer's device copy, and into attachments' shadows),
+    /// moves of attachments to the feedback layout or of heap textures, and an execution's count
+    /// kernel. No Metal counterpart: a Metal render encoder is one pass.
+    pub rendering_interrupts: u64,
     /// Takes from the pool on the consumer's threads, each whole: a block of
     /// [`Device::take_block`](crate::Device::take_block) and a texture block, carved from a free
     /// range or from an allocation the take made ([`take_makes`](Self::take_makes)); their bytes
