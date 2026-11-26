@@ -59,8 +59,9 @@ i915 lists them. Shared storage then takes a cached type that is not coherent, s
 device suite runs Shared memory's flushes and invalidates (the runtime README, "Shared memory's
 coherence") on a GPU whose memory is coherent in fact; Vulkan allows both calls on a coherent type.
 Lavapipe cannot run it: its one memory type also holds the parameter ring, which needs a coherent
-type. Under the view a card whose host-pointer and dma-buf queries offer only its cached types
-refuses every import; run it with the import families filtered. Lint the gated code without running
+type. Under the view every card refuses every dma-buf import (`Limit::ImportCoherence`), and a
+card whose host-pointer query offers only its cached types refuses every pointer import too; run
+it with the import families filtered. Lint the gated code without running
 it, in its own target directory:
 
 ```sh

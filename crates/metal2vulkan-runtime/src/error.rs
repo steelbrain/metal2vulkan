@@ -2255,6 +2255,23 @@ pub enum Limit {
         /// The types the buffer's (or plane image's) memory requirements list, one bit each.
         listed: u32,
     },
+    /// An import of a dma-buf (`Device::import_dma_buf` and `Device::import_dma_bufs`, on Unix) on
+    /// a device whose Shared memory type, the first host-visible, host-cached type a buffer can
+    /// use, is not host-coherent, whatever type the fd's query offers: nothing is imported. The
+    /// device then lacks a dma-buf import coherent with the host's cached mappings. The consumer
+    /// writes the pages through its own cached mapping, which no Vulkan flush reaches, and no
+    /// Vulkan query says whether the driver's GPU mapping of a dma-buf from another driver sees the
+    /// host's caches: on such a device (a Meteor Lake GPU under Mesa's Intel driver and the i915
+    /// kernel driver) it does not. A pointer import of the same pages
+    /// ([`Device::import_host_memory`](crate::Device::import_host_memory)) takes a host-coherent
+    /// type by its flag. Metal's counterpart,
+    /// `newBufferWithBytesNoCopy:length:options:deallocator:`, takes any page-aligned memory.
+    ///
+    /// Basis: device (the Shared memory type's `VK_MEMORY_PROPERTY_HOST_COHERENT_BIT`).
+    ImportCoherence {
+        /// The handle asked for.
+        handle: ImportHandle,
+    },
     /// An import of no bytes, or one whose address or length is not a multiple of `alignment`:
     /// for host memory the device's `minImportedHostPointerAlignment`, for several dma-bufs each
     /// one's length against `Device::dma_buf_granule` on Unix (or the
@@ -3074,6 +3091,11 @@ impl fmt::Display for Limit {
                 f,
                 "the {handle:?}'s query offers types {offered:#x}, and no host-visible, \
                  host-coherent type the import takes of the buffer's {listed:#x}"
+            ),
+            Limit::ImportCoherence { handle } => write!(
+                f,
+                "the device has no {handle:?} import coherent with the host's cached mappings: \
+                 its host-cached memory is not host-coherent"
             ),
             Limit::ImportAlignment {
                 handle,

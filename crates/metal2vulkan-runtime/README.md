@@ -577,7 +577,9 @@ On a device whose Shared type is not host-coherent, a range that a command buffe
 through an address, with no binding or `use_resource` declaration naming its buffer, is neither
 flushed nor invalidated: the consumer declares what its commands reach. The consumer's own host
 reads and writes, through its own mappings (The consumer's mappings) or between those points, are
-its own. Imported blocks (below) are host-coherent memory and take no call. Exported blocks and
+its own. Imported blocks (below) take no call: a pointer import is host-coherent memory by its
+type's flag, and such a device imports no dma-buf (`Limit::ImportCoherence`), whose pages the
+consumer writes through its own cached mapping, which no flush reaches. Exported blocks and
 surfaces are Private memory with no host mapping, and take none either.
 
 ### Imported blocks
@@ -599,9 +601,12 @@ consumer's.
   process's later allocations fail too: a device-local one after either refusal, and a host-cached
   one after the refusal in the host-cached type.
 - `Device::import_dma_buf(fd, len, release)` (unix) imports a dma-buf
-  (`VK_EXT_external_memory_dma_buf`) only into the first memory type the fd's query offers, and
-  only where that type is host-visible and host-coherent and the buffer's requirements list it;
-  anything else is `Limit::ImportType`, with nothing imported. It takes the fd (the consumer's
+  (`VK_EXT_external_memory_dma_buf`) only on a device whose Shared memory type is host-coherent,
+  only into the first memory type the fd's query offers, and only where that type is host-visible
+  and host-coherent and the buffer's requirements list it. A device whose Shared type is not
+  host-coherent (Shared memory's coherence) refuses every dma-buf with `Limit::ImportCoherence`,
+  whatever its query offers; anything else is `Limit::ImportType`; nothing is imported after
+  either. It takes the fd (the consumer's
   dup): after `Ok` the driver owns it; after a refusal or a failed query the runtime closes it, as
   no driver was given it; after a failed import it closes it only where it still names the same
   file, as a driver may have closed it and the number may name another file since. The block's
@@ -613,7 +618,8 @@ consumer's.
   (`Limit::NoImport`). The block's buffer is one sparse buffer (`VK_BUFFER_CREATE_SPARSE_BINDING_BIT`)
   with each dma-buf's import bound at its offset, so the block's `gpu_address` and its buffers run
   across the dma-bufs as over one range, and its `contents` is `None` as for one dma-buf. Each fd
-  takes the dma-buf rule's type of the sparse buffer's types, and every fd the same one. One
+  takes the dma-buf rule's type of the sparse buffer's types, and every fd the same one; a device
+  whose Shared type is not host-coherent refuses them with `Limit::ImportCoherence`. One
   `vkQueueBindSparse` on the runtime's queue binds the imports (`Metrics::sparse_binds`); the call
   does not wait for it. Vulkan orders no sparse bind against command buffers, so the runtime's next
   `vkQueueSubmit2` waits for it, once: a semaphore wait orders every later command in submission
@@ -655,7 +661,24 @@ imports, a GPU write reaches them, where Metal drops it.
 The two rules differ because a failed dma-buf import is not harmless: on NVIDIA's Linux driver
 (620.70.06, an RTX 3090) one failed dma-buf import into a later type the query offered broke every
 later allocation of that type, the Shared type among them, so the dma-buf rule attempts nothing it
-is not sure of. The host-memory rule takes the first host-visible, host-coherent type offered:
+is not sure of.
+
+They differ in coherence too. A type's `VK_MEMORY_PROPERTY_HOST_COHERENT_BIT` speaks only for the
+mappings Vulkan makes (`vkMapMemory`); Vulkan promises nothing for writes outside them, and the
+consumer writes a dma-buf's pages through its own cached mapping. No Vulkan query says whether a
+driver's GPU mapping of a dma-buf from another driver sees the CPU's caches. So the dma-buf rule's
+coherence condition is a proxy: the Shared type's flag, which tells whether the device's
+host-cached memory is coherent. Where it is not, the rule refuses every dma-buf
+(`Limit::ImportCoherence`), which errs to the safe side: there the pointer import of the same pages
+(`import_host_memory`) is coherent by its type's flag. On one such device, a Meteor Lake GPU under
+Mesa's Intel driver and the i915 kernel driver (read in the sources of Mesa 26.3.1 and Linux 7.3,
+not run), the fd's query offers a write-combined, host-coherent type first, and the kernel driver
+maps a dma-buf from another driver with no cache coherency, so the GPU can read bytes older than
+host writes still in the CPU's cache; its pointer import is snooped. Where the Shared type is
+coherent, as on every device of ours, the proxy refuses nothing, and a dma-buf's coherence there
+rests on the driver.
+
+The host-memory rule takes the first host-visible, host-coherent type offered:
 where RADV (Mesa 26.2, an RX 7900 XTX) refused the pages of a shared mapping of a memfd at the
 import, its Shared allocations and a dma-buf import still worked after it. A device that does not
 list a handle's extensions, or whose buffers do not import it, refuses that call with
@@ -1060,6 +1083,10 @@ the Direct3D 11 texture's payload until it is freed.
   reads their cached types as not coherent (`--cfg m2v_shared_view`, docs/VALIDATION.md), on memory
   that is coherent in fact; neither the calls' time nor their effect has been measured on a device
   whose memory is not.
+- On a device whose Shared type is not host-coherent, every dma-buf import is refused
+  (`Limit::ImportCoherence`, Imported blocks), so pages that only a dma-buf imports there (a
+  mapping no pointer import takes) have no no-copy route. The refusal is a proxy, and where the
+  Shared type is coherent a dma-buf's coherence rests on the driver (Imported blocks).
 - On such a device, a host write to a range a command buffer may write, made while the command
   buffer runs, may be lost, and so may the GPU's writes to the same atoms. The runtime flushes
   each such range just before it invalidates it, and Vulkan states: "If a range of non-coherent

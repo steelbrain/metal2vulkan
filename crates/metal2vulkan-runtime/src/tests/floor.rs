@@ -19,7 +19,7 @@ use std::collections::BTreeSet;
 use std::fs;
 
 /// Memory with the given types, each in heap 0.
-fn memory(types: &[vk::MemoryPropertyFlags]) -> vk::PhysicalDeviceMemoryProperties {
+pub(super) fn memory(types: &[vk::MemoryPropertyFlags]) -> vk::PhysicalDeviceMemoryProperties {
     let mut memory = vk::PhysicalDeviceMemoryProperties {
         memory_type_count: types.len() as u32,
         memory_heap_count: 1,

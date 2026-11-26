@@ -8465,6 +8465,7 @@ variant	metal2vulkan-runtime::Limit::BytesLength	BytesLength { len: u64, max: u6
 variant	metal2vulkan-runtime::Limit::DeviceSamplers	DeviceSamplers { max: u32 }
 variant	metal2vulkan-runtime::Limit::ExportType	ExportType { handle: ExportHandle, listed: Option<u32> }
 variant	metal2vulkan-runtime::Limit::ImportAlignment	ImportAlignment { handle: ImportHandle, len: u64, alignment: u64 }
+variant	metal2vulkan-runtime::Limit::ImportCoherence	ImportCoherence { handle: ImportHandle }
 variant	metal2vulkan-runtime::Limit::ImportType	ImportType { handle: ImportHandle, offered: u32, listed: u32 }
 variant	metal2vulkan-runtime::Limit::IndexRange	IndexRange { class: IndexClass, first: u32, count: u32 }
 variant	metal2vulkan-runtime::Limit::LevelElements	LevelElements { max: u32 }

@@ -117,6 +117,7 @@ impl Limit {
             Limit::AllocationNotMapped { .. } => RefusalBasis::Ours,
             Limit::NoImport { .. } => RefusalBasis::Device,
             Limit::ImportType { .. } => RefusalBasis::Device,
+            Limit::ImportCoherence { .. } => RefusalBasis::Device,
             Limit::ImportAlignment { .. } => RefusalBasis::Device,
             Limit::SparseAddressSpace { .. } => RefusalBasis::Device,
             Limit::NoExport { .. } => RefusalBasis::Device,

@@ -32,7 +32,7 @@ Columns:
 | The translation deadline | 1 | 1 | 0 | 0 | 0 | 1 | 0 |
 | Devices below the runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | The runtime's `Refusal` | 86 | 86 | 0 | 0 | 0 | 0 | 0 |
-| The runtime's `Limit` | 19 | 19 | 0 | 0 | 0 | 0 | 0 |
+| The runtime's `Limit` | 20 | 20 | 0 | 0 | 0 | 0 | 0 |
 | The runtime's `Gap` | 31 | 31 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
@@ -45,7 +45,7 @@ Columns:
 | The translation deadline | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 |
 | Devices below the runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
 | The runtime's `Refusal` | 23 | 25 | 0 | 0 | 38 | 0 | 0 | 0 |
-| The runtime's `Limit` | 0 | 0 | 0 | 13 | 6 | 0 | 0 | 0 |
+| The runtime's `Limit` | 0 | 0 | 0 | 14 | 6 | 0 | 0 | 0 |
 | The runtime's `Gap` | 0 | 0 | 0 | 3 | 28 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
@@ -331,7 +331,8 @@ Columns:
 | `MemoryAllocations` | A `VkDeviceMemory` allocation past the device's `maxMemoryAllocationCount` live ones, refused before the driver is called | at the device's limit | `device`: the device's `maxMemoryAllocationCount` | 1: `crates/metal2vulkan-runtime/src/memory.rs (allocate)` | `-` |
 | `AllocationNotMapped` | A take that no free range fits made an allocation that the consumer's `BlockMappings::map` did not map | every device (a public call's own check of its arguments) | `ours`: the consumer's hook gave the allocation no place in its own address range | 1: `crates/metal2vulkan-runtime/src/memory.rs (own)` | `-` |
 | `NoImport` | An import of a handle the device does not take (`Device::import_dma_buf` and `Device::import_dma_bufs` on Unix, `Device::import_host_memory`, a... | at the device's limit | `device`: the device's extensions, features, queue family and external buffer properties | 7: `crates/metal2vulkan-runtime/src/d3d11.rs (d3d11_plane_form)`, `crates/metal2vulkan-runtime/src/d3d11.rs (d3d11_plane_texture)` (+5) | `-` |
-| `ImportType` | An import whose handle's memory type query offers no type the import takes, so nothing is imported | at the device's limit | `device`: the handle's memory type query and the buffer's or image's memory requirements | 4: `crates/metal2vulkan-runtime/src/d3d11.rs (d3d11_plane_texture)`, `crates/metal2vulkan-runtime/src/import.rs (import_dma_buf)` (+2) | `-` |
+| `ImportType` | An import whose handle's memory type query offers no type the import takes, so nothing is imported | at the device's limit | `device`: the handle's memory type query and the buffer's or image's memory requirements | 3: `crates/metal2vulkan-runtime/src/d3d11.rs (d3d11_plane_texture)`, `crates/metal2vulkan-runtime/src/import.rs (dma_buf_type)` (+1) | `-` |
+| `ImportCoherence` | An import of a dma-buf (`Device::import_dma_buf` and `Device::import_dma_bufs`, on Unix) on a device whose Shared memory type, the first... | at the device's limit | `device`: the Shared memory type's `VK_MEMORY_PROPERTY_HOST_COHERENT_BIT` | 1: `crates/metal2vulkan-runtime/src/import.rs (dma_buf_type)` | `-` |
 | `ImportAlignment` | An import of no bytes, or one whose address or length is not a multiple of `alignment` | at the device's limit | `device`: `minImportedHostPointerAlignment` and the buffer's memory requirements | 4: `crates/metal2vulkan-runtime/src/import.rs (check_len)`, `crates/metal2vulkan-runtime/src/import.rs (check_size)` (+2) | `-` |
 | `SparseAddressSpace` | An import over several dma-bufs (`Device::import_dma_bufs`, on Unix) whose sparse buffer would take the device's sparse address space past its... | at the device's limit | `device`: `sparseAddressSpaceSize` | 1: `crates/metal2vulkan-runtime/src/import.rs (reserve)` | `-` |
 | `NoExport` | An export of a handle the device does not give (`Device::new_exported_block`) | at the device's limit | `device`: the device's extensions and its external buffer properties | 5: `crates/metal2vulkan-runtime/src/export.rs (handle, 2 sites)`, `crates/metal2vulkan-runtime/src/export.rs (new_exported_block)` (+2) | `-` |
@@ -622,7 +623,8 @@ Each refusal's sites, with the function that builds it.
 - `rt:Limit::MemoryAllocations`: `crates/metal2vulkan-runtime/src/memory.rs (allocate)`
 - `rt:Limit::AllocationNotMapped`: `crates/metal2vulkan-runtime/src/memory.rs (own)`
 - `rt:Limit::NoImport`: `crates/metal2vulkan-runtime/src/d3d11.rs (d3d11_plane_form)`; `crates/metal2vulkan-runtime/src/d3d11.rs (d3d11_plane_texture)`; `crates/metal2vulkan-runtime/src/d3d11.rs (import_d3d11_surface)`; `crates/metal2vulkan-runtime/src/import.rs (import_dma_buf)`; `crates/metal2vulkan-runtime/src/import.rs (import_dma_bufs)`; `crates/metal2vulkan-runtime/src/import.rs (import_host_memory)`; `crates/metal2vulkan-runtime/src/import.rs (surface_import)`
-- `rt:Limit::ImportType`: `crates/metal2vulkan-runtime/src/d3d11.rs (d3d11_plane_texture)`; `crates/metal2vulkan-runtime/src/import.rs (import_dma_buf)`; `crates/metal2vulkan-runtime/src/import.rs (import_dma_bufs)`; `crates/metal2vulkan-runtime/src/import.rs (import_host_memory)`
+- `rt:Limit::ImportType`: `crates/metal2vulkan-runtime/src/d3d11.rs (d3d11_plane_texture)`; `crates/metal2vulkan-runtime/src/import.rs (dma_buf_type)`; `crates/metal2vulkan-runtime/src/import.rs (import_host_memory)`
+- `rt:Limit::ImportCoherence`: `crates/metal2vulkan-runtime/src/import.rs (dma_buf_type)`
 - `rt:Limit::ImportAlignment`: `crates/metal2vulkan-runtime/src/import.rs (check_len)`; `crates/metal2vulkan-runtime/src/import.rs (check_size)`; `crates/metal2vulkan-runtime/src/import.rs (import_dma_bufs)`; `crates/metal2vulkan-runtime/src/import.rs (import_host_memory)`
 - `rt:Limit::SparseAddressSpace`: `crates/metal2vulkan-runtime/src/import.rs (reserve)`
 - `rt:Limit::NoExport`: `crates/metal2vulkan-runtime/src/export.rs (handle, 2 sites)`; `crates/metal2vulkan-runtime/src/export.rs (new_exported_block)`; `crates/metal2vulkan-runtime/src/surface.rs (dma_buf_in_place)`; `crates/metal2vulkan-runtime/src/surface.rs (new_exported_surface)`

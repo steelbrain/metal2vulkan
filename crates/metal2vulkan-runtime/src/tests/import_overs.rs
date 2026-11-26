@@ -59,7 +59,7 @@ mod on_device {
         let (release, released) = releasing();
         match device.import_dma_buf(fd, len, release) {
             Ok((block, _)) => Some((block, file, released)),
-            Err(Error::Limit(Limit::ImportType { .. })) => {
+            Err(Error::Limit(Limit::ImportType { .. } | Limit::ImportCoherence { .. })) => {
                 println!("{test}: {name}: no type taken for the dma-buf; not run");
                 None
             }

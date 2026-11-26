@@ -1,13 +1,20 @@
-//! Imports: the two type rules, and under a device cfg, on every device of the cfg's kind, that
+//! Imports: the two type rules, the dma-buf rule's refusal on a device whose Shared type is not
+//! host-coherent (Meteor Lake's types under Mesa's Intel driver and i915), and under a device cfg,
+//! on every device of the cfg's kind, that
 //! host memory is imported into the first host-visible, host-coherent type its query offers, that
 //! a GPU write reaches it and its release runs only once its memory is freed, that a texture over
 //! a buffer in host memory's import is read and written by blits through the counted copy, that an
 //! ordinary Shared allocation succeeds after an import of a shared mapping of a file (which RADV
 //! refuses at the import), that an import counts against the device's allocations, and that a
 //! dma-buf is imported where its first offered type is host-visible and host-coherent and refused
-//! at the query, with nothing imported, everywhere else.
+//! at the query, with nothing imported, everywhere else; and, on every device the floor opens
+//! through the refused device's memory view, that a dma-buf is refused for the Shared type's
+//! coherence, alone and several behind one buffer, with nothing imported, and host memory of the
+//! same length is imported.
 
 use crate::import::host_type;
+#[cfg(unix)]
+use crate::{ImportHandle, Limit};
 
 /// The dma-buf rule takes the first type the fd's query offers, only where it is host-visible,
 /// host-coherent and listed by the buffer's requirements; never a later one.
@@ -32,11 +39,99 @@ fn a_dma_buf_takes_only_the_first_type_offered() {
     for (offered, expected) in cases {
         let listed = if offered == 0x06 { 0b101 } else { listed };
         assert_eq!(
-            dma_buf_type(offered, listed, coherent),
+            dma_buf_type(ImportHandle::DmaBuf, true, offered, listed, coherent).ok(),
             expected,
             "offered {offered:#x}"
         );
     }
+}
+
+/// On a device whose Shared type is not host-coherent, the dma-buf rule refuses whatever the fd's
+/// query offers, and the host-memory rule still takes the pointer's type. Meteor Lake's types
+/// under Mesa's Intel driver and the i915 kernel driver (src/intel/vulkan/i915/anv_device.c, a GPU
+/// without the shared last-level cache): 0 device-local, host-visible and host-coherent
+/// (write-combined), 1 device-local, host-visible and host-cached, not coherent. The floor's
+/// choice puts Shared in type 1, so the device holds a coherence state, and the fd's offer of
+/// type 0, which the rule took before, is refused; the pointer's offer of type 0 is taken. On the
+/// Iris Xe's types (i915 with the last-level cache: 0 device-local, 1 that and host-visible and
+/// host-coherent, 2 that and host-cached), Shared is coherent, no state is held, and the fd's offer
+/// of type 1 is taken as before.
+#[cfg(unix)]
+#[test]
+fn a_dma_buf_is_refused_where_the_shared_type_is_not_host_coherent() {
+    use crate::coherence::Coherence;
+    use crate::floor::choose;
+    use crate::import::dma_buf_type;
+    use crate::tests::floor::memory;
+    use ash::vk::MemoryPropertyFlags as F;
+    let local = F::DEVICE_LOCAL;
+    let coherent_type = F::HOST_VISIBLE | F::HOST_COHERENT;
+    // The rule's `coherent` bits: the host-visible, host-coherent types.
+    let coherent_bits = |memory: &ash::vk::PhysicalDeviceMemoryProperties| {
+        (0u32..)
+            .zip(memory.memory_types_as_slice())
+            .filter(|(_, kind)| kind.property_flags.contains(coherent_type))
+            .fold(0, |bits, (index, _)| bits | 1 << index)
+    };
+    let meteor_lake = memory(&[
+        local | coherent_type,
+        local | F::HOST_VISIBLE | F::HOST_CACHED,
+    ]);
+    let types = choose(&meteor_lake, u32::MAX).expect("Meteor Lake's types");
+    assert_eq!(types.shared, 1);
+    let held = Coherence::of(&meteor_lake, types, 64).is_some();
+    assert!(
+        held,
+        "a coherence state for a Shared type that is not coherent"
+    );
+    let coherent = coherent_bits(&meteor_lake);
+    assert_eq!(coherent, 0b01);
+    for offered in [0b01, 0b11, 0b10] {
+        assert_eq!(
+            dma_buf_type(ImportHandle::DmaBuf, !held, offered, 0b11, coherent),
+            Err(Limit::ImportCoherence {
+                handle: ImportHandle::DmaBuf
+            }),
+            "offered {offered:#x}"
+        );
+        assert_eq!(
+            dma_buf_type(ImportHandle::DmaBufs, !held, offered, 0b11, coherent),
+            Err(Limit::ImportCoherence {
+                handle: ImportHandle::DmaBufs
+            }),
+            "offered {offered:#x}"
+        );
+    }
+    // The rule before the state keyed it took the fd's offer of type 0.
+    assert_eq!(
+        dma_buf_type(ImportHandle::DmaBuf, true, 0b01, 0b11, coherent),
+        Ok(0)
+    );
+    // The pointer's offer of type 0 is taken.
+    assert_eq!(host_type(0b01, 0b11, coherent), Some(0));
+
+    let iris = memory(&[
+        local,
+        local | coherent_type,
+        local | coherent_type | F::HOST_CACHED,
+    ]);
+    let types = choose(&iris, u32::MAX).expect("the Iris Xe's types");
+    assert_eq!(types.shared, 2);
+    let held = Coherence::of(&iris, types, 64).is_some();
+    assert!(!held, "no coherence state for a coherent Shared type");
+    let coherent = coherent_bits(&iris);
+    assert_eq!(
+        dma_buf_type(ImportHandle::DmaBuf, !held, 0b110, 0b111, coherent),
+        Ok(1)
+    );
+    assert_eq!(
+        dma_buf_type(ImportHandle::DmaBuf, !held, 0b001, 0b111, coherent),
+        Err(Limit::ImportType {
+            handle: ImportHandle::DmaBuf,
+            offered: 0b001,
+            listed: 0b111
+        })
+    );
 }
 
 /// The host-memory rule takes the first type offered that is host-visible, host-coherent and
@@ -855,10 +950,121 @@ pub(crate) mod on_device {
         Some(unsafe { OwnedFd::from_raw_fd(fd) })
     }
 
+    /// Through the refused device's memory view (`each_device_under_the_view`), whose Shared type
+    /// is not host-coherent, so the device holds a coherence state: a dma-buf is refused with
+    /// `Limit::ImportCoherence` before any allocation, alone (`import_dma_buf`) and three behind
+    /// one buffer (`import_dma_bufs`, where the device offers the granule), with nothing imported
+    /// and no release run; and host memory of the same length is imported by its pointer
+    /// (`import_host_memory`) into a host-visible, host-coherent type, where the device imports
+    /// host memory. Each device prints the fd's offer and what the rule answers it without the
+    /// state: a type there is one the rule took before it was keyed by the state. A device that
+    /// imports no dma-buf refuses it with `Limit::NoImport`.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn every_device_under_the_view_refuses_a_dma_buf_and_imports_host_memory() {
+        use crate::import::dma_buf_type;
+        use crate::tests::command::on_device::each_device_under_the_view;
+        use std::os::fd::AsRawFd;
+        const LEN: u64 = 64 << 10;
+        let dma_buf_ext = vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT;
+        each_device_under_the_view("import_coherence", |name, _, device, memory| {
+            assert!(
+                device.core().coherence.is_some(),
+                "{name}: a coherence state"
+            );
+            let Some((fd, _memfd)) = dma_buf(LEN) else {
+                println!("import_coherence: {name}: no /dev/udmabuf here; not run");
+                return;
+            };
+            let counters = device.counters();
+            let before = counters.gauges();
+            let Some(fds) = device.core().imports.dma_buf.as_ref() else {
+                match device.import_dma_buf(fd, LEN, None) {
+                    Err(Error::Limit(Limit::NoImport {
+                        handle: ImportHandle::DmaBuf,
+                    })) => {}
+                    other => panic!("{name}: {other:?}"),
+                }
+                println!("import_coherence: {name}: imports no dma-buf, refused typed");
+                return;
+            };
+            let mut properties = vk::MemoryFdPropertiesKHR::default();
+            // SAFETY: the extensions are enabled; `fd` is open, and the query takes no ownership.
+            unsafe { fds.get_memory_fd_properties(dma_buf_ext, fd.as_raw_fd(), &mut properties) }
+                .unwrap_or_else(|error| panic!("{name}: the fd's query: {error}"));
+            let offered = properties.memory_type_bits;
+            let listed = crate::memory::import_requirements(device.core(), LEN, dma_buf_ext)
+                .memory_type_bits;
+            let coherent = device.core().imports.coherent;
+            let unkeyed = dma_buf_type(ImportHandle::DmaBuf, true, offered, listed, coherent);
+            let (release, released) = releasing();
+            match device.import_dma_buf(fd, LEN, release) {
+                Err(Error::Limit(Limit::ImportCoherence {
+                    handle: ImportHandle::DmaBuf,
+                })) => {}
+                other => panic!("{name}: one dma-buf: {other:?}"),
+            }
+            assert_eq!(counters.gauges(), before, "{name}: nothing imported");
+            assert!(!released.load(Ordering::SeqCst), "{name}: no release run");
+            let several = match device.dma_buf_granule() {
+                Some(granule) => {
+                    let memfd = memfd(3 * granule);
+                    let chunks = (0..3)
+                        .map(|at| udmabuf(&memfd, at * granule, granule).map(|fd| (fd, granule)))
+                        .collect::<Option<Vec<_>>>()
+                        .expect("three dma-bufs");
+                    let (release, released) = releasing();
+                    match device.import_dma_bufs(chunks, release) {
+                        Err(Error::Limit(Limit::ImportCoherence {
+                            handle: ImportHandle::DmaBufs,
+                        })) => {}
+                        other => panic!("{name}: three dma-bufs: {other:?}"),
+                    }
+                    assert_eq!(counters.gauges(), before, "{name}: nothing imported");
+                    assert!(!released.load(Ordering::SeqCst), "{name}: no release run");
+                    format!("three dma-bufs of {granule} bytes refused alike")
+                }
+                None => "no granule, so no several dma-bufs".to_string(),
+            };
+            let host = match device.core().imports.host.as_ref() {
+                Some(&(_, alignment)) => {
+                    let len = LEN.next_multiple_of(alignment);
+                    let (pointer, mapping) = host_memory(len, alignment);
+                    let (release, host_released) = releasing();
+                    // SAFETY: the memory is the test's, mapped until it unmaps it below.
+                    let (block, memory_type) =
+                        unsafe { device.import_host_memory(pointer, len, release) }
+                            .unwrap_or_else(|error| panic!("{name}: host memory: {error}"));
+                    let flags = memory.memory_types[memory_type as usize].property_flags;
+                    let wanted = vk::MemoryPropertyFlags::HOST_VISIBLE
+                        | vk::MemoryPropertyFlags::HOST_COHERENT;
+                    assert!(
+                        flags.contains(wanted),
+                        "{name}: type {memory_type}, {flags:?}"
+                    );
+                    drop(block);
+                    wait_until(&device, "the release", || {
+                        host_released.load(Ordering::SeqCst)
+                    });
+                    free(mapping);
+                    format!("host memory of {len} bytes imported into type {memory_type}")
+                }
+                None => "imports no host memory".to_string(),
+            };
+            println!(
+                "import_coherence: {name}: the fd's query offers {offered:#x} (the buffer lists \
+                 {listed:#x}), which the rule without the state answers {unkeyed:?}; one \
+                 dma-buf refused for the Shared type's coherence, nothing imported; {several}; \
+                 {host}"
+            );
+        });
+    }
+
     /// A dma-buf is imported where the first type its fd's query offers is host-visible and
     /// host-coherent, and a GPU fill reaches its pages; elsewhere it is refused at the query with
     /// nothing imported, and an ordinary Shared allocation and a host-memory import still
-    /// succeed after it. A device that does not import a dma-buf refuses it typed.
+    /// succeed after it. A device that does not import a dma-buf refuses it typed, and so does a
+    /// device whose Shared type is not host-coherent (under `m2v_shared_view`).
     #[cfg(target_os = "linux")]
     #[test]
     fn every_device_imports_a_dma_buf_only_into_its_first_offered_type() {
@@ -916,13 +1122,24 @@ pub(crate) mod on_device {
                          {memory_type}"
                     );
                 }
+                Err(Error::Limit(Limit::ImportCoherence {
+                    handle: ImportHandle::DmaBuf,
+                })) => {
+                    assert!(device.core().coherence.is_some(), "{name}");
+                    assert_eq!(counters.gauges(), before, "{name}: nothing imported");
+                    assert!(!released.load(Ordering::SeqCst), "{name}");
+                    println!("import: {name}: a dma-buf refused for the Shared type's coherence");
+                }
                 Err(Error::Limit(Limit::ImportType {
                     handle: ImportHandle::DmaBuf,
                     offered,
                     listed,
                 })) => {
                     let coherent = device.core().imports.coherent;
-                    assert_eq!(dma_buf_type(offered, listed, coherent), None, "{name}");
+                    let handle = ImportHandle::DmaBuf;
+                    let rule = dma_buf_type(handle, true, offered, listed, coherent);
+                    assert!(rule.is_err(), "{name}");
+                    assert!(device.core().coherence.is_none(), "{name}");
                     assert_eq!(counters.gauges(), before, "{name}: nothing imported");
                     assert!(!released.load(Ordering::SeqCst), "{name}");
                     let shared = (device.take_block(MemoryClass::Shared, 32 << 20))

@@ -40,7 +40,9 @@
 //! Ranges are of the pool's Shared allocations and the runtime's own, which it maps whole,
 //! widened to whole multiples of the device's `nonCoherentAtomSize`: within a block, since a block
 //! starts and ends at multiples of 64 KiB and the atom is a power of two of at most 256. An import
-//! is never flushed: its type is host-coherent (`crate::import`), and Vulkan maps none of it.
+//! is never flushed, and Vulkan maps none of it: a pointer import's type is host-coherent, and on
+//! a device that holds a [`Coherence`] the runtime imports no dma-buf (`crate::import`), whose
+//! pages the consumer writes through its own cached mapping, which no flush reaches.
 //! Each call is counted, with its bytes, in [`Metrics`](crate::Metrics)'s `shared_flushes`,
 //! `shared_flushed_bytes`, `shared_invalidates` and `shared_invalidated_bytes`; a call that fails
 //! in `shared_coherence_failures`.

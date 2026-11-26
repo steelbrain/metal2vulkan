@@ -1053,6 +1053,9 @@ pub(crate) mod on_device {
                         | Limit::ImportType {
                             handle: ImportHandle::DmaBuf,
                             ..
+                        }
+                        | Limit::ImportCoherence {
+                            handle: ImportHandle::DmaBuf,
                         },
                     ),
                 ) => {

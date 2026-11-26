@@ -9,9 +9,18 @@
 //! The two rules differ. A dma-buf is imported only into the first type its fd's query offers,
 //! and only where that type is host-visible and host-coherent: on NVIDIA's Linux driver
 //! (620.70.06) one failed dma-buf import into a later type broke every later allocation of that
-//! type, the Shared type among them, so the rule attempts nothing it is not sure of. Host memory
-//! is imported into the first type the pointer's query offers that is host-visible and
-//! host-coherent.
+//! type, the Shared type among them, so the rule attempts nothing it is not sure of. And it is
+//! imported only on a device whose Shared type is host-coherent (one that holds no
+//! `crate::coherence::Coherence`), and refused elsewhere ([`Limit::ImportCoherence`]). The
+//! consumer writes the pages through its own cached mapping, which no Vulkan flush reaches; a
+//! type's `HOST_COHERENT` speaks only for the mappings Vulkan makes, and no Vulkan query says
+//! whether the driver's GPU mapping of a dma-buf from another driver sees the host's caches. So
+//! the Shared type's flag is a proxy, and the refusal errs to the safe side: where it refuses, a
+//! pointer import of the same pages is coherent by its type's flag. On one device it refuses, a
+//! Meteor Lake GPU under Mesa's Intel driver and the i915 kernel driver, the kernel driver maps
+//! such a dma-buf with no cache coherency, and its pointer import (userptr) snoops. Host memory is
+//! imported into the first type the pointer's query offers that is host-visible and
+//! host-coherent, on every device.
 
 use crate::block::Block;
 #[cfg(unix)]
@@ -413,12 +422,30 @@ const COHERENT: vk::MemoryPropertyFlags = vk::MemoryPropertyFlags::from_raw(
         | vk::MemoryPropertyFlags::HOST_COHERENT.as_raw(),
 );
 
-/// The dma-buf rule: the first type the fd's query `offered`, where the buffer's requirements
-/// `listed` it and it is one of the `coherent` types; none otherwise, whatever else is offered.
+/// The dma-buf rule, for an import of `handle`: on a device whose Shared type is host-coherent
+/// (`shared_coherent`: the device holds no `crate::coherence::Coherence`), the first type the
+/// fd's query `offered`, where the buffer's requirements `listed` it and it is one of the
+/// `coherent` types. Err: [`Limit::ImportCoherence`] on a device whose Shared type is not, whatever
+/// is offered; [`Limit::ImportType`] where the first type offered is not taken, whatever else is.
 #[cfg(unix)]
-pub(crate) fn dma_buf_type(offered: u32, listed: u32, coherent: u32) -> Option<u32> {
+pub(crate) fn dma_buf_type(
+    handle: ImportHandle,
+    shared_coherent: bool,
+    offered: u32,
+    listed: u32,
+    coherent: u32,
+) -> Result<u32, Limit> {
+    if !shared_coherent {
+        return Err(Limit::ImportCoherence { handle });
+    }
     let first = offered.trailing_zeros();
-    (first < u32::BITS && (listed & coherent) & (1 << first) != 0).then_some(first)
+    (first < u32::BITS && (listed & coherent) & (1 << first) != 0)
+        .then_some(first)
+        .ok_or(Limit::ImportType {
+            handle,
+            offered,
+            listed,
+        })
 }
 
 /// The host-memory rule: the first type the pointer's query `offered` that the buffer's
@@ -435,10 +462,11 @@ impl Device {
     /// the host reaches the bytes through the consumer's own mappings of the pages, so the
     /// block's `contents` is `None`, and its zero mark is 0.
     ///
-    /// It imports only into the first memory type the fd's query (`vkGetMemoryFdPropertiesKHR`)
-    /// offers, and only where that type is host-visible and host-coherent and the buffer's memory
-    /// requirements list it, and returns the block with the index of that type. Every refusal
-    /// comes before any allocation is attempted, with nothing imported.
+    /// It imports only on a device whose Shared memory type is host-coherent, only into the first
+    /// memory type the fd's query (`vkGetMemoryFdPropertiesKHR`) offers, and only where that type
+    /// is host-visible and host-coherent and the buffer's memory requirements list it, and returns
+    /// the block with the index of that type. Every refusal comes before any allocation is
+    /// attempted, with nothing imported.
     ///
     /// The call takes `fd`, the consumer's own fd of the dma-buf (a dup of it, where the consumer
     /// keeps one). After `Ok` the driver owns it. After a refusal (`Limit`, [`Error::Quiesced`])
@@ -458,9 +486,14 @@ impl Device {
     /// `maxMemoryAllocationCount`.
     ///
     /// Metal takes any page-aligned memory; here a device that offers the dma-buf only in a type
-    /// the rule does not take refuses it, and the consumer chooses what comes next.
+    /// the rule does not take refuses it, and so does a device whose Shared memory type is not
+    /// host-coherent, whatever it offers: the consumer writes the pages through its own cached
+    /// mapping, and no Vulkan query says whether the driver's mapping of the dma-buf sees the
+    /// host's caches. The consumer chooses what comes next; a pointer import of the same pages
+    /// ([`Device::import_host_memory`]) takes a host-coherent type by its flag.
     ///
     /// Err: [`Limit::NoImport`] where the device does not import a dma-buf;
+    /// [`Limit::ImportCoherence`] where the device's Shared memory type is not host-coherent;
     /// [`Limit::ImportType`] where the rule takes no type;
     /// [`Limit::ImportAlignment`] for a length of 0 or one below
     /// the buffer's memory requirements; [`Limit::BlockLen`] past the
@@ -492,13 +525,16 @@ impl Device {
             .map_err(Error::vulkan("vkGetMemoryFdPropertiesKHR"))?;
         let needs = memory::import_requirements(core, len, handle.vk());
         let offered = properties.memory_type_bits;
-        let index = dma_buf_type(offered, needs.memory_type_bits, core.imports.coherent).ok_or(
-            Error::Limit(Limit::ImportType {
-                handle,
-                offered,
-                listed: needs.memory_type_bits,
-            }),
-        )?;
+        let shared_coherent = core.coherence.is_none();
+        let listed = needs.memory_type_bits;
+        let index = dma_buf_type(
+            handle,
+            shared_coherent,
+            offered,
+            listed,
+            core.imports.coherent,
+        )
+        .map_err(Error::Limit)?;
         check_size(handle, len, &needs)?;
         let identity = identity(fd.as_raw_fd());
         let raw = fd.into_raw_fd();
@@ -559,8 +595,8 @@ impl Device {
     ///
     /// Each fd's import takes the dma-buf rule's type ([`Device::import_dma_buf`]) of the types the
     /// sparse buffer's memory requirements list, and every fd the same one, which the call returns
-    /// with the block. Every refusal comes before any allocation is attempted, with nothing
-    /// imported. The call takes owned fds, as [`Device::import_dma_buf`] does, and returns a block,
+    /// with the block; as there, a device whose Shared memory type is not host-coherent refuses
+    /// every fd. Every refusal comes before any allocation is attempted, with nothing imported. The call takes owned fds, as [`Device::import_dma_buf`] does, and returns a block,
     /// so a consumer that imports one dma-buf or several places its buffers the same way.
     ///
     /// One `vkQueueBindSparse` on the runtime's queue binds the imports, and the call does not
@@ -586,6 +622,7 @@ impl Device {
     /// 0 or one that is no multiple of the granule (or of the sparse buffer's alignment);
     /// [`Limit::BlockLen`] past the device's longest allocation or buffer;
     /// [`Limit::SparseAddressSpace`];
+    /// [`Limit::ImportCoherence`] where the device's Shared memory type is not host-coherent;
     /// [`Limit::ImportType`] where the rule takes no type for an fd, or
     /// another type than the first fd's (then `listed` names that type alone);
     /// [`Limit::MemoryAllocations`];
@@ -655,15 +692,18 @@ impl Device {
             let listed = index.map_or(needs.memory_type_bits, |first: u32| {
                 needs.memory_type_bits & (1 << first)
             });
-            match dma_buf_type(offered, listed, core.imports.coherent) {
-                Some(taken) => index = Some(taken),
-                None => {
+            let shared_coherent = core.coherence.is_none();
+            match dma_buf_type(
+                handle,
+                shared_coherent,
+                offered,
+                listed,
+                core.imports.coherent,
+            ) {
+                Ok(taken) => index = Some(taken),
+                Err(refusal) => {
                     destroy();
-                    return Err(Error::Limit(Limit::ImportType {
-                        handle,
-                        offered,
-                        listed,
-                    }));
+                    return Err(Error::Limit(refusal));
                 }
             }
         }
