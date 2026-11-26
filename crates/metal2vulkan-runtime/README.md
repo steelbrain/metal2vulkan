@@ -3628,7 +3628,10 @@ cache is answered compile-required on both.
     1.02x and +1,842, 1.26x-1.27x and +490, 1.29x and +489, and 0.99x-1.00x and +2,422;
   - the kernel's access, in a row of one large dispatch whose buffers are bound once: a 3x3 filter
     over a 1920x1080 image (`image_filter`) takes 1.07x-1.08x on the Iris Xe (m3-max-75203), and
-    1.00x on the 780M, the RX 7900 XTX and the RTX 3090;
+    1.00x on the 780M, the RX 7900 XTX and the RTX 3090; a plain Vulkan program of that filter,
+    holding none of the runtime's code and with no robustness enabled, takes 1.07x with its
+    buffers bound against the same program reaching them by address on the Iris Xe
+    (m3-max-75320, two alternated pairs at p50);
   - a recorded stream with compute dispatches took 7.98% more GPU time a frame on the Iris Xe,
     41.528 ms against 38.460 ms over its 1,050 frames, its four checked frames equal
     (m3-max-75206). How much of that is the sets' and how much the kernels' slower access is not
