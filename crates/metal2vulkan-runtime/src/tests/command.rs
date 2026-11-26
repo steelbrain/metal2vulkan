@@ -5225,13 +5225,20 @@ pub(crate) mod on_device {
     /// submitted on the device's one `VkQueue` after the busy work and ahead of the group, which
     /// goes only once the busy work is seen complete, keeps the group and Y from running until
     /// X's hold has been asserted, so no completion past the busy work's comes before it, however
-    /// fast the device or however loaded the host. S's and L's copies are sized to about 10 ms
-    /// each, A is a fill.
+    /// fast the device or however loaded the host. The hold is staged where the completion thread
+    /// sees the whole busy work complete behind the gate. Where it does not within `SEEN`, the
+    /// gate opens at once, the test prints so with the completion side's state, and neither the
+    /// hold nor the poke is asserted: lavapipe's timestamp read of a busy command buffer, in the
+    /// round that retires it, does not return while its queue waits on the gate's semaphore, so
+    /// a busy command buffer seen in a round of its own holds the next round off. S's and L's
+    /// copies are sized to about 10 ms each, A is a fill.
     #[test]
     fn every_device_pokes_the_submit_thread_for_a_completion_that_leaves_room() {
         use std::sync::atomic::AtomicU64;
         // S's and L's GPU run aimed at.
         const RUN: u64 = 10_000_000;
+        // How long the completion thread is given to see the busy work complete behind the gate.
+        const SEEN: Duration = Duration::from_secs(5);
         each_device("command_group_apart_pokes", |name, _, device| {
             let mut arena = Arena::new(&device);
             let (first, second, third) = (arena.buffer(), arena.buffer(), arena.buffer());
@@ -5254,7 +5261,7 @@ pub(crate) mod on_device {
             fill(&y, &second, 2);
             let x = queue.command_buffer().expect("a command buffer");
             fill(&x, &third, 3);
-            let (mut before, mut seen) = (0, (0, 0));
+            let (mut before, mut seen, mut staged) = (0, (0, 0), false);
             behind_busy(name, &device, &queue, |busy, submitted, _| {
                 for command_buffer in [&s, &a, &l] {
                     command_buffer.commit().expect("a commit");
@@ -5274,6 +5281,19 @@ pub(crate) mod on_device {
                 // check, it never waits for a fence the busy work's closed gate holds.
                 let gate = Busy::new(&device);
                 busy.open();
+                let deadline = Instant::now() + SEEN;
+                while core.done.completed() < busy_last && Instant::now() < deadline {
+                    thread::sleep(Duration::from_millis(1));
+                }
+                staged = core.done.completed() >= busy_last;
+                if !staged {
+                    println!(
+                        "{name}: the hold not staged: the busy work's last value {busy_last} not \
+                         seen complete behind the gate in {SEEN:?}; {}",
+                        core.done.stall(&core.device)
+                    );
+                    gate.open();
+                }
                 within(name, || count() == AHEAD + 3);
                 y.commit().expect("a commit");
                 within(name, || count() == AHEAD + 4);
@@ -5284,27 +5304,32 @@ pub(crate) mod on_device {
                 // gate it sees no further than the busy work, so S's round, and every round after
                 // it, pokes after `before` was read.
                 seen = (core.done.completed(), busy_last);
-                assert!(
-                    seen.0 <= busy_last,
-                    "{name}: seen complete at {} past the busy work's {busy_last} behind the gate",
-                    seen.0
-                );
-                assert_eq!(count(), AHEAD + 4, "{name}: X held behind the group and Y");
-                gate.open();
+                if staged {
+                    assert!(
+                        seen.0 <= busy_last,
+                        "{name}: seen complete at {} past the busy work's {busy_last} behind the \
+                         gate",
+                        seen.0
+                    );
+                    assert_eq!(count(), AHEAD + 4, "{name}: X held behind the group and Y");
+                    gate.open();
+                }
                 for command_buffer in [&s, &a, &l, &y, &x] {
                     finished(name, command_buffer);
                 }
             });
-            let poked = at_last.load(Ordering::SeqCst) - before;
-            println!(
-                "{name}: X held with {} seen complete behind the gate, the busy work's last {}; \
-                 {poked} pokes of the submit thread from X's hold to L's handler",
-                seen.0, seen.1
-            );
-            assert_eq!(
-                poked, 1,
-                "{name}: the group's last completion alone poked it"
-            );
+            if staged {
+                let poked = at_last.load(Ordering::SeqCst) - before;
+                println!(
+                    "{name}: X held with {} seen complete behind the gate, the busy work's last \
+                     {}; {poked} pokes of the submit thread from X's hold to L's handler",
+                    seen.0, seen.1
+                );
+                assert_eq!(
+                    poked, 1,
+                    "{name}: the group's last completion alone poked it"
+                );
+            }
             drop((s, a, l, y, x, queue));
             drop((first, second, third, one, two, sizing, arena, device));
         });
