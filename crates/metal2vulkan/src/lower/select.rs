@@ -2040,7 +2040,16 @@ fn identity_refusal(plan: &Plan) -> Option<String> {
             ));
         }
     }
-    if plan.descriptors.descriptors() != 0 {
+    // A bound kernel's storage views are set 0's storage buffers, one a view slot.
+    let bound = match views {
+        true => (plan.slots.iter().flatten())
+            .filter(|c| c.form == BufferForm::Descriptor)
+            .count() as u64,
+        false => 0,
+    };
+    if plan.descriptors.descriptors() != bound
+        || u64::from(plan.descriptors.storage_buffers) != bound
+    {
         return Some("a resource bound through a descriptor".to_owned());
     }
     None
