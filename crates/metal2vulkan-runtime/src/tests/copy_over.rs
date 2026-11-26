@@ -11,10 +11,10 @@
 //!   events: 100 command buffers using the texture copy it in once; a didModifyRange over part of
 //!   its range copies it again once, and one outside it not at all; a kernel that writes the
 //!   buffer owes one copy in the next submission, one that only reads it none; a texture written
-//!   and then read through its buffer by a blit shows the written texels; a synchronize after a
-//!   texture write puts its texels in the consumer's bytes, and so does a synchronize of the
-//!   texture itself, in place and in an image of its own, which leaves the host's unannounced
-//!   bytes past the texture as it wrote them; of two textures over one range, the
+//!   and then read through its buffer by a blit shows the written texels; a synchronize of the
+//!   texture or of its buffer after a blit or a kernel wrote the texture puts its texels in the
+//!   consumer's bytes, in place and in an image of its own, the texture's leaving the host's
+//!   unannounced bytes past the texture as it wrote them; of two textures over one range, the
 //!   second read after the first is written sees the first's texels; a texture written and
 //!   released copies nothing back once its buffer is released, its image freed then; one written
 //!   and released goes back before a kernel that reads its buffer, which sees its texels.
@@ -516,72 +516,155 @@ entry:
 !12 = !{i32 2, !\"air.thread_position_in_grid\", !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"gid\"}
 ";
 
-    /// A synchronize of a texture over a Managed buffer's device copy, after a command wrote the
-    /// texture, puts its texels in the consumer's bytes, as Metal's synchronize of a texture over
-    /// a buffer does: in place, where the device's linear image takes the rows at the device's own
-    /// pitch, and in an image of its own, at a pitch one alignment past it. The consumer's bytes
-    /// past the texture's last texel, written by the host and not announced, are left as the host
-    /// wrote them: the synchronize copies the texture's bytes alone.
+    /// [`every_device_synchronizes_a_texture_over_a_managed_buffer`]'s kernel: writes
+    /// `(0.2, 0.4, 0.6, 0.8)` at each texel of texture 0.
+    const FILL: &str = "; Owned synthetic kernel.
+source_filename = \"synchronized.metal\"
+
+define void @fill(ptr addrspace(1) %t, <2 x i32> noundef %g) {
+entry:
+  tail call void @air.write_texture_2d.v4f32(ptr addrspace(1) %t, <2 x i32> %g, <4 x float> <float 0x3FC99999A0000000, float 0x3FD99999A0000000, float 0x3FE3333340000000, float 0x3FE99999A0000000>, i32 0, i32 2)
+  ret void
+}
+
+declare void @air.write_texture_2d.v4f32(ptr addrspace(1), <2 x i32>, <4 x float>, i32, i32)
+
+!air.kernel = !{!0}
+!0 = !{ptr @fill, !1, !2}
+!1 = !{}
+!2 = !{!3, !4}
+!3 = !{i32 0, !\"air.texture\", !\"air.location_index\", i32 0, i32 1, !\"air.write\", !\"air.arg_type_name\", !\"texture2d<float, write>\", !\"air.arg_name\", !\"t\"}
+!4 = !{i32 1, !\"air.thread_position_in_grid\", !\"air.arg_type_name\", !\"uint2\", !\"air.arg_name\", !\"g\"}
+";
+
+    /// A synchronize after a command wrote a texture over a Managed buffer's device copy puts the
+    /// texels in the consumer's bytes, as Metal's does, the texture sharing the buffer's storage:
+    /// in place, where the device's linear image takes the rows at the device's own pitch, and in
+    /// an image of its own, at a pitch one alignment past it, whose copy back goes ahead of the
+    /// synchronize's copy. Each buffer starts with host bytes the consumer names with
+    /// `didModifyRange:`, which the writer's commit copies in ahead of its commands. The writer is
+    /// a blit with the synchronize in the same encoder, or a kernel in one command buffer with the
+    /// synchronize in the next, as a program that writes and then reads back does; what is
+    /// synchronized is the texture or its buffer. The texture's synchronize copies its own bytes
+    /// alone: after the kernel, the consumer's bytes past its last texel, written by the host once
+    /// the kernel completed and not announced, stay as the host wrote them. The buffer's copies
+    /// the whole device copy: the bytes around the texels are those the copy-in took.
     #[test]
     fn every_device_synchronizes_a_texture_over_a_managed_buffer() {
+        let bitcode = match llvm_assemble_text(FILL) {
+            Ok(bitcode) => bitcode,
+            Err(AssembleError::Missing(why)) => {
+                eprintln!("SKIPPED: {why}");
+                return;
+            }
+            Err(error) => panic!("fill: {error:?}"),
+        };
+        let library = Library::from_air(&bitcode).expect("the library");
+        let function = library.function("fill").expect("the kernel");
+        let kernel = ComputePipelineDescriptor::new(StageSource::Function(
+            FunctionDescriptor::new(function),
+        ));
         each_device("synchronize over managed", |name, _, device| {
             if device.core().unified_memory() {
                 println!("synchronize over managed: {name}: no device copy, the Shared rule");
                 return;
             }
+            let fill = (device
+                .new_compute_pipeline_state(&kernel, crate::tests::no_constexpr_samplers))
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
             let align = (device.minimum_linear_texture_alignment(PixelFormat::RGBA8Unorm))
                 .expect("an alignment");
             let cpu = (device.take_block(MemoryClass::Shared, 1))
                 .unwrap_or_else(|e| panic!("{name}: {e}"));
-            (device.grant_indices(IndexClass::Texture, 4096, 2)).expect("a grant");
+            (device.grant_indices(IndexClass::Texture, 4096, 8)).expect("a grant");
             let queue = device.new_command_queue(4).expect("a queue");
             let mut d = descriptor();
             d.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
-            for (index, pitch) in [(4096, ROW.next_multiple_of(align)), (4097, pitch(&device))] {
-                let buffer =
-                    (crate::tests::managed::on_device::new_managed(&device, cpu.id, 0, LEN, 0))
+            let source = plain(name, &device, &texels(0x6B));
+            let mut index = 4096;
+            for pitch in [ROW.next_multiple_of(align), pitch(&device)] {
+                for (by_kernel, of_texture) in
+                    [(false, true), (true, true), (false, false), (true, false)]
+                {
+                    let buffer =
+                        (crate::tests::managed::on_device::new_managed(&device, cpu.id, 0, LEN, 0))
+                            .unwrap_or_else(|e| panic!("{name}: {e}"));
+                    let mut want: Vec<u8> = (0..LEN).map(|i| (i % 241) as u8).collect();
+                    write(&buffer, &want);
+                    (buffer.did_modify_range(0, LEN)).unwrap_or_else(|e| panic!("{name}: {e}"));
+                    let texture = (buffer.new_texture(&d, Some(index), 0, pitch))
                         .unwrap_or_else(|e| panic!("{name}: {e}"));
-                let bytes: Vec<u8> = (0..LEN).map(|i| (i % 241) as u8).collect();
-                write(&buffer, &bytes);
-                (buffer.did_modify_range(0, LEN)).unwrap_or_else(|e| panic!("{name}: {e}"));
-                let texture = (buffer.new_texture(&d, Some(index), 0, pitch))
-                    .unwrap_or_else(|e| panic!("{name}: {e}"));
-                let form = match texture.managed_over() {
-                    Some(_) => "in an image of its own",
-                    None => "in place",
-                };
-                let end = (pitch * u64::from(HEIGHT - 1) + ROW) as usize;
-                let mut want = bytes;
-                want[end..].fill(0x5C);
-                write(&buffer, &want);
-                let source = plain(name, &device, &texels(0x6B));
-                let before = device.counters().metrics();
-                run(name, &queue, |cb| {
-                    let mut encoder = cb.blit_command_encoder().expect("an encoder");
-                    let at = TexturePlace::default();
-                    (encoder.copy_from_texture(&source, at, [WIDTH, HEIGHT, 1], &texture, at))
-                        .expect("a copy");
-                    (encoder.synchronize_resource(Resource::Texture(&texture)))
-                        .expect("a synchronize");
-                    encoder.end_encoding();
-                });
-                let after = device.counters().metrics();
-                assert_eq!(
-                    after.synchronizations - before.synchronizations,
-                    1,
-                    "{name}: {form}: one synchronize"
-                );
-                lay(&mut want, &texels(0x6B), 0, pitch);
-                let held = held(&buffer);
-                assert!(
-                    rows(&held, 0, pitch) == texels(0x6B),
-                    "{name}: {form}: the texels in the consumer's bytes"
-                );
-                assert!(
-                    held == want,
-                    "{name}: {form}: the bytes past the texture as the host wrote them"
-                );
-                println!("synchronize over managed: {name}: {form}, pitch {pitch}");
+                    index += 1;
+                    let form = match texture.managed_over() {
+                        Some(_) => "in an image of its own",
+                        None => "in place",
+                    };
+                    let writer = if by_kernel { "a kernel" } else { "a blit" };
+                    let synced = if of_texture {
+                        "the texture"
+                    } else {
+                        "the buffer"
+                    };
+                    let what = format!(
+                        "{name}: {form}, pitch {pitch}, written by {writer}, {synced} synchronized"
+                    );
+                    let resource = match of_texture {
+                        true => Resource::Texture(&texture),
+                        false => Resource::Buffer(&buffer),
+                    };
+                    let before = device.counters().metrics();
+                    let expected = match by_kernel {
+                        false => {
+                            run(&what, &queue, |cb| {
+                                let mut encoder = cb.blit_command_encoder().expect("an encoder");
+                                let at = TexturePlace::default();
+                                let size = [WIDTH, HEIGHT, 1];
+                                (encoder.copy_from_texture(&source, at, size, &texture, at))
+                                    .expect("a copy");
+                                (encoder.synchronize_resource(resource)).expect("a synchronize");
+                                encoder.end_encoding();
+                            });
+                            texels(0x6B)
+                        }
+                        true => {
+                            run(&what, &queue, |cb| {
+                                let mut encoder = (cb
+                                    .compute_command_encoder(DispatchType::Serial))
+                                .expect("an encoder");
+                                encoder.set_compute_pipeline_state(&fill).expect("a state");
+                                encoder.set_texture(Some(&texture), 0).expect("a texture");
+                                (encoder.dispatch_threads([WIDTH, HEIGHT, 1], [WIDTH, HEIGHT, 1]))
+                                    .expect("a dispatch");
+                                encoder.end_encoding();
+                            });
+                            if of_texture {
+                                let end = (pitch * u64::from(HEIGHT - 1) + ROW) as usize;
+                                want[end..].fill(0x5C);
+                                write(&buffer, &want);
+                            }
+                            run(&what, &queue, |cb| {
+                                let mut encoder = cb.blit_command_encoder().expect("an encoder");
+                                (encoder.synchronize_resource(resource)).expect("a synchronize");
+                                encoder.end_encoding();
+                            });
+                            [51, 102, 153, 204].repeat(TEXELS / 4)
+                        }
+                    };
+                    let after = device.counters().metrics();
+                    assert_eq!(
+                        after.synchronizations - before.synchronizations,
+                        1,
+                        "{what}: one synchronize"
+                    );
+                    lay(&mut want, &expected, 0, pitch);
+                    let held = held(&buffer);
+                    assert!(
+                        rows(&held, 0, pitch) == expected,
+                        "{what}: the texels in the consumer's bytes"
+                    );
+                    assert!(held == want, "{what}: the bytes around the texels");
+                    println!("synchronize over managed: {what}: as Metal's");
+                }
             }
             (device.release_block(cpu)).unwrap_or_else(|e| panic!("{name}: {e}"));
         });
