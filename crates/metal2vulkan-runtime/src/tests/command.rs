@@ -5061,19 +5061,20 @@ pub(crate) mod on_device {
     /// handler reads its own fill. Where the device holds none, it makes no flush or invalidate,
     /// and A's sight before L's end is not asked for (lavapipe retires A with L). Each device runs
     /// it as it reads its types and, under `m2v_gpu`, through the refused device's view
-    /// (`crate::tests::cached_types_incoherent`), which builds the state. L's copies are sized to
-    /// about 10 ms and, where the device holds the state, doubled for another attempt where A was
-    /// seen complete only after L's GPU end, up to four.
+    /// (`crate::tests::cached_types_incoherent`), which builds the state, as the floor's choice
+    /// over the view decides ([`each_device_under_the_view`]): a device whose one host-visible,
+    /// host-cached buffer type also holds the parameter ring is refused under the view, and that
+    /// refusal is printed. L's copies are sized to about 10 ms and, where the device holds the
+    /// state, doubled for another attempt where A was seen complete only after L's GPU end, up to
+    /// four.
     #[test]
     fn every_device_settles_an_early_members_shared_writes_at_its_own_completion() {
         let test = "command_group_apart_settles";
         each_device(test, early_member_settles);
         if cfg!(m2v_gpu) && !cfg!(m2v_shared_view) {
-            let view = || DeviceOptions {
-                memory: Some(crate::tests::cached_types_incoherent),
-                ..DeviceOptions::default()
-            };
-            each_device_with(test, view, early_member_settles);
+            each_device_under_the_view(test, |name, instance, device, _| {
+                early_member_settles(name, instance, device)
+            });
         }
     }
 
