@@ -536,7 +536,7 @@ impl Device {
         // types through the refused device's (docs/VALIDATION.md).
         #[cfg(all(test, m2v_shared_view, any(m2v_gpu, m2v_cpu_icd)))]
         let options = DeviceOptions {
-            memory: (options.memory).or(Some(crate::tests::cached_types_incoherent)),
+            memory: (options.memory).or(Some(crate::tests::command::on_device::suite_view)),
             ..options
         };
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]

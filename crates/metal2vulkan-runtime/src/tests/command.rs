@@ -145,7 +145,7 @@ pub(crate) mod on_device {
     use crate::device::lock;
     use crate::floor::{buffer_memory_bits, choose, BelowFloor};
     use crate::submit::{GROUP_RUN, IN_FLIGHT, UNSEEN_JOINS};
-    use crate::tests::{cached_types_incoherent, devices_of_the_cfgs_kind};
+    use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
         host_time, AllocationId, AllocationInfo, Block, BlockMappings, Buffer, CommandBuffer,
         CommandBufferError, CommandBufferStatus, CommandQueue, Device, DeviceLoss, DeviceOptions,
@@ -316,6 +316,42 @@ pub(crate) mod on_device {
                 (chosen, Ok(_)) => panic!("{name}: made, where the floor chose {chosen:?}"),
             }
         }
+    }
+
+    /// A memory view (`DeviceOptions::memory`) of the shape of a device the floor refused, a Meteor
+    /// Lake GPU under Mesa's Intel driver and the i915 kernel driver: `HOST_COHERENT` is taken from
+    /// every type that is host-visible, host-coherent and host-cached, so no type is both cached
+    /// and coherent; every other type keeps its flags.
+    ///
+    /// The tests reach it through three doors alone: a device opens through it only in
+    /// [`each_device_under_the_view`], as the floor's choice over the view decides; [`viewed`]
+    /// reads a device's types through it; and [`suite_view`] is the `m2v_shared_view` suite's
+    /// hook in `Device::new`.
+    fn cached_types_incoherent(memory: &mut vk::PhysicalDeviceMemoryProperties) {
+        use ash::vk::MemoryPropertyFlags as F;
+        let all = F::HOST_VISIBLE | F::HOST_COHERENT | F::HOST_CACHED;
+        let count = memory.memory_type_count as usize;
+        for kind in &mut memory.memory_types[..count] {
+            if kind.property_flags.contains(all) {
+                kind.property_flags &= !F::HOST_COHERENT;
+            }
+        }
+    }
+
+    /// `memory` read through the refused device's view ([`cached_types_incoherent`]): the types a
+    /// device made under `m2v_shared_view` reads.
+    pub(crate) fn viewed(
+        mut memory: vk::PhysicalDeviceMemoryProperties,
+    ) -> vk::PhysicalDeviceMemoryProperties {
+        cached_types_incoherent(&mut memory);
+        memory
+    }
+
+    /// The view every device the tests make reads its types through under `m2v_shared_view`, where
+    /// the test gives none of its own (`Device::new`; docs/VALIDATION.md).
+    #[cfg(m2v_shared_view)]
+    pub(crate) fn suite_view(memory: &mut vk::PhysicalDeviceMemoryProperties) {
+        cached_types_incoherent(memory);
     }
 
     /// Runs `body` on `device` of `instance`, just made, once the block-maker thread's first work
@@ -5061,7 +5097,7 @@ pub(crate) mod on_device {
     /// handler reads its own fill. Where the device holds none, it makes no flush or invalidate,
     /// and A's sight before L's end is not asked for (lavapipe retires A with L). Each device runs
     /// it as it reads its types and, under `m2v_gpu`, through the refused device's view
-    /// (`crate::tests::cached_types_incoherent`), which builds the state, as the floor's choice
+    /// ([`cached_types_incoherent`]), which builds the state, as the floor's choice
     /// over the view decides ([`each_device_under_the_view`]): a device whose one host-visible,
     /// host-cached buffer type also holds the parameter ring is refused under the view, and that
     /// refusal is printed. L's copies are sized to about 10 ms and, where the device holds the

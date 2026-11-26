@@ -238,22 +238,6 @@ pub(crate) fn keeps_a_blob(name: &str, device: &crate::Device) -> bool {
     kept
 }
 
-/// A memory view (`DeviceOptions::memory`) of the shape of a device the floor refused, a Meteor
-/// Lake GPU under Mesa's Intel driver and the i915 kernel driver: `HOST_COHERENT` is taken from
-/// every type that is host-visible, host-coherent and host-cached, so no type is both cached and
-/// coherent; every other type keeps its flags.
-#[cfg(any(m2v_gpu, m2v_cpu_icd))]
-pub(crate) fn cached_types_incoherent(memory: &mut ash::vk::PhysicalDeviceMemoryProperties) {
-    use ash::vk::MemoryPropertyFlags as F;
-    let all = F::HOST_VISIBLE | F::HOST_COHERENT | F::HOST_CACHED;
-    let count = memory.memory_type_count as usize;
-    for kind in &mut memory.memory_types[..count] {
-        if kind.property_flags.contains(all) {
-            kind.property_flags &= !F::HOST_COHERENT;
-        }
-    }
-}
-
 /// Each physical device of the device cfg's kind the loader lists, with its name: CPU devices
 /// under `m2v_cpu_icd`, the others under `m2v_gpu`. The legs pick one with `VK_DRIVER_FILES` and
 /// `MESA_VK_DEVICE_SELECT`.

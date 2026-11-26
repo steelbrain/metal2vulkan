@@ -2472,7 +2472,7 @@ fn every_device_the_loader_lists_is_above_the_floor() {
 }
 
 /// Every device of the cfg's kind, read through the memory view of the refused device's shape
-/// ([`cached_types_incoherent`](crate::tests::cached_types_incoherent)), answers at its make as
+/// (`crate::tests::command::on_device::cached_types_incoherent`), answers at its make as
 /// the floor's choice over the view does, with the buffer bits a device made with no view first
 /// answers (`each_device_under_the_view`). A device the choice opens has the chosen types: Shared
 /// takes the first cached type, which the view left not coherent, and the device holds the

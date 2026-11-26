@@ -1,14 +1,14 @@
-//! Shared memory's coherence (`crate::coherence`). Under a device cfg, on every device of the
-//! cfg's kind: the device holds a coherence state exactly where its Shared type, as it reads it,
-//! is not host-coherent, and makes no flush or invalidate where it holds none. Where it holds one
-//! (every device the floor opens through the refused device's view,
-//! `crate::tests::cached_types_incoherent`): the zero source is flushed at its make; a fill into a
-//! Shared buffer is flushed over the buffer's atoms before its submission, then flushed and
-//! invalidated there before its status reads completed, and its bytes are the fill's; a fill into
-//! a Private buffer makes no call; the bytes a texture's `replace_region` stages are flushed once,
-//! and those its `get_bytes` reads flushed and invalidated once. Each call is counted with its
-//! bytes, and none fails. A device whose one host-visible, host-cached buffer type also holds the
-//! parameter ring is refused under the view, with its refusal.
+//! Shared memory's coherence (`crate::coherence`). Under a device cfg, on every device of the cfg's
+//! kind: the device holds a coherence state exactly where its Shared type, as it reads it, is not
+//! host-coherent, and makes no flush or invalidate where it holds none. Where it holds one (every
+//! device the floor opens through the refused device's view,
+//! `crate::tests::command::on_device::cached_types_incoherent`): the zero source is flushed at its
+//! make; a fill into a Shared buffer is flushed over the buffer's atoms before its submission, then
+//! flushed and invalidated there before its status reads completed, and its bytes are the fill's; a
+//! fill into a Private buffer makes no call; the bytes a texture's `replace_region` stages are
+//! flushed once, and those its `get_bytes` reads flushed and invalidated once. Each call is counted
+//! with its bytes, and none fails. A device whose one host-visible, host-cached buffer type also
+//! holds the parameter ring is refused under the view, with its refusal.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
@@ -185,7 +185,7 @@ mod on_device {
             // SAFETY: the device's physical device is one of the instance's.
             let mut memory = unsafe { vk_instance.get_physical_device_memory_properties(physical) };
             if cfg!(m2v_shared_view) {
-                crate::tests::cached_types_incoherent(&mut memory);
+                memory = crate::tests::command::on_device::viewed(memory);
             }
             let index = device.memory_types().shared;
             let shared = memory.memory_types_as_slice()[index as usize].property_flags;
@@ -209,12 +209,12 @@ mod on_device {
     }
 
     /// Every device of the cfg's kind, read through the refused device's view
-    /// (`crate::tests::cached_types_incoherent`), decided by the floor's choice over the view
-    /// (`each_device_under_the_view`). A device the choice opens has a Shared type that is cached
-    /// and not coherent, so it holds the coherence state and makes the calls, on memory that is
-    /// coherent in fact. A device whose one host-visible, host-cached buffer type also holds the
-    /// parameter ring is left with no coherent type for the ring, so the floor refuses it under
-    /// the view, with that choice's refusal, which is printed.
+    /// (`crate::tests::command::on_device::cached_types_incoherent`), decided by the floor's choice
+    /// over the view (`each_device_under_the_view`). A device the choice opens has a Shared type
+    /// that is cached and not coherent, so it holds the coherence state and makes the calls, on
+    /// memory that is coherent in fact. A device whose one host-visible, host-cached buffer type
+    /// also holds the parameter ring is left with no coherent type for the ring, so the floor
+    /// refuses it under the view, with that choice's refusal, which is printed.
     #[test]
     fn every_device_opened_under_the_view_flushes_and_invalidates_the_shared_memory_work_reaches() {
         each_device_under_the_view("coherence", |name, _, device, _| {
