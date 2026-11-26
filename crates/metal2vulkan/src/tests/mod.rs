@@ -31,6 +31,7 @@ mod engine_atomics;
 mod engine_bias_reach;
 mod engine_bicubic;
 mod engine_bit_manipulation;
+mod engine_bound_buffers;
 mod engine_buffer_table;
 mod engine_chosen_pointers;
 mod engine_compute_limits;

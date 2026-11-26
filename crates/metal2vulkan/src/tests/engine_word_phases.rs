@@ -22,7 +22,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::air::ir::InstKind;
 use crate::device::profile::{DeviceProfile, HandleDomain, PointerDomain};
-use crate::device::{Device, DevicePolicy};
+use crate::device::{Device, DevicePolicy, VkFeature};
 use crate::library::FunctionConstantValues;
 use crate::lower::dispatch::region_bytes;
 use crate::lower::select::LowerInputs;
@@ -87,13 +87,30 @@ pub(super) fn bounds_word(bytes: usize, bind: u64) -> [u8; 8] {
 }
 
 /// Every committed profile `Device::from_queries` derives under the identity domains (those with
-/// `bufferDeviceAddress` and `shaderInt64`), by stem.
+/// `bufferDeviceAddress` and `shaderInt64`), by stem, with `pipelineRobustness` not enabled: a
+/// kernel there reaches each buffer argument at its device address, as on a device that answers
+/// the bound form's query otherwise (`DeviceProfile::binds_kernel_buffers`).
 pub(super) fn identity_profiles() -> Vec<(String, DeviceProfile)> {
+    identity_profiles_with(false)
+}
+
+/// Every committed profile `Device::from_queries` derives under the identity domains, by stem, each
+/// description as committed: a kernel on one that answers the bound form's query reaches its
+/// buffer arguments through set 0's storage buffers (`tests::engine_bound_buffers`).
+pub(super) fn bound_identity_profiles() -> Vec<(String, DeviceProfile)> {
+    identity_profiles_with(true)
+}
+
+/// [`identity_profiles`], or with `bound` [`bound_identity_profiles`].
+fn identity_profiles_with(bound: bool) -> Vec<(String, DeviceProfile)> {
     committed_profiles()
         .expect("profiles")
         .into_iter()
         .filter_map(|(stem, _)| {
-            let desc = description(&stem).expect("description");
+            let mut desc = description(&stem).expect("description");
+            if !bound {
+                desc.features.remove(&VkFeature::PipelineRobustness);
+            }
             let device = Device::from_queries(desc, identity()).ok()?;
             Some((stem, device.profile().clone()))
         })
