@@ -710,6 +710,20 @@ fn storage_format(
     let images = &cx.profile.fields().images;
     let formatless_ok = (!s.uses.read || images.storage_read_without_format)
         && (!s.uses.write || images.storage_write_without_format);
+    // An 8-bit sRGB texture's storage element is its UNORM twin's view, which the slot converts
+    // to and from the format's codes (`LoweringInputs::srgb_storage`).
+    if srgb_storage(cx.inputs, s) {
+        if !cx
+            .profile
+            .accesses_without_format(s.uses.read, s.uses.write)
+        {
+            return Err(Unsupported::not_implemented(Feature::Format).into());
+        }
+        return Ok((
+            crate::spv::ImageFormat::Unknown,
+            StorageImageClass::SrgbEncode,
+        ));
+    }
     let Some(choice) = cx.inputs.storage_images.get(&s.slot) else {
         if formatless_ok {
             return Ok((
@@ -1033,6 +1047,15 @@ pub(crate) fn image_class(inputs: &crate::pipeline::LoweringInputs, s: &SlotPlan
         Some(SampledType::Float) => TexelClass::Float,
         _ => s.texel.unwrap_or(TexelClass::Float),
     }
+}
+
+/// Whether storage slot `s` holds an 8-bit sRGB texture's UNORM twin, which converts its texels to
+/// and from the format's codes (`LoweringInputs::srgb_storage`, `StorageImageClass::SrgbEncode`): a
+/// `float` or `half` slot of the set that no storage choice names.
+pub(crate) fn srgb_storage(inputs: &crate::pipeline::LoweringInputs, s: &SlotPlan) -> bool {
+    inputs.srgb_storage.contains(&s.slot)
+        && !inputs.storage_images.contains_key(&s.slot)
+        && image_class(inputs, s) == TexelClass::Float
 }
 
 /// Whether slot `s`'s accesses answer from a texture of any numeric class
@@ -1553,14 +1576,19 @@ impl SlotPlan {
 /// elements of the same array, the run its `PushField::TextureLevelBase` names. `None` for a
 /// declaration the identity arrays hold no element of yet: a sampled cube viewed as an array, a
 /// texture buffer's parts, an extended-range or RGBX form, or a storage image with another format
-/// or a conversion.
+/// or a conversion. A storage image without a format whose class converts 8-bit sRGB codes
+/// (`SrgbEncode`, `LoweringInputs::srgb_storage`) is an element of the array without a format: the
+/// runtime holds such a texture's UNORM twin there.
 pub(crate) fn identity_class(decl: &ImageDecl) -> Option<ImageHandleClass> {
     let storage = decl.usage == ImageUsage::Storage;
+    let srgb = storage
+        && decl.class == StorageImageClass::SrgbEncode
+        && decl.format == crate::spv::ImageFormat::Unknown;
     let plain = !(decl.cube_as_array && !storage)
         && decl.extended.is_none()
         && !decl.x_channel
         && decl.parts.is_none()
-        && decl.class == StorageImageClass::Identity;
+        && (decl.class == StorageImageClass::Identity || srgb);
     let dim = match decl.dim {
         Dim::D1 => SymDim::D1,
         Dim::D2 => SymDim::D2,

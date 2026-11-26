@@ -2264,9 +2264,10 @@ pub(super) fn norm_storage_facts(cx: &mut SelectCx<'_>, image: ImageRef) -> Resu
     let reached = match image {
         ImageRef::Heap { .. } => true,
         ImageRef::Slot(index) => {
-            let slot = slot_of(cx, index)?.slot;
-            match cx.inputs.storage_images.get(&slot) {
-                None => true,
+            let s = slot_of(cx, index)?;
+            match cx.inputs.storage_images.get(&s.slot) {
+                // An sRGB twin's codes, which the class encodes: its view stores them exactly.
+                None => !slot::srgb_storage(cx.inputs, s),
                 Some(c) => {
                     let formatless = c.vk_format == crate::vk::Format::UNDEFINED;
                     let normalized = formatless
@@ -2419,11 +2420,14 @@ pub(crate) fn storage_class(
     let ImageRef::Slot(index) = image else {
         return Ok(StorageImageClass::Identity);
     };
-    let slot = slot_of(cx, index)?.slot;
+    let s = slot_of(cx, index)?;
+    if slot::srgb_storage(cx.inputs, s) {
+        return Ok(StorageImageClass::SrgbEncode);
+    }
     Ok(cx
         .inputs
         .storage_images
-        .get(&slot)
+        .get(&s.slot)
         .map_or(StorageImageClass::Identity, |c| c.class))
 }
 

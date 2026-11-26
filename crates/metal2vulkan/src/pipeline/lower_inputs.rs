@@ -122,6 +122,15 @@ pub struct LoweringInputs {
     /// `PrecisionNote::SrgbTexelDecode`. A slot of no such access is ignored.
     #[cfg_attr(feature = "serde", serde(default))]
     pub srgb_textures: BTreeSet<SlotRef>,
+    /// Storage texture slots bound to an 8-bit sRGB texture whose storage element is a view of
+    /// the format's UNORM twin (`metal::format::srgb_raw_twin`), as Vulkan stores no sRGB format
+    /// through a storage image on the devices it is built for: each such slot a `half` or `float`
+    /// function writes or reads is declared without a format, of class `SrgbEncode`, so its
+    /// writes encode red, green and blue by the device's linear-to-sRGB conversion and keep alpha
+    /// linear (the MSL specification, 8.7.7), recording `PrecisionNote::DevicePackConversion`, and
+    /// its reads decode. A slot of no such access, or of another numeric type, is ignored.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub srgb_storage: BTreeSet<SlotRef>,
     /// Texture-buffer slots bound to a texture buffer of more texels than one view holds, each
     /// with its parts (`VariantKey::texel_buffer_parts`, `RuntimeFact::TexelBufferParts`): each is
     /// declared as an array of that many texel buffers, texel `i` of its reads, writes and atomics

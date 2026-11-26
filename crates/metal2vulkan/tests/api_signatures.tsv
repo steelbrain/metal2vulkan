@@ -2450,6 +2450,7 @@ field	metal2vulkan::pipeline::LoweringInputs.rotated_factors	pub rotated_factors
 field	metal2vulkan::pipeline::LoweringInputs.rotated_weights	pub rotated_weights: bool
 field	metal2vulkan::pipeline::LoweringInputs.sample_mask	pub sample_mask: Option<[u32; 4]>
 field	metal2vulkan::pipeline::LoweringInputs.signed_color_attachments	pub signed_color_attachments: BTreeSet<u32>
+field	metal2vulkan::pipeline::LoweringInputs.srgb_storage	pub srgb_storage: BTreeSet<SlotRef>
 field	metal2vulkan::pipeline::LoweringInputs.srgb_textures	pub srgb_textures: BTreeSet<SlotRef>
 field	metal2vulkan::pipeline::LoweringInputs.stage_input	pub stage_input: Option<StageInputDescriptor>
 field	metal2vulkan::pipeline::LoweringInputs.storage_images	pub storage_images: BTreeMap<SlotRef, StorageImageChoice>

@@ -648,6 +648,7 @@ fn the_inputs_encoding_is_the_earlier_derived_debug() {
                 .replace(", replay_bindings: false", "")
                 .replace(", merged_draws: false", "")
                 .replace(", srgb_textures: {}", "")
+                .replace(", srgb_storage: {}", "")
                 .replace(", texel_buffer_parts: {}", "")
                 .replace(", viewport_index_varying: false", "")
                 .replace(", max_call_stack_depth: None", "")

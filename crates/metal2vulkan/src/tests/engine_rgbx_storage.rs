@@ -478,6 +478,51 @@ fn an_srgb_storage_write_takes_the_devices_conversion() {
     assert!(ran > 0);
 }
 
+/// Under the identity domains, an `access::write` slot of `LoweringInputs::srgb_storage` (an 8-bit
+/// sRGB texture held through its UNORM twin's storage element) writes through the formatless
+/// storage array's element, encoding each color channel by the MSL transfer through the device's
+/// `Pow`, with no Metal table, and records `PrecisionNote::DevicePackConversion`, `float` and
+/// `half`, on every committed profile the identity domains derive; each module validates. The same
+/// kernel without the input keeps its own key and module, with no `Pow`, and an integer slot of the
+/// set is lowered as without it.
+#[test]
+fn an_srgb_twin_write_under_the_identity_domains_encodes() {
+    use crate::pipeline::PrecisionNote;
+    let mut ran = 0;
+    for texel in [Texel::Float, Texel::Half, Texel::Uint] {
+        let what = format!("{texel:?}");
+        let Some(bc) = assemble(&what, &write_kernel(texel, "write")) else {
+            return;
+        };
+        let mut srgb = LowerInputs::new();
+        srgb.srgb_storage.insert(SLOT);
+        for (stem, p) in super::engine_word_phases::identity_profiles() {
+            let what = format!("{what} on {stem}");
+            let compile = |inputs: &LowerInputs| {
+                crate::pipeline::testing::compile_with(&bc, "k", &p, inputs)
+                    .unwrap_or_else(|e| panic!("{what}: {e}"))
+            };
+            let plain = compile(&LowerInputs::new());
+            let a = compile(&srgb);
+            link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
+            assert_ne!(a.key, plain.key, "{what}");
+            let words = &plain.module.words;
+            assert!(!super::engine_srgb_decode::takes_pow(words), "{what}");
+            let note = PrecisionNote::DevicePackConversion;
+            let words = &a.module.words;
+            if texel == Texel::Uint {
+                assert_eq!(words, &plain.module.words, "{what}");
+                continue;
+            }
+            assert!(super::engine_srgb_decode::takes_pow(words), "{what}");
+            assert!(!super::engine_fragment::holds_srgb_table(words), "{what}");
+            assert!(a.precision.contains(&note), "{what}");
+            ran += 1;
+        }
+    }
+    assert!(ran > 0);
+}
+
 /// The choice of an `RGB9E5Float` texture at a storage slot of a device that does not store the
 /// format: its `R32_UINT` alias, holding Metal's word (`SharedExponentBits`).
 const SHARED_EXPONENT: (vk::Format, StorageImageClass) =

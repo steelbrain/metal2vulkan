@@ -288,6 +288,7 @@ mod serde_round_trips {
             replay_bindings: true,
             merged_draws: true,
             srgb_textures: BTreeSet::from([slot(Stage::Fragment, SlotClass::Texture, 7)]),
+            srgb_storage: BTreeSet::from([slot(Stage::Kernel, SlotClass::Texture, 3)]),
             texel_buffer_parts: BTreeMap::from([(
                 slot(Stage::Fragment, SlotClass::Texture, 11),
                 4,

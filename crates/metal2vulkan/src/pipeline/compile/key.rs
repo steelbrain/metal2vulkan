@@ -226,6 +226,11 @@ pub fn function_key(
             .bytes(format!("{:?}", inputs.srgb_textures).as_bytes());
     }
     // Appended only when set, as `signed_color_attachments`.
+    if !inputs.srgb_storage.is_empty() {
+        h.bytes(b"srgb-storage")
+            .bytes(format!("{:?}", inputs.srgb_storage).as_bytes());
+    }
+    // Appended only when set, as `signed_color_attachments`.
     if !inputs.texel_buffer_parts.is_empty() {
         h.bytes(b"texel-buffer-parts")
             .bytes(format!("{:?}", inputs.texel_buffer_parts).as_bytes());
