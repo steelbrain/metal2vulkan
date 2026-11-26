@@ -726,6 +726,49 @@ pub(crate) mod on_device {
         });
     }
 
+    /// A dispatch that writes through an address outside its resources owes a barrier to the
+    /// dispatch after it in a serial encoder, recorded between the two: here the next dispatch
+    /// reads and writes the buffer the first wrote, so that barrier counts as its dependency on
+    /// the write (`Metrics::dispatch_after_write_barriers`), the segment's end the only other.
+    /// Recorded before the writing dispatch instead, it would count among the unbound ones and
+    /// leave the second dispatch after the write with no barrier. Lavapipe runs dispatches one
+    /// after another, so the values cannot show the order; the count by source does.
+    #[test]
+    fn every_device_records_an_unbound_write_s_barrier_after_it() {
+        each_device("compute_unbound_write", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let step = step(&device);
+            let fields = vec![region(), address(0, Place::Push(32))];
+            let mut wild = interface(vec![(0, Access::ReadWrite)], fields, 40);
+            wild.writes_unbound = true;
+            let wild = (ComputePipelineState::for_test(&device, &kernels::STEP, wild))
+                .expect("the step kernel, writing outside its resources");
+            let queue = device.new_command_queue(4).expect("a queue");
+            let x = arena.buffer();
+            write_words(&x, |index| index);
+            let before = device.counters().metrics();
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = command_buffer
+                .compute_command_encoder(DispatchType::Serial)
+                .expect("an encoder");
+            dispatch(&mut encoder, &wild, &[&x]);
+            dispatch(&mut encoder, &step, &[&x]);
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            let after = device.counters().metrics();
+            let split = sources(&after, &before);
+            assert_eq!(
+                split,
+                only(0, 1),
+                "{name}: the barrier between the unbound write and the dispatch after it"
+            );
+            let barriers = after.barriers - before.barriers;
+            assert_eq!(barriers, 2, "{name}: that barrier and the segment's end");
+            let twice: Vec<u32> = (0..WORDS as u32).map(|x| (x * 2 + 1) * 2 + 1).collect();
+            assert_eq!(words(&x), twice, "{name}: both steps");
+        });
+    }
+
     /// What an encoder's commands count reaches the device's counters once, at the encoder's
     /// end: 2,000 dispatches that each read the one before's writes move none of them while the
     /// encoder is open, and its end adds the pass, the 1,999 barriers between them, the push and

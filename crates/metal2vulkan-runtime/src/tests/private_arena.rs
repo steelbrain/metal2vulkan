@@ -245,4 +245,59 @@ entry:
             });
         }
     }
+
+    /// A dispatch split into pieces stays in the hazard sets past the barriers before its pieces:
+    /// in a serial encoder, `plain` after an arena dispatch of 7176 words split into four pieces,
+    /// both over one buffer, takes a barrier for its dependency on the arena dispatch's write
+    /// (`Metrics::dispatch_after_write_barriers`), and writes its own words over the arena's. The
+    /// barriers before the pieces order the pieces among themselves; one that started the sets
+    /// again would leave `plain` after the write with no barrier. Lavapipe runs dispatches one
+    /// after another, so the values cannot show the order; the count by source does.
+    #[test]
+    fn every_device_orders_a_dispatch_after_an_arena_dispatch_s_pieces() {
+        let n = 7176;
+        let bitcode = match llvm_assemble_text(&module(n)) {
+            Ok(bitcode) => bitcode,
+            Err(AssembleError::Missing(why)) => {
+                eprintln!("SKIPPED: {why}");
+                return;
+            }
+            Err(error) => panic!("private_arena: {error:?}"),
+        };
+        let library = Library::from_air(&bitcode).expect("the library");
+        // Two threadgroups' slots a piece: four pieces.
+        let small = 2 * u64::from(THREADS) * u64::from(4 * n);
+        each_device("private_arena_order", |name, _, device| {
+            let arena = state(name, &device, &library, "arena");
+            let plain = state(name, &device, &library, "plain");
+            let block = (device.take_block(MemoryClass::Shared, 1 << 20)).expect("a block");
+            let out = (device.new_buffer(block.id, 0, 4096, Some(0))).expect("a buffer");
+            device.core().arena_budget.store(small, Relaxed);
+            let before = device.counters().metrics();
+            let (_, after) = barriers(
+                name,
+                &device,
+                &[&arena, &plain],
+                &[out.clone(), out.clone()],
+            );
+            device.core().arena_budget.store(0, Relaxed);
+            let pieces = after.private_arena_pieces - before.private_arena_pieces;
+            assert_eq!(pieces, 4, "{name}: the arena dispatch's pieces");
+            let ordered =
+                after.dispatch_after_write_barriers - before.dispatch_after_write_barriers;
+            assert_eq!(
+                ordered, 1,
+                "{name}: the barrier between the arena dispatch and plain, its dependency"
+            );
+            let threads = GROUPS * THREADS;
+            let own: Vec<u32> = (0..threads).collect();
+            assert_eq!(
+                words(&out, threads as usize),
+                own,
+                "{name}: plain's words last"
+            );
+            drop((arena, plain, out));
+            (device.release_block(block)).unwrap_or_else(|error| panic!("{name}: {error}"));
+        });
+    }
 }
