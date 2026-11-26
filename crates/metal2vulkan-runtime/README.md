@@ -3600,6 +3600,33 @@ cache is answered compile-required on both.
   runs a relaxed form of the kernel, whose accesses of that buffer claim 4-byte alignment. A
   build that took that form for every such argument, bound so or not, ran the harness's four
   `constant_*` rows on an RTX 3090 in 234-252 us against 99-122 us (job 74651).
+- A compute function's buffer argument is reached at its device address, with its accesses at an
+  offset that is not a constant checked in the shader (Compute encoders, above), where a native
+  Vulkan program binds the buffer as a storage buffer and the device's own range check applies.
+  Our kernel's GPU time over a native Vulkan build of the same kernel on the same device
+  (device-local buffers, release, two runs each):
+  - a particle kernel whose inner loop makes one 8-byte load: 1.15x on an RTX 3090 (job
+    m3-max-74929), 1.35x on an RX 7900 XTX (m3-max-74927), 1.37x on an Iris Xe (m3-max-74928) and
+    1.48x-1.50x on a Radeon 780M (m3-max-74926);
+  - a vertical and a horizontal convolution: 1.86x-2.02x and 1.83x on the RTX 3090
+    (m3-max-74960), 1.23x-1.28x and 1.22x on the RX 7900 XTX (m3-max-74959), 1.05x and 1.11x on
+    the Radeon 780M (m3-max-74957).
+
+  A build that bound those arguments as storage buffers under the pipeline's robust buffer access
+  2 ran the particle kernel at 1.01x-1.02x of the native build on the 780M, 1.02x-1.03x on the RX
+  7900 XTX, 1.05x on the RTX 3090 and 1.09x on the Iris Xe (m3-max-75062, m3-max-75063,
+  m3-max-75064, m3-max-75061), so that much of the difference is the address form's. Buffers are
+  not bound because each way of binding them loses on a device: a descriptor set written for a
+  dispatch's buffers took 6.0% to 7.9% more GPU time a frame on the Iris Xe over two recorded
+  streams (m3-max-75124, m3-max-75128, m3-max-75132) and 25% to 29% more on a chain of dependent
+  dispatches on the 780M and the RX 7900 XTX (m3-max-75120, m3-max-75119); and a table of every
+  buffer's descriptor, indexed by a pushed word, is reached on the Iris Xe under Mesa 26.2.6's ANV
+  by an address with the range check in the shader, one bounded load for each component, by that
+  driver's source, where the address form makes one load. On the Iris Xe the vertical and
+  horizontal convolutions and a copy kernel take 1.38x, 1.38x and 1.61x of the native build at the
+  same threadgroup shape (m3-max-75079), and the build that bound their buffers ran them in the
+  same time (m3-max-75061): that difference is not the address form's, and its cause is not
+  found.
 - A driver's create of a state's main pipeline can fail after the state has answered, where Metal
   compiles the state before it answers and a program never meets a state it was given that cannot
   run. Vulkan lets `vkCreateComputePipelines` and `vkCreateGraphicsPipelines` fail with
