@@ -17,9 +17,13 @@
 //!   load and another before the next load; dispatched over 160 by 3200 threads, whole
 //!   threadgroups, 8 times in one command buffer, each into its own `c`. Every element is
 //!   compared with the CPU's product, exactly (`value` says why no tolerance is needed), and
-//!   each repeat prints how many elements differ and by how much. It runs twice: with `barrier`
-//!   passing OpenCL's flags on to `air.wg.barrier` unchanged, as lsum's does, and with them
-//!   reversed into Metal's `mem_flags` through `llvm.bitreverse.i2`, as `mem_fence`'s are.
+//!   each repeat prints how many elements differ and by how much.
+//!
+//! Both pass OpenCL's barrier flags on to `air.wg.barrier` unchanged, as Apple's compiler does:
+//! `CLK_LOCAL_MEM_FENCE` is 1 in OpenCL's encoding, which Metal's `mem_flags` read as
+//! `mem_device`. lsum's `barrier` is the three-operand form the deleted test wrote
+//! ([`BARRIER_THREE_OPERANDS`]), the multiply's the two-operand form Apple's OpenCL compiler
+//! writes ([`BARRIER_TWO_OPERANDS`]).
 //!
 //! The modules are LLVM text written here (`llvm-as`); without it the tests skip visibly.
 
@@ -33,8 +37,8 @@ mod on_device {
     use metal2vulkan_devtools::{llvm_assemble_text, AssembleError};
 
     /// The target, the wrappers of the work-item functions as Apple's OpenCL compiler writes
-    /// them, and the module's versions; each kernel adds its `barrier` ([`BARRIER_PASSED_ON`],
-    /// [`BARRIER_BIT_REVERSED`]).
+    /// them, and the module's versions; each kernel adds its `barrier`
+    /// ([`BARRIER_THREE_OPERANDS`], [`BARRIER_TWO_OPERANDS`]).
     const HEAD: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"
 target triple = \"air64_v29-apple-macosx27.0.0\"
 define internal fastcc i64 @_Z13get_global_idj(i32 %0) #2 {
@@ -61,7 +65,6 @@ declare i32 @air.get_global_id.i32(i32) #3
 declare i32 @air.get_local_id.i32(i32) #3
 declare i32 @air.get_group_id.i32(i32) #3
 declare i32 @air.get_local_size.i32(i32) #3
-declare void @air.wg.barrier(i32, i32, i32) #5
 attributes #0 = { nounwind }
 attributes #1 = { convergent nounwind }
 attributes #2 = { nounwind optsize }
@@ -74,27 +77,26 @@ attributes #5 = { convergent nounwind willreturn }
 !91 = !{!\"Metal\", i32 1, i32 1, i32 0}
 ";
 
-    /// OpenCL C's `barrier(flags)` as the deleted runtime's OpenCL-mode tests wrote Apple's
-    /// compiler's: an internal function passing OpenCL's flags on to `air.wg.barrier` (AIR 2.9:
-    /// flags, `seq_cst`, threadgroup) unchanged, so `CLK_LOCAL_MEM_FENCE` (1) reaches it as
+    /// OpenCL C's `barrier(flags)` as the deleted runtime's OpenCL-mode tests wrote it: an
+    /// internal function passing OpenCL's flags on to `air.wg.barrier` of three operands (flags,
+    /// `seq_cst`, threadgroup) unchanged, so `CLK_LOCAL_MEM_FENCE` (1) reaches it as
     /// `mem_device`.
-    const BARRIER_PASSED_ON: &str = "define internal fastcc void @_Z7barrierj(i32 %0) #4 {
+    const BARRIER_THREE_OPERANDS: &str = "define internal fastcc void @_Z7barrierj(i32 %0) #4 {
   call void @air.wg.barrier(i32 %0, i32 5, i32 1) #5
   ret void
 }
+declare void @air.wg.barrier(i32, i32, i32) #5
 ";
 
-    /// OpenCL C's `barrier(flags)` with OpenCL's flags reversed into Metal's `mem_flags` through
-    /// `llvm.bitreverse.i2`, as Apple's compiler writes `mem_fence(flags)`: `CLK_LOCAL_MEM_FENCE`
-    /// (1) reaches `air.wg.barrier` as `mem_threadgroup` (2).
-    const BARRIER_BIT_REVERSED: &str = "define internal fastcc void @_Z7barrierj(i32 %0) #4 {
-  %2 = trunc i32 %0 to i2
-  %3 = tail call i2 @llvm.bitreverse.i2(i2 %2)
-  %4 = zext i2 %3 to i32
-  call void @air.wg.barrier(i32 %4, i32 5, i32 1) #5
+    /// OpenCL C's `barrier(flags)` as Apple's OpenCL compiler writes it (`llvm-dis` of a kernel
+    /// it compiled): an internal function passing OpenCL's flags on to `air.wg.barrier` of two
+    /// operands (flags, threadgroup) unchanged, so `CLK_LOCAL_MEM_FENCE` (1) reaches it as
+    /// `mem_device`.
+    const BARRIER_TWO_OPERANDS: &str = "define internal fastcc void @_Z7barrierj(i32 %0) #4 {
+  tail call void @air.wg.barrier(i32 %0, i32 1) #5
   ret void
 }
-declare i2 @llvm.bitreverse.i2(i2) #3
+declare void @air.wg.barrier(i32, i32) #5
 ";
 
     /// The node of argument `n`, a buffer at `index` of address space `space` (1 global, 3
@@ -128,7 +130,7 @@ declare i2 @llvm.bitreverse.i2(i2) #3
     /// `__kernel void lsum(__global const float *in, __global float *out, __local float *tmp)`:
     /// `tmp[l] = in[i]`, `barrier(CLK_LOCAL_MEM_FENCE)`, and thread 0 of each group stores the
     /// sum of its group's `tmp` to `out[get_group_id(0)]`; its `barrier` is
-    /// [`BARRIER_PASSED_ON`], as the deleted test wrote it.
+    /// [`BARRIER_THREE_OPERANDS`], as the deleted test wrote it.
     fn lsum() -> String {
         let body = "define void @__entry_lsum(ptr addrspace(1) %0, ptr addrspace(1) %1, ptr addrspace(3) %2) #0 {
 entry:
@@ -173,7 +175,7 @@ done:
             buffer(2, 0, "read_write", 3, "float", "tmp"),
         ];
         format!(
-            "{BARRIER_PASSED_ON}{body}{}",
+            "{BARRIER_THREE_OPERANDS}{body}{}",
             kernel_list("__entry_lsum", &args)
         )
     }
@@ -211,9 +213,8 @@ done:
     /// }
     /// ```
     ///
-    /// `barrier` is the module's `barrier(flags)` ([`BARRIER_PASSED_ON`],
-    /// [`BARRIER_BIT_REVERSED`]).
-    fn tiled_matmul(barrier: &str) -> String {
+    /// Its `barrier` is [`BARRIER_TWO_OPERANDS`], called as Apple's compiler calls it.
+    fn tiled_matmul() -> String {
         let (mut hoisted, mut tile_phis, mut loads) = (String::new(), String::new(), String::new());
         let (mut inner_phis, mut inner, mut exit_phis, mut stores) =
             (String::new(), String::new(), String::new(), String::new());
@@ -293,7 +294,7 @@ entry:
   br i1 %none, label %exit, label %tile
 tile:
   %t = phi i64 [ 0, %entry ], [ %t1, %next ]
-{tile_phis}{loads}  tail call fastcc void @_Z7barrierj(i32 1)
+{tile_phis}{loads}  tail call fastcc void @_Z7barrierj(i32 noundef 1)
   br label %inner
 inner:
   %j = phi i64 [ 0, %tile ], [ %j1, %inner ]
@@ -305,7 +306,7 @@ inner:
   %jend = icmp eq i64 %j1, 32
   br i1 %jend, label %next, label %inner
 next:
-  tail call fastcc void @_Z7barrierj(i32 1)
+  tail call fastcc void @_Z7barrierj(i32 noundef 1)
   %t1 = add i64 %t, 32
   %tmore = icmp ult i64 %t1, %k64
   br i1 %tmore, label %tile, label %exit
@@ -324,7 +325,7 @@ exit:
             buffer(6, 1, "read_write", 3, "float", "bt"),
         ];
         format!(
-            "{barrier}{body}{}",
+            "{BARRIER_TWO_OPERANDS}{body}{}",
             kernel_list("__entry_tiled_matmul", &args)
         )
     }
@@ -489,26 +490,13 @@ exit:
         found
     }
 
-    /// Our tiled matrix multiply, its `barrier` [`BARRIER_PASSED_ON`], computes every element
-    /// of each `c` as the CPU does, on every device ([`multiplies`]).
+    /// Our tiled matrix multiply, through two `__local` tiles of 4096 bytes at threadgroup
+    /// indices 0 and 1, dispatched [`REPEATS`] times over 160 by 3200 threads in threadgroups of
+    /// 32 by 4, computes every element of each `c` as the CPU does, on every device.
     #[test]
     fn every_device_multiplies_matrices_through_two_local_tiles_in_opencl_mode() {
-        multiplies("opencl_local tiled_matmul", BARRIER_PASSED_ON);
-    }
-
-    /// Our tiled matrix multiply, its `barrier` [`BARRIER_BIT_REVERSED`], computes every element
-    /// of each `c` as the CPU does, on every device ([`multiplies`]).
-    #[test]
-    fn every_device_multiplies_matrices_through_tiles_behind_bit_reversed_barrier_flags() {
-        multiplies("opencl_local tiled_matmul reversed", BARRIER_BIT_REVERSED);
-    }
-
-    /// Our tiled matrix multiply with `barrier`, through two `__local` tiles of 4096 bytes at
-    /// threadgroup indices 0 and 1, dispatched [`REPEATS`] times over 160 by 3200 threads in
-    /// threadgroups of 32 by 4, computes every element of each `c` as the CPU does, on every
-    /// device of the cfg's kind; `test` names the run.
-    fn multiplies(test: &str, barrier: &str) {
-        let Some(descriptor) = descriptor(&tiled_matmul(barrier), "__entry_tiled_matmul") else {
+        let test = "opencl_local tiled_matmul";
+        let Some(descriptor) = descriptor(&tiled_matmul(), "__entry_tiled_matmul") else {
             return;
         };
         let a: Vec<f32> = (0..M)
