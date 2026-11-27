@@ -1667,7 +1667,7 @@ pub(crate) mod on_device {
             thread::sleep(Duration::from_nanos(
                 crate::times::CALIBRATION_PERIOD * 3 / 2,
             ));
-            lock(&core.tick_spans).clear();
+            lock(&core.stamped).clear();
             // Each command buffer's GPU start and end, and the host time its completed handler
             // read.
             type Ends = Arc<Mutex<Vec<(u64, u64, u64)>>>;
@@ -1692,7 +1692,10 @@ pub(crate) mod on_device {
                 finished(name, command_buffer);
             }
             let ends = lock(&ends).clone();
-            let spans = lock(&core.tick_spans).clone();
+            let spans: Vec<u64> = (lock(&core.stamped).iter())
+                .filter(|pair| !pair.own)
+                .map(|pair| core.ticks.span(pair.start, pair.end))
+                .collect();
             assert_eq!(
                 (ends.len(), spans.len()),
                 (8, 8),

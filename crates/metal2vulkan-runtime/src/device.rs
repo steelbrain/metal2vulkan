@@ -315,10 +315,11 @@ pub(crate) struct Core {
     /// calibration whose host clock is read that long after its GPU tick.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) calibration_lateness: std::sync::atomic::AtomicU64,
-    /// For the device tests: the span of each command buffer's two timestamps the completion
-    /// thread placed, in the order it placed them ([`Ticks::span`](crate::times::Ticks::span)).
+    /// For the device tests: each pair of timestamps the completion thread read, a Metal command
+    /// buffer's or the runtime's own (an upload's or a copy-in's), in the order it retired them,
+    /// in raw ticks ([`Stamped`](crate::times::Stamped)).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    pub(crate) tick_spans: Mutex<Vec<u64>>,
+    pub(crate) stamped: Mutex<Vec<crate::times::Stamped>>,
     /// For the device tests: where set, the making of the staging region meets the test at
     /// the barrier twice before it allocates, once parked and once released.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -876,7 +877,7 @@ impl Device {
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             calibration_lateness: std::sync::atomic::AtomicU64::new(0),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-            tick_spans: Mutex::default(),
+            stamped: Mutex::default(),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             park_region: Mutex::new(None),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]

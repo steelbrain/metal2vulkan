@@ -3,8 +3,40 @@
 //! `gpu_start_time..gpu_end_time`, as a Mac reports it (an upload sits between a command buffer's
 //! scheduling and its GPU start there).
 
+use crate::times::{Stamped, Ticks};
+
+/// Whether `command_buffer`'s pair starts at or after `copy_in`'s ends, on the GPU's counter and
+/// across its wrap ([`Ticks::nanos`]): equal stamps count as after.
+pub(crate) fn starts_after(ticks: &Ticks, copy_in: Stamped, command_buffer: Stamped) -> bool {
+    ticks.nanos(copy_in.end, command_buffer.start) >= 0.0
+}
+
+/// [`starts_after`] holds for a start after the copy-in's end, at it, and past the counter's wrap,
+/// and fails for a start before it, the case the device test exists to catch.
+#[test]
+fn a_start_before_the_copy_in_s_end_fails_the_ordering() {
+    let ticks = Ticks::new(52.083_332, 36);
+    let top = (1u64 << 36) - 1;
+    let pair = |own, start, end| Stamped { own, start, end };
+    let copy_in = pair(true, 900, 1000);
+    assert!(starts_after(&ticks, copy_in, pair(false, 1053, 1100)));
+    assert!(starts_after(&ticks, copy_in, pair(false, 1000, 1100)));
+    assert!(!starts_after(&ticks, copy_in, pair(false, 999, 1100)));
+    assert!(starts_after(
+        &ticks,
+        pair(true, top - 20, top - 10),
+        pair(false, 5, 9)
+    ));
+    assert!(!starts_after(
+        &ticks,
+        pair(true, 0, 5),
+        pair(false, top - 10, top - 5)
+    ));
+}
+
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 pub(crate) mod on_device {
+    use crate::device::lock;
     use crate::tests::command::on_device::{
         each_device, each_device_in_both_forms, finished, Arena,
     };
@@ -90,9 +122,13 @@ pub(crate) mod on_device {
 
     /// A Managed buffer's copy-in is outside the GPU span of the command buffer it goes ahead of:
     /// a command buffer of one small dispatch over a Managed buffer whose [`NAMED`] bytes were
-    /// named before its commit spans under a quarter of the copy-in's own span
-    /// (`Metrics::runtime_command_buffer_gpu_nanos`). A start written before the copy-in ends
-    /// puts the upload inside it. Only where the Managed buffer has a device copy.
+    /// named before its commit starts, on the GPU's own counter, at or after its copy-in ends
+    /// ([`starts_after`](super::starts_after), over the pairs the completion thread read,
+    /// `Core::stamped`). A start written before the copy-in ends puts the upload inside it. The
+    /// spans' lengths are not compared: beside other work on the GPU a short command buffer's span
+    /// stretches past its copy-in's while its start stays after the copy-in's end. Equal stamps
+    /// pass, as a driver that samples at encoder boundaries gives them (the runtime README's known
+    /// gaps, "Mesa's Apple-GPU driver"). Only where the Managed buffer has a device copy.
     #[test]
     fn every_device_leaves_a_copy_in_out_of_the_gpu_span_it_goes_ahead_of() {
         each_device_in_both_forms("copy-in outside the span", |name, _, device| {
@@ -100,7 +136,7 @@ pub(crate) mod on_device {
                 println!("copy-in outside the span: {name}: unified, no copy-in");
                 return;
             }
-            let counters = device.counters();
+            let core = device.core();
             let cpu = (device.take_block(MemoryClass::Shared, NAMED))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let managed = (new_managed(&device, cpu.id, 0, NAMED, 0))
@@ -111,23 +147,30 @@ pub(crate) mod on_device {
             let warm = long(&queue, &state, &managed, 1, 64);
             warm.commit().expect("a commit");
             finished(name, &warm);
-            let before = counters.metrics().runtime_command_buffer_gpu_nanos;
+            lock(&core.stamped).clear();
             (managed.did_modify_range(0, NAMED)).unwrap_or_else(|error| panic!("{name}: {error}"));
             let short = long(&queue, &state, &managed, 1, 64);
             short.commit().expect("a commit");
             finished(name, &short);
             assert_eq!(short.error(), None, "{name}");
-            let copy = counters.metrics().runtime_command_buffer_gpu_nanos - before;
-            let span = short.gpu_end_time().saturating_sub(short.gpu_start_time());
-            println!(
-                "copy-in outside the span: {name}: copy-in {} us, command buffer {} us",
-                copy / 1000,
-                span / 1000
+            let pairs = lock(&core.stamped).clone();
+            assert_eq!(
+                pairs.iter().map(|pair| pair.own).collect::<Vec<_>>(),
+                [true, false],
+                "{name}: the copy-in's pair, then the command buffer's, both read: {pairs:?}"
             );
-            assert!(copy > 0, "{name}: the copy-in's span");
+            let (copy_in, command_buffer) = (pairs[0], pairs[1]);
+            let after = core.ticks.nanos(copy_in.end, command_buffer.start);
+            println!(
+                "copy-in outside the span: {name}: copy-in {} us, command buffer {} us, its start \
+                 {after} ns after the copy-in's end ({pairs:?})",
+                core.ticks.span(copy_in.start, copy_in.end) / 1000,
+                core.ticks.span(command_buffer.start, command_buffer.end) / 1000,
+            );
             assert!(
-                span.saturating_mul(4) < copy,
-                "{name}: the command buffer's span {span} ns holds its copy-in's {copy} ns"
+                super::starts_after(&core.ticks, copy_in, command_buffer),
+                "{name}: the command buffer starts {} ns before its copy-in ends",
+                -after
             );
             drop((warm, short, managed, queue));
             (device.release_block(cpu)).unwrap_or_else(|error| panic!("{name}: {error}"));

@@ -146,7 +146,7 @@ impl Ticks {
     /// Nanoseconds from timestamp `from` to `to`, negative where `to` is the earlier, within the
     /// valid bits: exact across the counter's wrap for two timestamps less than half its range
     /// apart.
-    fn nanos(&self, from: u64, to: u64) -> f64 {
+    pub(crate) fn nanos(&self, from: u64, to: u64) -> f64 {
         let ahead = to.wrapping_sub(from) & self.mask;
         if ahead <= self.mask / 2 {
             ahead as f64 * self.period
@@ -154,6 +154,18 @@ impl Ticks {
             -((from.wrapping_sub(to) & self.mask) as f64 * self.period)
         }
     }
+}
+
+/// For the tests: one pair of timestamps the completion thread read as it retired their command
+/// buffer, in the GPU's raw ticks ([`Ticks`]).
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Stamped {
+    /// Whether the pair is the runtime's own command buffer's (an upload or a Managed buffer's
+    /// copy-in) rather than a Metal command buffer's.
+    pub(crate) own: bool,
+    pub(crate) start: u64,
+    pub(crate) end: u64,
 }
 
 /// One reading of the GPU's clock and the host's together (`vkGetCalibratedTimestampsEXT`): the

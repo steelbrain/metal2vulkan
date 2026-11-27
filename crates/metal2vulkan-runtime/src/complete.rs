@@ -755,7 +755,8 @@ pub(crate) fn run(core: Arc<Core>) {
             for (retiree, stamps) in retire.into_iter().zip(stamps) {
                 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
                 if let Some((start, end)) = stamps {
-                    lock(&core.tick_spans).push(core.ticks.span(start, end));
+                    let own = false;
+                    lock(&core.stamped).push(times::Stamped { own, start, end });
                 }
                 if let Some((start, end)) = stamps {
                     // Retirees come in submission order: the first of a held group's command
@@ -793,6 +794,14 @@ pub(crate) fn run(core: Arc<Core>) {
                 // Its GPU span joins those the later ones' spans lie under: a command buffer's as
                 // placed, an upload's or a copy-in's by the calibration as it stands.
                 let own = retiree.retire(&core, completion);
+                #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+                if let Some((start, end)) = own {
+                    lock(&core.stamped).push(times::Stamped {
+                        own: true,
+                        start,
+                        end,
+                    });
+                }
                 let own = own
                     .zip(calibration.as_ref())
                     .map(|((start, end), calibration)| {
