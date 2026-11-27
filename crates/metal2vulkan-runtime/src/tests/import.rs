@@ -113,6 +113,34 @@ fn a_dma_buf_is_refused_where_the_shared_type_is_not_host_coherent() {
     // The pointer's offer of type 0 is taken.
     assert_eq!(host_type(0b01, listed, coherent), Some(0));
 
+    // The five types an i915 Meteor Lake device lists in a user's report (a protected type and two
+    // repeats besides the two above): the Shared type is still the cached type without coherence,
+    // so the same rule refuses the import.
+    let reported = memory(&[
+        local | coherent_type,
+        local | F::HOST_VISIBLE | F::HOST_CACHED,
+        local | F::PROTECTED,
+        local | coherent_type,
+        local | F::HOST_VISIBLE | F::HOST_CACHED,
+    ]);
+    let types = choose(&reported, u32::MAX).expect("the reported types");
+    assert_eq!(types.shared, 1);
+    let held = Coherence::of(&reported, types, 64).is_some();
+    assert!(
+        held,
+        "a coherence state for the reported list's Shared type"
+    );
+    let coherent = coherent_bits(&reported);
+    assert_eq!(coherent, 0b01001);
+    for handle in [ImportHandle::DmaBuf, ImportHandle::DmaBufs] {
+        for offered in [0b00001, 0b00010, 0b01000, 0b11011] {
+            assert_eq!(
+                dma_buf_type(handle, !held, offered, 0b11011, coherent),
+                Err(Limit::ImportCoherence { handle }),
+                "{handle:?}, offered {offered:#x}"
+            );
+        }
+    }
     let iris = memory(&[
         local,
         local | coherent_type,
