@@ -36,6 +36,11 @@
 //     has compare 8 (never) and the LOD clamp 0 to 65504.
 //   - Images: a sample through a sampler has access 0, a read without one (through
 //     `air.get_read_sampler`) access 1, a write access 2.
+//   - The kernels ocl_write, ocl_atomics and ocl_sampler (job m3-max-76861): the runtime's tests
+//     opencl_shapes write their modules after these. A __local atomic_cmpxchg is
+//     `air.atomic.local.cmpxchg.weak.i32` of orders 0 and 0 and scope 1, through an `alloca` of
+//     its expected value, as the __global one with scope 2; a read through a sampler with
+//     integer coordinates converts them with `air.convert.f.v2f32.s.v2i32` and samples.
 #define CL_SILENCE_DEPRECATION
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
