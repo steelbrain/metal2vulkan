@@ -3198,7 +3198,8 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   render content's line-class pipeline), `first_use_point_waits` (its point-class pipeline),
   `first_use_raster_waits` (its pipeline under the depth clip mode `Clamp` or the triangle fill
   mode `Lines`) and `first_use_unfinished_waits` (a state's main pipeline, compute or render,
-  before its `finish_pipeline` made it).
+  before its `finish_pipeline` made it, and the pipeline of a render state drawn without the
+  colours its pass lacks, which no `finish_pipeline` makes).
   No dispatch lowers a function. `Counters::variant_makes(from)` answers the kept makes of
   kernels' `VkPipeline`s numbered `from` or later, the last 256 to end on the device, each a
   `VariantMake`: its key (the `DispatchVariant` its dispatches answer), who started it
@@ -4706,6 +4707,25 @@ cache is answered compile-required on both.
   indices past the buffer (`Refusal::IndexBufferOffset`), a viewport field NaN or infinite but its
   origin's x (`Refusal::ViewportNotFinite`), and a stencil test in a pass without a stencil
   attachment (`Refusal::StencilAttachment`).
+- A pipeline state that names colours past its pass's last colour attachment, its colour formats
+  up to that attachment, its depth and stencil formats and its raster sample count all the pass's,
+  which Metal's validation stops ("For color attachment 1, the renderPipelineState pixelFormat
+  must be MTLPixelFormatInvalid, as no texture is set."), is drawn, as plain Metal draws it
+  (`pass-pipeline-color-unattached`, an Apple M3 Max under macOS 27.0.1, job m3-max-75903):
+  `set_render_pipeline_state` binds the state of its descriptor without those colours, whose
+  fragment function stores them nowhere. The first such set makes that state's content, which the
+  device's map of contents keeps as any content, and its first draw makes its `VkPipeline`, a
+  first-use wait (`first_use_unfinished_waits`): about 3.3 ms once per state and pass shape on an
+  RTX 5080 Laptop card, from a proxy (a state of the same functions with colour 0 alone; jobs
+  m3-max-75918 and m3-max-75925). Each later such set keys that descriptor and looks its content
+  up: about 14,500 user-space instructions on lavapipe, where a set of a state that renders into
+  its pass is 140 and takes neither, nor do its draws (job m3-max-75974). Every render state keeps
+  its descriptor, and through it its functions' libraries, while it lives: in states-only plays of
+  two recorded replay streams on lavapipe, that kept no library alive that was not alive without it
+  (jobs m3-max-75968 and m3-max-75969). A state that names a colour its pass leaves unset between
+  two colour attachments stays refused (`DrawKind::AttachmentFormats`): there plain Metal writes
+  that colour's value into the next attachment (`pass-pipeline-color-unattached-between`, job
+  m3-max-75934).
 
 ### Known gaps of render encoders
 
@@ -4739,7 +4759,8 @@ cache is answered compile-required on both.
   the floor does not require; a
   viewport Vulkan's is not (a
   negative width, a depth range past `[0, 1]`, bounds past the device's viewport limits), a
-  pipeline state whose formats are not the pass's attachments', a draw that binds a texture
+  pipeline state whose formats are not the pass's attachments' (but for colours past the pass's
+  last colour attachment, above), a draw that binds a texture
   whose image the pass renders, where neither the feedback loop nor a copy reads it: on a device
   without the attachment reads, from the vertex function at the rendered level and layer, written, of a
   depth or stencil attachment, of an image over a buffer in place or whose format the device
