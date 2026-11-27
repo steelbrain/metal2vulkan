@@ -2629,7 +2629,10 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   retires only once a host wait has seen its submission's progress value: with one value pending
   the completion thread asks only that wait, and with more, where the semaphore's counter read
   runs ahead of the wait, `Metrics::waits_behind_counter` counts the round, and nothing retires
-  until the wait agrees. The device tests, the harness and the replay player
+  until the wait agrees. An event's value the host sees that a GPU signal raised
+  (`SharedEvent::signaled_value`, `wait_until_signaled_value`, a listener's value) is likewise
+  one a wait with a timeout of 0 confirmed, after the counter read found it; a read at or below
+  the value last confirmed asks for no wait. The device tests, the harness and the replay player
   report both counts. Vulkan states no most queries a pool may hold or most pools a device may
   make; the runtime's 4,096 a pool is the smallest met: Mesa's Apple-GPU driver makes each pool a
   Metal counter heap, of at most 4,096 entries and at most 32 live in a process, so there at most

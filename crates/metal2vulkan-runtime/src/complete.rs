@@ -229,6 +229,14 @@ impl Done {
         *lock(&self.step) = step;
     }
 
+    /// For the device tests: the values of the completion thread's GPU wait, where it waits on the
+    /// GPU (the progress semaphore's first, then the watched events', the wake semaphore's last).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn gpu_wait(&self) -> Option<Vec<u64>> {
+        let state = self.lock();
+        matches!(state.waiting, Waiting::Gpu { .. }).then(|| state.waits_for.clone())
+    }
+
     /// For the device tests: what the completion side holds, read at once, for a wait that timed
     /// out. The command buffers in flight (submitted and not retired) among its retirees; the
     /// oldest retiree's progress value, the progress semaphore's counter, and whether a wait of
@@ -719,7 +727,11 @@ pub(crate) fn run(core: Arc<Core>) {
             let mut index = 0;
             while index < state.watched.len() {
                 let event = &state.watched[index];
-                if event.observe(event.counter().ok(), &mut fire) {
+                // Only a value a host wait confirmed is the event's (`EventInner::reached`); a
+                // value read that none confirmed leaves the event watched, and the round's GPU
+                // wait below blocks on its next pending value.
+                let reached = event.reached(event.next_pending()).ok();
+                if event.observe(reached, &mut fire) {
                     index += 1;
                 } else {
                     state.watched.swap_remove(index);
@@ -898,6 +910,8 @@ pub(crate) fn run(core: Arc<Core>) {
         // SAFETY: every semaphore is a timeline semaphore of the device, live while the state
         // holds its event or the core lives.
         let result = unsafe { device.wait_semaphores(&wait, u64::MAX) };
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        core.counters.event_read(crate::counters::event_step::WAKE);
         state = done.lock();
         state.waiting = Waiting::Not;
         match result {

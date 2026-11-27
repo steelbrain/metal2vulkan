@@ -714,6 +714,33 @@ pub struct Counters {
     atomics: Arc<Atomics>,
 }
 
+/// An event's value reads (`EventInner::reached`) and the completion thread's wake-ups, for the
+/// tests ([`Counters::event_reads`]).
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct EventReads {
+    /// Counter reads.
+    pub(crate) reads: u64,
+    /// Host waits with a timeout of 0 that a read above the value confirmed asked for.
+    pub(crate) waits: u64,
+    /// Reads whose value no wait confirmed.
+    pub(crate) not_yet: u64,
+    /// Of those, the completion thread's.
+    pub(crate) not_yet_completing: u64,
+    /// The completion thread's returns from its GPU wait.
+    pub(crate) wakes: u64,
+}
+
+/// [`EventReads`]' steps, as [`Counters::event_read`] takes them.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) mod event_step {
+    pub(crate) const READ: usize = 0;
+    pub(crate) const WAIT: usize = 1;
+    pub(crate) const NOT_YET: usize = 2;
+    pub(crate) const NOT_YET_COMPLETING: usize = 3;
+    pub(crate) const WAKE: usize = 4;
+}
+
 #[derive(Default)]
 struct Atomics {
     /// [`Gauges::threads`]: each slot a running thread's id, 0 where none holds it.
@@ -988,6 +1015,11 @@ struct Atomics {
     /// Segment ends whose barrier reaches the host, for the tests.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     host_reaches: AtomicU64,
+    /// An event's value reads (`EventInner::reached`), for the tests: its counter reads, the host
+    /// waits they made, the waits that did not confirm a value read ("not yet"), those of them on
+    /// the completion thread, and the completion thread's returns from its GPU wait.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    event_reads: [AtomicU64; 5],
     /// Barriers that ended a blit of an image, and the global memory barriers they held, for the
     /// tests.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -1731,6 +1763,26 @@ impl Counters {
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn host_reaches(&self) -> u64 {
         self.atomics.host_reaches.load(Relaxed)
+    }
+
+    /// One more of an event's value reads' steps, [`EventReads`]'s field `step` in its order.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn event_read(&self, step: usize) {
+        self.atomics.event_reads[step].fetch_add(1, Relaxed);
+    }
+
+    /// The event value reads' steps so far.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn event_reads(&self) -> EventReads {
+        let [reads, waits, not_yet, not_yet_completing, wakes] =
+            (self.atomics.event_reads.each_ref()).map(|n| n.load(Relaxed));
+        EventReads {
+            reads,
+            waits,
+            not_yet,
+            not_yet_completing,
+            wakes,
+        }
     }
 
     /// The calibrations made.

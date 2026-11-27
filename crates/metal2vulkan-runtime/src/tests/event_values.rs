@@ -2,8 +2,10 @@
 //! the highest value known is left out, whichever queue it is on; the host's value of a shared
 //! event reads at once below a GPU signal still pending and never signals the semaphore, and a
 //! host value above a pending GPU signal stays the event's value once that signal lands; the
-//! largest value is kept; and a shared event's listeners run on one thread, not the posting one,
-//! in the order posted.
+//! largest value is kept; a value the host sees is one a host wait confirmed, a steady value
+//! asking for no wait and the completion thread waiting on the GPU, not spinning, for a value
+//! still to come; and a shared event's listeners run on one thread, not the posting one, in the
+//! order posted.
 //!
 //! The GPU signals stay pending while the test reads the values: a [`Busy`] gate submitted ahead
 //! of them holds every later command of the device's one `VkQueue` until the test opens it.
@@ -46,9 +48,10 @@ fn pending(event: &Event) -> Vec<u64> {
     lock(&event.inner().state).pending.iter().copied().collect()
 }
 
-/// The value of `event`'s semaphore: an `MTLEvent`'s value, which no host call sets.
+/// The value of `event`'s semaphore a host wait confirmed: an `MTLEvent`'s value, which no host
+/// call sets.
 fn counter(event: &Event) -> u64 {
-    event.inner().counter().expect("the semaphore's value")
+    (event.inner().reached(None)).expect("the semaphore's value")
 }
 
 /// The holds for an event's value the submit thread made, of every length.
@@ -195,6 +198,75 @@ fn the_largest_value_is_kept() {
         assert_eq!(event.signaled_value(), u64::MAX, "{name}");
         assert_eq!(counter(event.as_event()), u64::MAX, "{name}");
         drop((first, second, queue, event, device));
+    });
+}
+
+/// A value the host sees that a GPU signal raised is one a host wait confirmed: the counter read
+/// finds it and a wait with a timeout of 0 confirms it (`EventInner::reached`). On a steady event,
+/// a value read at or below the one confirmed asks for no wait: 1,000 reads of a value the GPU
+/// reached make at most one wait. With a signal pending behind the [`Busy`] gate, the event is
+/// watched and the completion thread waits on the GPU for it: over 200 ms it does not return from
+/// that wait, and a read none confirmed there ("not yet") leaves it waiting, not spinning. The
+/// counts are printed.
+#[test]
+fn a_value_the_host_sees_is_one_a_host_wait_confirmed() {
+    each_device("event_confirmed_reads", |name, _, device| {
+        let event = shared_event(&device);
+        let queue = queue(&device);
+        let counters = device.counters();
+        let first = signal(name, &device, &queue, event.as_event(), 5);
+        finished(name, &first);
+        assert!(
+            (event.wait_until_signaled_value(5, PATIENCE)).expect("a wait outside a handler"),
+            "{name}"
+        );
+        // A steady event: every read finds the value confirmed.
+        let before = counters.event_reads();
+        for _ in 0..1000 {
+            assert_eq!(event.signaled_value(), 5, "{name}");
+        }
+        let steady = counters.event_reads();
+        let (reads, waits) = (steady.reads - before.reads, steady.waits - before.waits);
+        println!("{name}: a steady event: {reads} reads, {waits} waits");
+        assert!(reads >= 1000, "{name}: {reads} reads");
+        assert!(
+            waits <= 1,
+            "{name}: {waits} waits for 1,000 reads of a steady value"
+        );
+        // A signal pending: the completion thread waits on the GPU for it.
+        let busy = Busy::new(&device);
+        // A value no progress value of the device's reaches, so the GPU wait's values name it
+        // alone.
+        let later = 1 << 40;
+        let second = signal(name, &device, &queue, event.as_event(), later);
+        assert_eq!(pending(event.as_event()), [later], "{name}");
+        within(name, || {
+            (device.core().done.gpu_wait()).is_some_and(|values| values.contains(&later))
+        });
+        let idle = counters.event_reads();
+        std::thread::sleep(Duration::from_millis(200));
+        let after = counters.event_reads();
+        println!(
+            "{name}: a pending signal, 200 ms: {} wake-ups of the completion thread, {} not yet \
+             on it ({} in all); since the device opened {:?}",
+            after.wakes - idle.wakes,
+            after.not_yet_completing - idle.not_yet_completing,
+            after.not_yet - idle.not_yet,
+            after
+        );
+        assert_eq!(
+            after.wakes, idle.wakes,
+            "{name}: the completion thread returned from its GPU wait with nothing reached"
+        );
+        assert_eq!(event.signaled_value(), 5, "{name}: the GPU held");
+        busy.open();
+        finished(name, &second);
+        assert!(
+            (event.wait_until_signaled_value(later, PATIENCE)).expect("a wait outside a handler"),
+            "{name}"
+        );
+        assert_eq!(event.signaled_value(), later, "{name}");
+        drop((first, second, busy, queue, event, device));
     });
 }
 

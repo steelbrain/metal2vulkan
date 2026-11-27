@@ -46,6 +46,8 @@ pub(crate) struct EventInner {
     /// in flight may write was settled for the host (`crate::coherence`); 0, and never read, where
     /// the Shared type is host-coherent.
     settled: AtomicU64,
+    /// The highest value of the semaphore a host wait confirmed ([`EventInner::reached`]).
+    confirmed: AtomicU64,
 }
 
 pub(crate) struct EventState {
@@ -87,6 +89,7 @@ impl Device {
                 }),
                 changed: Condvar::new(),
                 settled: AtomicU64::new(0),
+                confirmed: AtomicU64::new(0),
             }),
             device: self.clone(),
         })
@@ -138,7 +141,9 @@ impl Event {
 }
 
 impl SharedEvent {
-    /// `signaledValue`: the higher of the semaphore's value and the host's floor. Where the
+    /// `signaledValue`: the higher of the semaphore's value and the host's floor, the semaphore's
+    /// value being one a host wait confirmed: a counter read finds it, and a wait with a timeout
+    /// of 0 confirms it where it is above the value last confirmed. Where the
     /// semaphore's value rose since the host last saw it, the Shared memory command buffers in
     /// flight may write is flushed and invalidated first (`crate::coherence`), so the host reads
     /// what the GPU wrote before its signal.
@@ -148,7 +153,9 @@ impl SharedEvent {
             let state = lock(&inner.state);
             let floor = state.observed.max(state.floor);
             // A lost device answers with what was seen before the loss.
-            return inner.counter().map_or(floor, |counter| counter.max(floor));
+            return inner
+                .reached(None)
+                .map_or(floor, |reached| reached.max(floor));
         };
         let (observed, floor) = {
             let state = lock(&inner.state);
@@ -156,8 +163,8 @@ impl SharedEvent {
         };
         // A lost device answers with what was seen before the loss.
         let signalled = inner
-            .counter()
-            .map_or(observed, |counter| counter.max(observed));
+            .reached(None)
+            .map_or(observed, |reached| reached.max(observed));
         inner.seen(coherence, signalled);
         signalled.max(floor)
     }
@@ -203,7 +210,9 @@ impl SharedEvent {
             match &inner.core.coherence {
                 None => {
                     if state.floor.max(state.observed) >= value
-                        || inner.counter().is_ok_and(|counter| counter >= value)
+                        || inner
+                            .reached(Some(value))
+                            .is_ok_and(|reached| reached >= value)
                     {
                         return Ok(true);
                     }
@@ -213,9 +222,9 @@ impl SharedEvent {
                     // writes before it are the host's first.
                     let met = match state.floor.max(state.observed) >= value {
                         true => Some(state.observed),
-                        false => (inner.counter().ok())
-                            .filter(|&counter| counter >= value)
-                            .map(|counter| counter.max(state.observed)),
+                        false => (inner.reached(Some(value)).ok())
+                            .filter(|&reached| reached >= value)
+                            .map(|reached| reached.max(state.observed)),
                     };
                     if let Some(signalled) = met {
                         drop(state);
@@ -300,8 +309,53 @@ impl EventInner {
         }
     }
 
-    /// The semaphore's value now.
-    pub(crate) fn counter(&self) -> Result<u64, Error> {
+    /// The semaphore's value a host wait confirmed, which a value the host sees that a GPU signal
+    /// raised never passes: a counter read finds the value, and a wait on it with a timeout of 0
+    /// (`complete::reached_by_wait`) confirms it (the completion thread's module doc). A value
+    /// read at or below the highest one confirmed asks for no wait. Where the wait does not
+    /// confirm the value read, `lower` is waited for instead where it lies between the two, and
+    /// otherwise the highest value confirmed stands.
+    ///
+    /// Err: [`Error::Vulkan`] where the read or a wait fails.
+    pub(crate) fn reached(&self, lower: Option<u64>) -> Result<u64, Error> {
+        let confirmed = self.confirmed.load(Ordering::Acquire);
+        let read = self.counter()?;
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        self.core
+            .counters
+            .event_read(crate::counters::event_step::READ);
+        if read <= confirmed {
+            return Ok(confirmed);
+        }
+        let lower = lower.filter(|&lower| confirmed < lower && lower < read);
+        for value in std::iter::once(read).chain(lower) {
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            self.core
+                .counters
+                .event_read(crate::counters::event_step::WAIT);
+            let by = crate::complete::reached_by_wait(&self.core.device, self.semaphore, value)
+                .map_err(|loss| Error::Vulkan {
+                    call: loss.call,
+                    result: loss.result,
+                })?;
+            if by {
+                return Ok(self.confirmed.fetch_max(value, Ordering::AcqRel).max(value));
+            }
+        }
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        {
+            use crate::counters::event_step::{NOT_YET, NOT_YET_COMPLETING};
+            self.core.counters.event_read(NOT_YET);
+            if crate::device::on_completion_thread(&self.core) {
+                self.core.counters.event_read(NOT_YET_COMPLETING);
+            }
+        }
+        Ok(confirmed)
+    }
+
+    /// The semaphore's value now, as a counter read finds it: no host operation is ordered after
+    /// the signal that raised it ([`reached`](Self::reached) is).
+    fn counter(&self) -> Result<u64, Error> {
         // SAFETY: the semaphore is a timeline semaphore of the device, live while `self` is.
         unsafe { self.core.device.get_semaphore_counter_value(self.semaphore) }
             .map_err(Error::vulkan("vkGetSemaphoreCounterValue"))
