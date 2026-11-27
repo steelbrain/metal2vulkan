@@ -395,8 +395,9 @@ pub(crate) struct Segment {
     /// before it (`crate::over::ManagedOvers`).
     pub(crate) managed_reached: Vec<Arc<BufferInner>>,
     /// The images of the Direct3D 11 planes its commands use (`Device::import_d3d11_surface`, on
-    /// Windows): its submission acquires them from `VK_QUEUE_FAMILY_EXTERNAL` at its start and
-    /// releases them to it at its end (`crate::submit`).
+    /// Windows): the `vkQueueSubmit2` that carries it acquires them from
+    /// `VK_QUEUE_FAMILY_EXTERNAL` at its start and releases them to it at its end, before its
+    /// signals (`crate::submit::parts`).
     pub(crate) planes: Vec<Arc<Image>>,
     /// The checks at its head and its writes of heap placements with links (`crate::alias`),
     /// where it has any: staged, a command buffer of moves leads it where the checks find one
@@ -1627,7 +1628,7 @@ impl Building {
 
     /// Keeps `texture` until the command buffer retires, as Metal's command buffer retains every
     /// object its encoders bind: each object once, a view apart from its parent. A Direct3D 11
-    /// plane's image is kept by the current segment too, whose submission hands it over
+    /// plane's image is kept by the current segment too, whose `vkQueueSubmit2` hands it over
     /// ([`Segment::planes`]).
     pub(crate) fn keep_texture(&mut self, texture: &Texture) {
         if self.gpu.kept.textures.hold(texture) {

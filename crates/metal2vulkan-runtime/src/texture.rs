@@ -739,8 +739,8 @@ impl Zeroing {
 
 impl Image {
     /// Adds the image to `planes` where it is a Direct3D 11 texture's plane
-    /// (`Device::import_d3d11_surface`, on Windows) not yet there: each submission that reaches
-    /// such an image hands it over at its start and its end ([`handed`](Self::handed)).
+    /// (`Device::import_d3d11_surface`, on Windows) not yet there: each `vkQueueSubmit2` that
+    /// reaches such an image hands it over at its start and its end ([`handed`](Self::handed)).
     pub(crate) fn keep_plane(self: &Arc<Image>, planes: &mut Vec<Arc<Image>>) {
         let plane = matches!(self._under, Some(Under::Surface { d3d11: true, .. }));
         if plane && !planes.iter().any(|kept| Arc::ptr_eq(kept, self)) {

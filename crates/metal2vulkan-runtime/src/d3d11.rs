@@ -4,8 +4,9 @@
 //!
 //! The import makes no submission and waits for nothing: Vulkan takes such an image as already
 //! in the general layout once Direct3D 11 has accessed it (section 12.5.2, below), so no move out
-//! of the undefined layout comes before its first use. Each submission that uses a plane takes it
-//! from `VK_QUEUE_FAMILY_EXTERNAL` at its start and gives it back at its end (`crate::submit`).
+//! of the undefined layout comes before its first use. Each `vkQueueSubmit2` that uses a plane
+//! takes it from `VK_QUEUE_FAMILY_EXTERNAL` at its start and gives it back at its end, before its
+//! signals (`crate::submit::parts`).
 
 use crate::counters::Gauge;
 use crate::device::{Core, Device};
@@ -114,14 +115,18 @@ impl Device {
     /// when they are accessed in Vulkan after external access", and its Table 17 gives
     /// `VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT` the layout `VK_IMAGE_LAYOUT_GENERAL`.
     ///
-    /// **Ownership.** Each submission whose command buffers or uploads use a plane acquires it
-    /// from `VK_QUEUE_FAMILY_EXTERNAL` in a command buffer of rt's own ahead of everything, from
-    /// and to the general layout (`VUID-VkImageMemoryBarrier-srcQueueFamilyIndex-12332`), and
-    /// releases it to that family in another after everything, in the general layout
-    /// (`...-dstQueueFamilyIndex-12331`), which takes the submission's last signals, so it adds
-    /// no submit info: Direct3D 11 owns the planes' memory between rt's submissions, each counted
-    /// in [`Metrics::d3d11_plane_submissions`](crate::Metrics::d3d11_plane_submissions). The
-    /// acquire follows a global barrier from and to every stage, so an earlier submission's
+    /// **Ownership.** Each `vkQueueSubmit2` whose command buffers or uploads use a plane acquires
+    /// it from `VK_QUEUE_FAMILY_EXTERNAL` in a command buffer of rt's own ahead of everything in
+    /// it, from and to the general layout (`VUID-VkImageMemoryBarrier-srcQueueFamilyIndex-12332`),
+    /// and releases it to that family in another after everything in it, in the general layout
+    /// (`...-dstQueueFamilyIndex-12331`), which takes that call's last signals, its progress value
+    /// among them, so it adds no submit info and a command buffer that uses a plane is seen
+    /// complete only once the plane's release has run: Direct3D 11 owns the planes' memory
+    /// between rt's submissions, each counted in
+    /// [`Metrics::d3d11_plane_submissions`](crate::Metrics::d3d11_plane_submissions). A group of
+    /// command buffers rt sends member by member, one `vkQueueSubmit2` a member, hands each
+    /// member's planes over in that member's call
+    /// ([`Metrics::d3d11_plane_parts`](crate::Metrics::d3d11_plane_parts)). The acquire follows a global barrier from and to every stage, so an earlier submission's
     /// release on rt's one queue happens before it (Vulkan 1.4, section 7.7.6).
     /// [`Surface::external_writes_done`] and
     /// [`release_surface_to_external`](crate::BlitCommandEncoder::release_surface_to_external)

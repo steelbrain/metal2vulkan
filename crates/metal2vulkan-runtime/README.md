@@ -1055,15 +1055,20 @@ created with external memory handle types listed in the external image implied l
 accessed outside of Vulkan, they must be in the layout specified in the table, and can be assumed
 to be in that layout when they are accessed in Vulkan after external access", and the table's row
 for `VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT` is `VK_IMAGE_LAYOUT_GENERAL`. Each
-submission whose command buffers or uploads use a plane acquires it from
-`VK_QUEUE_FAMILY_EXTERNAL` in a command buffer of rt's own ahead of everything, and releases it
-to that family in another after everything, both in the general layout: one barrier each, counted
-in `Metrics::external_acquires` and `Metrics::external_releases`. The acquire follows a global
-barrier from and to every stage, so an earlier submission's release on rt's one queue happens
-before it (Vulkan 1.4, section 7.7.6). The submission counts in
+`vkQueueSubmit2` whose command buffers or uploads use a plane acquires it from
+`VK_QUEUE_FAMILY_EXTERNAL` in a command buffer of rt's own ahead of everything in it, and releases
+it to that family in another after everything in it, both in the general layout: one barrier
+each, counted in `Metrics::external_acquires` and `Metrics::external_releases`. The acquire
+follows a global barrier from and to every stage, so an earlier submission's release on rt's one
+queue happens before it (Vulkan 1.4, section 7.7.6). The call counts in
 `Metrics::d3d11_plane_submissions` and the two command buffers in
-`Metrics::runtime_command_buffers`. The release takes the submission's last signals, so it adds
-no `VkSubmitInfo2`, and no submission or semaphore wait is added. Direct3D 11 thus owns the
+`Metrics::runtime_command_buffers`. The release takes the call's last signals, its progress value
+among them, so it adds no `VkSubmitInfo2`, no submission or semaphore wait is added, and a command
+buffer that uses a plane is seen complete only once the plane's release has run. A group of
+command buffers rt sends member by member, one `vkQueueSubmit2` a member, each signalling its own
+progress value, hands each member's planes over in that member's call, so a member ahead of the
+last is seen complete after its own planes' release and not before it; each such call counts in
+`Metrics::d3d11_plane_parts` too. Direct3D 11 thus owns the
 planes' memory between rt's submissions, and `Surface::external_writes_done()` and
 `BlitCommandEncoder::release_surface_to_external(&surface)` record nothing for such a surface. So
 the consumer's precondition is that Direct3D 11's work that accesses a plane has completed before

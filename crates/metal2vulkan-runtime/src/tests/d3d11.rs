@@ -559,8 +559,10 @@ mod on_device {
         /// one `vkQueueSubmit2` a member and none more: A and B each acquire the planes at their
         /// part's head and release them at its end, two of each; A and F acquire and release
         /// once, in A's part, so A, seen complete at its own part's value, is seen complete after
-        /// the planes' release. Every read is picture 1's exactly. The order within each part is
-        /// the part builder's (`plane_parts`).
+        /// the planes' release. Each such call of a group sent apart counts in
+        /// `Metrics::d3d11_plane_parts`, two and one, and the group sent as one part counts none
+        /// there. Every read is picture 1's exactly. The order within each part is the part
+        /// builder's (`plane_parts`).
         #[test]
         fn every_device_hands_direct3d_11_planes_over_in_each_part_of_a_group_sent_apart() {
             each_device("import_d3d11_surface_apart", |name, _, device| {
@@ -577,13 +579,14 @@ mod on_device {
                 let ahead = IN_FLIGHT as u64;
                 let counters = device.counters();
                 // Each case: its name, whether the second member reads the planes, whether the
-                // group goes member by member, and the hand-overs and submissions it makes.
+                // group goes member by member, and the hand-overs, submissions and hand-overs of
+                // parts sent apart it makes.
                 let cases = [
-                    ("A and B as one part", true, false, 1, 1),
-                    ("A and B apart", true, true, 2, 2),
-                    ("A and F apart", false, true, 1, 2),
+                    ("A and B as one part", true, false, 1, 1, 0),
+                    ("A and B apart", true, true, 2, 2, 2),
+                    ("A and F apart", false, true, 1, 2, 1),
                 ];
-                for (case, reads, apart, hands, parts) in cases {
+                for (case, reads, apart, hands, parts, part_hands) in cases {
                     let outs = [picture_buffer(&device), picture_buffer(&device)];
                     let from = picture_buffer(&device);
                     let queue = device.new_command_queue(64).expect("a queue");
@@ -629,9 +632,11 @@ mod on_device {
                             metrics.external_releases - before.external_releases,
                         ];
                         let group = sent() - ahead;
+                        let part_handed = metrics.d3d11_plane_parts - before.d3d11_plane_parts;
                         println!(
                             "d3d11-apart: {name}: {case}: the group's vkQueueSubmit2 calls {group}; \
-                             plane-keeping submissions, acquires, releases {handed:?}"
+                             plane-keeping submissions, acquires, releases {handed:?}; \
+                             d3d11_plane_parts {part_handed}"
                         );
                         assert_eq!(
                             compare(&one, &got[0]).0,
@@ -656,6 +661,10 @@ mod on_device {
                         assert_eq!(
                             group, parts,
                             "{name}: {case}: one vkQueueSubmit2 a part, and no more"
+                        );
+                        assert_eq!(
+                            part_handed, part_hands,
+                            "{name}: {case}: the parts of a group sent apart that hand planes over"
                         );
                     });
                 }

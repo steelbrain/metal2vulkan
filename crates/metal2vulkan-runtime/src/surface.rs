@@ -1649,8 +1649,8 @@ impl Surface {
     /// [`Metrics::external_acquires`](crate::Metrics::external_acquires). In the copy form it is
     /// the block's acquire, and the submissions copy the bytes into the planes' images. The
     /// contract is the block's. For a Direct3D 11 import (`Device::import_d3d11_surface`, on
-    /// Windows) the call records nothing: each submission that uses its planes acquires them
-    /// itself ([`Metrics::d3d11_plane_submissions`](crate::Metrics::d3d11_plane_submissions)).
+    /// Windows) the call records nothing: each `vkQueueSubmit2` that uses its planes acquires
+    /// them itself ([`Metrics::d3d11_plane_submissions`](crate::Metrics::d3d11_plane_submissions)).
     ///
     /// Err: [`Refusal::InScheduledHandler`] in a scheduled handler; [`Error::Quiesced`]; and
     /// [`Error::Vulkan`] where the upload's command buffer cannot be made.
@@ -1658,7 +1658,7 @@ impl Surface {
         if let Kind::Copy(block, _) = &self.kind {
             return block.external_writes_done();
         }
-        // Each submission that uses a Direct3D 11 import's planes acquires them itself.
+        // Each `vkQueueSubmit2` that uses a Direct3D 11 import's planes acquires them itself.
         if self.handle.is_none() {
             return Ok(());
         }

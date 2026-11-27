@@ -1256,8 +1256,8 @@ impl BlitCommandEncoder {
     /// the consumer's next write into the surface through the runtime or the next
     /// [`Surface::external_writes_done`](crate::Surface::external_writes_done), the consumer
     /// encodes no read of its planes. For a Direct3D 11 import (`Device::import_d3d11_surface`,
-    /// on Windows) the call records nothing: each submission that uses its planes releases them
-    /// itself
+    /// on Windows) the call records nothing: each `vkQueueSubmit2` that uses its planes releases
+    /// them itself, after its last command and before its signals
     /// ([`Metrics::d3d11_plane_submissions`](crate::Metrics::d3d11_plane_submissions)).
     ///
     /// Err: [`Refusal::OtherDevice`] for another device's surface; [`Error::Vulkan`] where the
@@ -1270,7 +1270,7 @@ impl BlitCommandEncoder {
         if !surface.is_of(core) {
             return Err(Error::Refused(Refusal::OtherDevice));
         }
-        // Each submission that uses a Direct3D 11 import's planes releases them itself.
+        // Each `vkQueueSubmit2` that uses a Direct3D 11 import's planes releases them itself.
         if surface.handle().is_none() {
             return Ok(());
         }
