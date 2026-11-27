@@ -858,6 +858,10 @@ engine/fbl_fetch_dual.air.ll	fbd_dual_float	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	
 engine/fbl_fetch_dual.ll	fbd_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/fbl_fetch_dual.ll	fbd_dual_half	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/fbl_fetch_dual.ll	fbd_dual_float	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/fc_float_gate.air.ll	fcf_gated_argument	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/fc_float_gate.air.ll	fcf_gated_sample_mask	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/fc_float_gate.ll	fcf_gated_argument	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/fc_float_gate.ll	fcf_gated_sample_mask	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/fc_ushort3_half3.air.ll	fc_ushort3_half3	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/fc_ushort3_half3.ll	fc_ushort3_half3	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/fca_fragment_absent_inputs.air.ll	fca_fragment_absent_inputs	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
