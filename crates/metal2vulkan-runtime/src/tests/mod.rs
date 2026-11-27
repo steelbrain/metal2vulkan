@@ -83,7 +83,17 @@ mod nil_slots;
 mod no_attachment;
 mod null_descriptor;
 mod one_path;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod opencl_data;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod opencl_images;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod opencl_kernels;
 mod opencl_local;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod opencl_mode;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod opencl_swizzles;
 mod over;
 mod over_aliases;
 mod over_causes;
