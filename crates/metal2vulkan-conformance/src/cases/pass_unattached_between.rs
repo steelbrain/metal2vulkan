@@ -195,6 +195,16 @@ impl Case for PassUnattachedBetween {
         Ok(inputs)
     }
 
+    /// One notice declaration, which loosens no value: `cg_five` writes each colour from the
+    /// varying `tint`, which the device interpolates, and our side records
+    /// `device-interpolation` on a device not measured to interpolate as Metal does (announced on
+    /// lavapipe, job m3-max-75983). Metal announces nothing.
+    fn allowances(&self) -> Vec<crate::allowance::Allowance> {
+        vec![crate::replay::notice_allowance(
+            crate::degradation::Degradation::DeviceInterpolation.code(),
+        )]
+    }
+
     fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {
         let loaded = Fixture::new(FIXTURE).loaded().map_err(|why| Abort {
             at: "library".to_owned(),
