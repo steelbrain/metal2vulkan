@@ -157,6 +157,7 @@ mod on_device {
     mod picture {
         use super::d3d::{self, D3d, SharedTexture};
         use super::{RENDER_TARGET, SHADER_RESOURCE};
+        use crate::device::lock;
         use crate::submit::IN_FLIGHT;
         use crate::tests::command::on_device::{
             behind_busy, each_device, finished, on_each_device, within,
@@ -170,6 +171,7 @@ mod on_device {
         use ash::vk;
         use metal2vulkan::metal::format::srgb_sibling;
         use std::os::windows::io::AsHandle;
+        use std::sync::Arc;
         use std::time::Instant;
 
         /// The bind flags each plane's texture is made with, as a video's are: rendered and
@@ -701,6 +703,113 @@ mod on_device {
                         );
                     });
                 }
+            });
+        }
+
+        /// The old layout of each plane's acquire. A plane is made undefined
+        /// (`VUID-VkImageCreateInfo-pNext-01443`) and is general only after Direct3D 11's access
+        /// (section 12.5.2), which the consumer reports by `Surface::external_writes_done`. On a
+        /// surface rt writes first, with no such call (a blit of picture 3 into both planes),
+        /// each plane's first acquire names the undefined layout, and the acquire of rt's next
+        /// read names the general layout; Direct3D 11 reads picture 3 exactly between them, and
+        /// that read is picture 3's exactly. On a surface Direct3D 11 draws first, reported by
+        /// `external_writes_done`, every acquire names the general layout, the first included,
+        /// and rt reads picture 1 exactly. The acquires are read from the record the hand-over
+        /// keeps for the device tests (`Work::acquired`).
+        #[test]
+        fn every_device_acquires_a_direct3d_11_plane_from_undefined_only_before_any_access() {
+            each_device("import_d3d11_surface_first_use", |name, _, device| {
+                let luid = luid(&device).unwrap_or_else(|| panic!("{name}: no valid LUID"));
+                let d3d = D3d::on_luid(luid)
+                    .unwrap_or_else(|| panic!("{name}: no DXGI adapter of LUID {luid:02x?}"));
+                let core = device.core();
+                // The old layouts of the acquires of `surface`'s planes recorded since `from`,
+                // each plane's in order, the luma's first.
+                let acquires = |surface: &Surface, from: usize| -> Vec<Vec<vk::ImageLayout>> {
+                    let recorded = lock(&core.work.acquired);
+                    (surface.planes().iter())
+                        .map(|texture| {
+                            let image = Arc::as_ptr(&texture.held_image()) as usize;
+                            (recorded[from..].iter())
+                                .filter(|&&(at, _)| at == image)
+                                .map(|&(_, layout)| layout)
+                                .collect()
+                        })
+                        .collect()
+                };
+                let mark = || lock(&core.work.acquired).len();
+                let (undefined, general) = (vk::ImageLayout::UNDEFINED, vk::ImageLayout::GENERAL);
+
+                // rt's first use, with no Direct3D 11 access before it.
+                let textures = PLANES
+                    .each_ref()
+                    .map(|p| d3d.shared_texture(p.width, p.height, p.dxgi, BOUND));
+                let surface = import(name, &device, &textures);
+                let from = mark();
+                let three = picture(3);
+                rt_write(name, &device, &surface, &three);
+                let written = acquires(&surface, from);
+                let read = d3d_read(&d3d, &textures);
+                let from = mark();
+                let again = rt_read(name, &device, &surface);
+                let later = acquires(&surface, from);
+                println!(
+                    "d3d11-first-use: {name}: written first by rt: acquires {written:?}, then \
+                     after D3D11's read {later:?}"
+                );
+                assert_eq!(
+                    compare(&three, &read).0,
+                    None,
+                    "{name}: picture 3 read by D3D11"
+                );
+                assert_eq!(
+                    compare(&three, &again).0,
+                    None,
+                    "{name}: picture 3 read by rt"
+                );
+                assert_eq!(
+                    written,
+                    [vec![undefined], vec![undefined]],
+                    "{name}: a plane's first acquire before any Direct3D 11 access names the \
+                     undefined layout"
+                );
+                assert_eq!(
+                    later,
+                    [vec![general], vec![general]],
+                    "{name}: a plane's later acquire names the general layout"
+                );
+
+                // Direct3D 11's first use, reported, then rt's.
+                let textures = PLANES
+                    .each_ref()
+                    .map(|p| d3d.shared_texture(p.width, p.height, p.dxgi, BOUND));
+                let surface = import(name, &device, &textures);
+                d3d_draw(&d3d, &textures, 1);
+                surface.external_writes_done().expect("the acquire");
+                let from = mark();
+                let first = rt_read(name, &device, &surface);
+                let second = rt_read(name, &device, &surface);
+                let reported = acquires(&surface, from);
+                println!(
+                    "d3d11-first-use: {name}: drawn first by D3D11 and reported: acquires \
+                     {reported:?}"
+                );
+                let one = picture(1);
+                assert_eq!(
+                    compare(&one, &first).0,
+                    None,
+                    "{name}: picture 1 read by rt"
+                );
+                assert_eq!(
+                    compare(&one, &second).0,
+                    None,
+                    "{name}: picture 1 read again"
+                );
+                assert_eq!(
+                    reported,
+                    [vec![general, general], vec![general, general]],
+                    "{name}: after external_writes_done, every acquire names the general layout"
+                );
             });
         }
 

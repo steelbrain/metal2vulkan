@@ -216,6 +216,11 @@ pub(crate) struct Work {
     /// For the device tests: the times the thread was poked to pass again ([`Work::poke`]).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) pokes: AtomicU64,
+    /// For the device tests: each Direct3D 11 plane's acquire recorded ([`Upload::hand_over`]),
+    /// in recording order, as the plane's image (its address) and the old layout its barrier
+    /// names.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) acquired: Mutex<Vec<(usize, vk::ImageLayout)>>,
 }
 
 pub(crate) struct WorkState {
@@ -476,6 +481,12 @@ impl Upload {
         let barriers: Vec<_> = (planes.iter())
             .map(|image| image.handed(core.family, acquire))
             .collect();
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        if acquire {
+            let recorded = (planes.iter().zip(&barriers))
+                .map(|(image, barrier)| (Arc::as_ptr(image) as usize, barrier.old_layout));
+            lock(&core.work.acquired).extend(recorded);
+        }
         let dependency = vk::DependencyInfo::default().image_memory_barriers(&barriers);
         // SAFETY: the upload's command buffer is recording, and only the submit thread has it;
         // each image is the device's, held by the submission until it retires, and general
@@ -670,6 +681,8 @@ impl Work {
             asking: AtomicBool::new(false),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             pokes: AtomicU64::new(0),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            acquired: Mutex::new(Vec::new()),
         }
     }
 
