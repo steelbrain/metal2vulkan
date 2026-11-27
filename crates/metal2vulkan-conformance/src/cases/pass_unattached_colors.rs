@@ -324,4 +324,40 @@ mod tests {
         assert!(!DRAWN.past([SIDE; 2]));
         assert!(DRAWN.height < u64::from(SIDE));
     }
+
+    /// **Metal's recording draws colour 0 where the scissor lets it and keeps the clear
+    /// elsewhere**, and its command buffer completes with no error: plain Metal draws the shape the
+    /// runtime draws through the state without colour 1.
+    #[test]
+    fn metals_recording_draws_colour_0_and_keeps_the_clear_elsewhere() {
+        let recording = crate::recording::read(NAME).expect("Metal's recording of the case");
+        let want: Vec<u8> = (0..SIDE * SIDE)
+            .flat_map(|at| {
+                let (x, y) = (at % SIDE, at / SIDE);
+                match u64::from(y) < DRAWN.height {
+                    true => drawn_texel(x, y),
+                    false => clear_texel(),
+                }
+            })
+            .collect();
+        let mut checked = 0;
+        for answer in &recording.answers {
+            for outcome in &answer.outcomes {
+                let drawn = outcome.transcript.root.child("drawn").expect("drawn");
+                let color0 = drawn.child("color0").expect("drawn/color0");
+                let Value::Bytes(bytes) = &color0.observed.value else {
+                    panic!("drawn/color0: {:?}", color0.observed.value);
+                };
+                assert_eq!(bytes, &want, "drawn/color0");
+                let error = drawn.child("command-buffer-error").expect("the error");
+                assert_eq!(
+                    error.observed.value,
+                    Value::unit_variant("None"),
+                    "drawn/command-buffer-error"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 0, "the recording held no outcome");
+    }
 }

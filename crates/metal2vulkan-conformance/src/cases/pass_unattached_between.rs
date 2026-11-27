@@ -296,4 +296,48 @@ mod tests {
         assert!(DRAWN.height < u64::from(SIDE));
         assert_eq!(ATTACHED, [0, 2]);
     }
+
+    /// **In Metal's recording the lacking pass's colour 0 is the reference's, and its colour 2
+    /// holds, where the draw ran, the reference's colour 1 byte for byte**, the clear elsewhere:
+    /// plain Metal writes the unset colour's value into the attachment after it, the shape the
+    /// runtime refuses (`DrawKind::AttachmentFormats`).
+    #[test]
+    fn metals_recording_writes_colour_1_into_colour_2() {
+        let recording = crate::recording::read(NAME).expect("Metal's recording of the case");
+        let drawn_bytes = (TEXEL * SIDE) as usize * DRAWN.height as usize;
+        let mut checked = 0;
+        for answer in &recording.answers {
+            for outcome in &answer.outcomes {
+                let drawn = outcome.transcript.root.child("drawn").expect("drawn");
+                let plane = |site: &str| match drawn.child(site).map(|n| &n.observed.value) {
+                    Some(Value::Bytes(bytes)) => bytes.clone(),
+                    other => panic!("drawn/{site}: {other:?}"),
+                };
+                let (every, lacking) = (
+                    [0, 1, 2].map(|which| plane(&format!("every:color{which}"))),
+                    ATTACHED.map(|which| plane(&format!("lacking:color{which}"))),
+                );
+                assert_eq!(lacking[0], every[0], "colour 0");
+                assert_eq!(
+                    lacking[1][..drawn_bytes],
+                    every[1][..drawn_bytes],
+                    "colour 2's drawn rows"
+                );
+                assert_ne!(
+                    lacking[1][..drawn_bytes],
+                    every[2][..drawn_bytes],
+                    "colour 2's drawn rows"
+                );
+                assert_eq!(
+                    lacking[1][drawn_bytes..],
+                    every[2][drawn_bytes..],
+                    "colour 2's cleared rows"
+                );
+                let error = drawn.child("command-buffer-error").expect("the error");
+                assert_eq!(error.observed.value, Value::unit_variant("None"));
+                checked += 1;
+            }
+        }
+        assert!(checked > 0, "the recording held no outcome");
+    }
 }
