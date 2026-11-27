@@ -1056,9 +1056,12 @@ impl Device {
     /// so `f` and the runtime never submit at once.
     ///
     /// The queue is externally synchronized only inside `f`, so the Vulkan calls `f` makes with it
-    /// keep no handle past its return. `f` waits for no work of the runtime's, which may need the
-    /// lock `f` holds; a present in `f` waits only on semaphores whose signal is already submitted:
-    /// the command buffer that presents the image
+    /// keep no handle past its return. `f` waits for nothing that needs a thread of the runtime's
+    /// or the lock `f` holds. A wait for work already submitted to the queue ends
+    /// (`vkQueueWaitIdle` included: no batch the runtime submits waits on a signal that only a
+    /// later submission gives), and where the family has one queue it holds every submission of
+    /// the runtime for its length. A present in `f` waits only on semaphores whose signal is
+    /// already submitted: the command buffer that presents the image
     /// ([`CommandBuffer::present_drawable`](crate::CommandBuffer::present_drawable)) is
     /// scheduled ([`CommandBuffer::wait_until_scheduled`](crate::CommandBuffer::wait_until_scheduled)
     /// has returned for it, or `f` runs in its scheduled handler).
