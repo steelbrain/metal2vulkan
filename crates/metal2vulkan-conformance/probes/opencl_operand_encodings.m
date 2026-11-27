@@ -15,6 +15,27 @@
 //   xcrun clang -fobjc-arc -framework Metal -framework Foundation -framework OpenCL \
 //       -o probe opencl_operand_encodings.m
 //   ./probe            (in the directory the .bin files go to)
+//
+// WHAT IT MEASURED, Apple M3 Max, macOS 27.0.1 (job m3-max-76799; metalfe-32023.921.5, AIR 2.9,
+// language "Metal" 1.1):
+//   - OpenCL.framework's program binary is a property list of the options and the source: no AIR.
+//     `-[_MTLFunctionInternal bitcodeData]` of `__entry_<kernel>` answers the AIR (a wrapped
+//     module), as does the library's `libraryDataContents`.
+//   - barrier(flags): each call site passes OpenCL's flags, `_Z7barrierj(i32 1)` for
+//     CLK_LOCAL_MEM_FENCE, 2 for CLK_GLOBAL_MEM_FENCE, 3 for both, and the wrapper passes them on
+//     unconverted: `air.wg.barrier(i32 %0, i32 5, i32 1)`.
+//   - mem_fence, read_mem_fence and write_mem_fence(flags): each wrapper converts the flags to
+//     Metal's mask (`trunc` to i2, `llvm.bitreverse.i2`, `zext`) and calls
+//     `air.atomic.fence(flags, order, 1)`, order 4 (acq_rel), 2 (acquire) and 3 (release).
+//   - The 1.2 atomics: `air.atomic.{global,local}.<op>` in the AIR 2.9 form, order 0, scope 2 on
+//     __global and 1 on __local, mem_flags 0, volatile true; atomic_cmpxchg orders 0 and 0.
+//   - Constant samplers: `air.sampler_states` globals of two words in Metal's encoding, never
+//     OpenCL's bits: CLAMP_TO_EDGE, unnormalized, nearest 0x7bff0000088049; REPEAT, normalized,
+//     linear 0x7bff0000080a92; CLAMP, nearest 0x7bff0000080000 (clamp_to_zero); MIRRORED_REPEAT,
+//     linear 0x7bff0000080adb; NONE, unnormalized, linear 0x7bff0000088a00; second word 0. Each
+//     has compare 8 (never) and the LOD clamp 0 to 65504.
+//   - Images: a sample through a sampler has access 0, a read without one (through
+//     `air.get_read_sampler`) access 1, a write access 2.
 #define CL_SILENCE_DEPRECATION
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
