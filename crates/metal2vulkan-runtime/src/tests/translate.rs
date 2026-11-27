@@ -5174,8 +5174,7 @@ declare void @air.wg.barrier(i32, i32)
     /// threadgroup's 256 words of `data` to the same words of `out`. No thread waits for another
     /// and no barrier orders anything: the copy sees every word because each other thread's
     /// release fence and add came before the last thread's add, whose acquire fence comes after
-    /// it. (A `seq_cst` fence, the only order before MSL 4.1, is a refusal the runtime's README
-    /// records among its known gaps.) `$NAME` and `$SCOPE` are filled by [`fence_kernel`].
+    /// it. `$NAME` and `$SCOPE` are filled by [`fence_kernel`].
     const FENCE_LAST: &str = r#"target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
 target triple = "air64_v29-apple-macosx27.0.0"
 
@@ -5245,7 +5244,12 @@ declare i32 @air.atomic.global.add.u.i32(ptr addrspace(1), i32, i32, i32, i32, i
     /// threadgroup, and `data` holds every thread's word: the answers a release fence before an
     /// atomic and an acquire fence after one that reads its value promise (MSL §6.16.3, with
     /// §6.16.1.2's release-acquire visibility), computed here. Which thread is last is the
-    /// device's; the answer does not depend on it.
+    /// device's; the answer does not depend on it. The fences are MSL 4.1's release and acquire:
+    /// a `memory_order_seq_cst` fence, the one order `atomic_thread_fence` takes before MSL 4.1,
+    /// is refused on every device, its state `Error::Translation` of `Unsupported` not
+    /// implemented `IdentityDomains`, naming "a sequentially consistent fence" (the translator
+    /// orders it through a status word the identity domains do not reach), a known gap the
+    /// runtime's README records.
     #[test]
     fn every_device_gathers_every_simd_groups_word_past_a_fence_and_an_atomic_count() {
         const GROUPS: u32 = 16;
