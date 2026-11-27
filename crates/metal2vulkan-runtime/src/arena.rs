@@ -70,14 +70,24 @@ pub(crate) fn piece(
 /// the dispatch took it new: the device's last, where a command buffer still keeps it and it holds
 /// `len`, else a block of `len` rounded up to a power of two, within `budget` where `len` is.
 ///
+/// The arena's lock is held only to read the device's last block and to store a new one, never
+/// across the take: a take may make an allocation and run the consumer's
+/// [`BlockMappings::map`](crate::BlockMappings::map) on this thread, and another thread's dispatch
+/// goes on meanwhile. Two dispatches that find no block holding their slots at once each take
+/// their own and keep it, held by its command buffer until it retires, even where the other's,
+/// stored meanwhile, would hold their slots; the device keeps the longer of the two as its last.
+/// So the arena stays within its bound: each block is its own dispatch's, at most `budget`, or
+/// one workgroup's slots where those pass it, as a block taken with no race is, and a race adds
+/// one such block for each dispatch that missed at once, never a longer one.
+///
 /// Err: what [`Core::take_memory`] returns.
 pub(crate) fn take(
     core: &Arc<Core>,
     len: u64,
     budget: u64,
 ) -> Result<(Arc<memory::Block>, bool), Error> {
-    let mut last = lock(&core.arena);
-    if let Some(block) = last.upgrade().filter(|block| block.memory.len >= len) {
+    let last = lock(&core.arena).upgrade();
+    if let Some(block) = last.filter(|block| block.memory.len >= len) {
         return Ok((block, false));
     }
     let len = len
@@ -86,7 +96,17 @@ pub(crate) fn take(
         .min(budget.max(len));
     let memory = core.take_memory(MemoryClass::Private, len, Site::PrivateArena)?;
     let block = Arc::new(memory::Block::new(memory, Arc::clone(core)));
-    *last = Arc::downgrade(&block);
+    let mut last = lock(&core.arena);
+    let kept = last.upgrade();
+    if kept
+        .as_ref()
+        .is_none_or(|kept| kept.memory.len < block.memory.len)
+    {
+        *last = Arc::downgrade(&block);
+    }
+    drop(last);
+    // Where it was the last holder of the block it read, the block goes back here, off the lock.
+    drop(kept);
     core.counters.count(Metric::PrivateArenaBlocks);
     Ok((block, true))
 }

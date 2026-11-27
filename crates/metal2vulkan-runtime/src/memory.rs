@@ -320,10 +320,16 @@ pub trait BlockMappings: Send + Sync {
     ///
     /// It runs where the allocation is made: on the block-maker thread for the allocations made
     /// ahead of need, on the thread in [`Device::new`](crate::Device::new) for each class's first,
-    /// and inside [`Device::take_block`](crate::Device::take_block), on the consumer's thread, for
-    /// a take that no free range fits. Never under the pool's lock. It makes no call into the
-    /// runtime and drops no runtime handle. `allocation` states when the make began and how long
-    /// it took ([`AllocationInfo::make_start`], [`AllocationInfo::make_nanos`]).
+    /// and on the consumer's thread inside a call whose take no free range fits:
+    /// [`Device::take_block`](crate::Device::take_block), and the calls that take a block of their
+    /// own (a texture's place, a visible function table, an indirect command buffer, a dispatch
+    /// whose kernel's private memory takes a new block of the device's arena). Never under the
+    /// pool's or the arena's lock. It makes no call into the runtime and drops no runtime handle,
+    /// and it never waits for a lock that a thread inside a runtime call holds: that call may be
+    /// waiting for the hook (a call that waits for a make of the block-maker thread, which runs the
+    /// hooks between its makes, or the device's last drop), so such a wait never ends.
+    /// `allocation` states when the make began and how long it took
+    /// ([`AllocationInfo::make_start`], [`AllocationInfo::make_nanos`]).
     fn map(&self, allocation: &AllocationInfo) -> bool;
 
     /// Returns only once every mapping of `allocation` the consumer made is gone and none of its
@@ -333,8 +339,9 @@ pub trait BlockMappings: Send + Sync {
     /// It runs once per allocation `map` accepted: on the block-maker thread before an idle
     /// allocation's free; in [`Device::quiesce`](crate::Device::quiesce), on the thread that calls
     /// it, for every allocation still mapped; or at teardown, on the thread that ends it, once the
-    /// runtime's other threads are joined. Never under the pool's lock. It makes no call into the
-    /// runtime and drops no runtime handle.
+    /// runtime's other threads are joined. Never under the pool's or the arena's lock. It makes no
+    /// call into the runtime and drops no runtime handle, and, as [`map`](Self::map), it never
+    /// waits for a lock that a thread inside a runtime call holds.
     fn unmap(&self, allocation: AllocationId);
 }
 
