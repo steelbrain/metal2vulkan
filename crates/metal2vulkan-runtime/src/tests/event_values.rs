@@ -1,8 +1,9 @@
 //! An event's values, under a device cfg on every device of the cfg's kind: a signal not above
 //! the highest value known is left out, whichever queue it is on; the host's value of a shared
 //! event reads at once below a GPU signal still pending and never signals the semaphore, and a
-//! host value above a pending GPU signal stays the event's value once that signal lands; and a
-//! shared event's listeners run on one thread, not the posting one, in the order posted.
+//! host value above a pending GPU signal stays the event's value once that signal lands; the
+//! largest value is kept; and a shared event's listeners run on one thread, not the posting one,
+//! in the order posted.
 //!
 //! The GPU signals stay pending while the test reads the values: a [`Busy`] gate submitted ahead
 //! of them holds every later command of the device's one `VkQueue` until the test opens it.
@@ -171,6 +172,29 @@ fn a_host_set_above_a_pending_signal_reaches_every_wait_below_it() {
             "{name}: the value stays at the floor"
         );
         drop((signaller, busy, queue, event, device));
+    });
+}
+
+/// The largest value is kept: a signal of `u64::MAX` reaches the event, which reads it, a second
+/// is left out, and a host set of it changes nothing. Metal's values are `uint64_t` (MTLEvent.h's
+/// `signaledValue`). The validation layer checks the semaphore's signal of it, which Vulkan bounds
+/// by the device's `maxTimelineSemaphoreValueDifference` from the semaphore's value
+/// (`VUID-VkSubmitInfo2-semaphore-03883`).
+#[test]
+fn the_largest_value_is_kept() {
+    each_device("event_largest_value", |name, _, device| {
+        let event = shared_event(&device);
+        let queue = queue(&device);
+        let first = signal(name, &device, &queue, event.as_event(), u64::MAX);
+        finished(name, &first);
+        assert_eq!(event.signaled_value(), u64::MAX, "{name}");
+        let second = signal(name, &device, &queue, event.as_event(), u64::MAX);
+        finished(name, &second);
+        within(name, || pending(event.as_event()).is_empty());
+        event.set_signaled_value(u64::MAX);
+        assert_eq!(event.signaled_value(), u64::MAX, "{name}");
+        assert_eq!(counter(event.as_event()), u64::MAX, "{name}");
+        drop((first, second, queue, event, device));
     });
 }
 
