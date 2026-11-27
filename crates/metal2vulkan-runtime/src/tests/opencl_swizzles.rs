@@ -6,7 +6,8 @@
 //! Each view is 4 by 2, of an `RGBA8Unorm` or `R8Unorm` texture, made with the swizzle of one of
 //! OpenCL's channel orders (`BGRA`, `ARGB`, `A`, `INTENSITY`, `LUMINANCE`; the identity as a
 //! control). Texel `i` (`x + 4y`) of a filled texture holds bytes `(0x10 + i, 0x50 + i, 0x90 + i,
-//! 0xd0 + i)` (`R8Unorm`: `0x10 + i`). The M3 Max answers, on every view, for plain Metal and
+//! 0xd0 + i)` (`R8Unorm`: `0x10 + i`); a write stores `(0x11 + i, 0x51 + i, 0x91 + i, 0xd1 + i) /
+//! 255` into a texture filled with `0xee`. The M3 Max answers, on every view, for plain Metal and
 //! for OpenCL mode alike:
 //!
 //! - **query**: a write-only image the kernel only queries answers the view's width and height
@@ -15,6 +16,16 @@
 //! - **read**: a read-only image's read, without a sampler and through one (nearest, at the
 //!   texel's centre), answers the texel swizzled: lane `l` the channel the swizzle's `l` names (a
 //!   format's missing green and blue 0, its missing alpha 1), `Zero` 0 and `One` 1.
+//!
+//! A write-only image's write is stored as written, channel `c` from lane `c`: the runtime's rule
+//! (its README's known gaps of textures, "A swizzle reaches a texture's sampled element alone";
+//! docs/API.md's accepted differences). The M3 Max stores channel `c` from the first lane whose
+//! source is `c`, and lane `c` where no lane names it, the swizzle undone (job m3-max-16336): on
+//! `rgba8/BGRA` texel 0 it stores `[0x91, 0x51, 0x11, 0xd1]` where the runtime stores `[0x11, 0x51,
+//! 0x91, 0xd1]`, and on `rgba8/ARGB`, `rgba8/A` and `r8/A` it differs too. A plain-Metal kernel's
+//! write through an `RGBA8Unorm` view of `(B, G, R, A)` is stored the same way there (probe
+//! `swizzled_view_stores.m`, job m3-max-76829), and Metal's validation refuses such a write: the
+//! view reports no `ShaderWrite` usage.
 //!
 //! Not run here: a `read_write` image of a swizzled view (Metal's `read_write` texture, read then
 //! written, in OpenCL mode; Apple's OpenCL compiler takes no `__read_write` image), which the M3
@@ -141,6 +152,13 @@ const TEXEL: &str = "  %g = tail call fastcc i64 @_Z13get_global_idj(i32 0)\n\
   %p0 = insertelement <2 x i32> poison, i32 %x, i64 0\n\
   %p = insertelement <2 x i32> %p0, i32 %y, i64 1\n";
 
+/// The value thread `i` writes, `%v`: `(0x11 + i, 0x51 + i, 0x91 + i, 0xd1 + i) / 255`.
+const VALUE: &str = "  %fi = uitofp i32 %i to float\n\
+  %v0 = insertelement <4 x float> poison, float %fi, i64 0\n\
+  %vs = shufflevector <4 x float> %v0, <4 x float> poison, <4 x i32> zeroinitializer\n\
+  %va = fadd <4 x float> %vs, <float 1.700000e+01, float 8.100000e+01, float 1.450000e+02, float 2.090000e+02>\n\
+  %v = fdiv <4 x float> %va, <float 2.550000e+02, float 2.550000e+02, float 2.550000e+02, float 2.550000e+02>\n";
+
 /// `__kernel void sw_query(__write_only image2d_t img, __global int *o)`: `o[0..4]` take the
 /// image's width, height, channel order and channel data type.
 fn query() -> String {
@@ -177,6 +195,24 @@ declare i32 @air.get_channel_data_type_texture_2d(ptr addrspace(1)) #0\n";
         buffer(1, 0, "read_write", 1, "int", "o"),
     ];
     format!("{body}{}", kernel_list("__entry_sw_query", &args))
+}
+
+/// `__kernel void sw_write(__write_only image2d_t img)`: thread `i` writes its value to its texel.
+fn write() -> String {
+    let body = format!(
+        "define void @__entry_sw_write(ptr addrspace(1) %0) #0 {{\n\
+entry:\n\
+  tail call fastcc void @sw_write(ptr addrspace(1) %0)\n\
+  ret void\n}}\n\
+define internal fastcc void @sw_write(ptr addrspace(1) %img) #1 {{\n\
+entry:\n\
+{TEXEL}{VALUE}\
+  tail call void @air.write_texture_2d.v4f32(ptr addrspace(1) %img, <2 x i32> %p, <4 x float> %v, i32 0, i32 2)\n\
+  ret void\n}}\n\
+declare void @air.write_texture_2d.v4f32(ptr addrspace(1), <2 x i32>, <4 x float>, i32, i32) #0\n"
+    );
+    let args = [image(0, 0, "write", "texture2d<unknown, write>", "img")];
+    format!("{body}{}", kernel_list("__entry_sw_write", &args))
 }
 
 /// `__kernel void sw_read(__read_only image2d_t img, sampler_t s, __global float4 *o)`: thread `i`
@@ -259,6 +295,11 @@ fn filled(i: usize, c: usize) -> u8 {
     (0x10 + 0x40 * c + i) as u8
 }
 
+/// Lane `l` of the value thread `i` writes, as a byte.
+fn written(i: usize, l: usize) -> u8 {
+    (0x11 + 0x40 * l + i) as u8
+}
+
 /// The channel a swizzle source names, if any.
 fn channel(s: TextureSwizzle) -> Option<usize> {
     match s {
@@ -280,9 +321,9 @@ fn read_rule(v: &View, i: usize) -> [u8; 4] {
     })
 }
 
-/// A Shared texture of `v`'s format, 4 by 2, at texture index 1, of the filled texels, and its
-/// view through `v`'s swizzle at texture index 2.
-fn swizzled(device: &Device, v: &View) -> (Texture, Texture) {
+/// A Shared texture of `v`'s format, 4 by 2, at texture index 1, every byte `fill` or the filled
+/// texels, and its view through `v`'s swizzle at texture index 2.
+fn swizzled(device: &Device, v: &View, fill: Option<u8>) -> (Texture, Texture) {
     let mut descriptor = TextureDescriptor::new(TextureType::Type2D, v.format, W, H);
     descriptor.usage =
         TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE | TextureUsage::PIXEL_FORMAT_VIEW;
@@ -290,7 +331,7 @@ fn swizzled(device: &Device, v: &View) -> (Texture, Texture) {
     let texture = (device.new_texture(&descriptor, Some(1)))
         .unwrap_or_else(|error| panic!("{}: {error}", v.name));
     let bytes: Vec<u8> = (0..N as usize)
-        .flat_map(|i| (0..v.channels).map(move |c| filled(i, c)))
+        .flat_map(|i| (0..v.channels).map(move |c| fill.unwrap_or(filled(i, c))))
         .collect();
     let row = u64::from(W) * v.channels as u64;
     (texture.replace_region(
@@ -329,6 +370,15 @@ fn whole() -> Region {
     }
 }
 
+/// The bytes of `texture`, of `v`'s format.
+fn bytes(texture: &Texture, v: &View) -> Vec<u8> {
+    let row = u64::from(W) * v.channels as u64;
+    let mut out = vec![0u8; (row * u64::from(H)) as usize];
+    (texture.get_bytes(&mut out, row, row * u64::from(H), whole(), 0, 0))
+        .unwrap_or_else(|error| panic!("{}: {error}", v.name));
+    out
+}
+
 /// The bytes of the `float4` at `at` of `got`: each lane times 255, rounded.
 fn lanes(got: &[f32], at: usize) -> [u8; 4] {
     std::array::from_fn(|l| (got[4 * at + l] * 255.0).round() as u8)
@@ -344,7 +394,7 @@ fn opencl_mode_queries_of_a_swizzled_write_only_image_answer_the_view() {
             .unwrap_or_else(|error| panic!("{name}: {error}"));
         let query = state(&device, &query, "__entry_sw_query");
         for v in views() {
-            let (_texture, view) = swizzled(&device, &v);
+            let (_texture, view) = swizzled(&device, &v, None);
             let o = words_buffer(&device, &[0xcdcd_cdcd; 4]);
             let bound = Bound {
                 textures: &[&view],
@@ -355,6 +405,32 @@ fn opencl_mode_queries_of_a_swizzled_write_only_image_answer_the_view() {
             assert_eq!(words(&o), [4, 2, 0x11234, 0x1234], "{name}: {}", v.name);
         }
         println!("{name}: queries of each swizzled view answer the view");
+    });
+}
+
+#[test]
+fn opencl_mode_writes_through_a_swizzled_image_store_the_value_as_written() {
+    let Some(write) = library(&write()) else {
+        return;
+    };
+    each_device("opencl-swizzles-write", |name, _, device| {
+        let _grant = (device.grant_indices(IndexClass::Texture, 1, 2))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let write = state(&device, &write, "__entry_sw_write");
+        for v in views() {
+            let (texture, view) = swizzled(&device, &v, Some(0xee));
+            let bound = Bound {
+                textures: &[&view],
+                samplers: &[],
+                out: None,
+            };
+            run(name, &device, &write, N, &bound);
+            let want: Vec<u8> = (0..N as usize)
+                .flat_map(|i| (0..v.channels).map(move |c| written(i, c)))
+                .collect();
+            assert_eq!(bytes(&texture, &v), want, "{name}: {}", v.name);
+        }
+        println!("{name}: writes through each swizzled view store the value as written");
     });
 }
 
@@ -377,7 +453,7 @@ fn opencl_mode_reads_of_a_swizzled_image_answer_the_swizzled_texel() {
             1,
         );
         for v in views() {
-            let (_texture, view) = swizzled(&device, &v);
+            let (_texture, view) = swizzled(&device, &v, None);
             let o = floats_buffer(&device, &vec![-1.0; (2 * N * 4) as usize]);
             let bound = Bound {
                 textures: &[&view],
