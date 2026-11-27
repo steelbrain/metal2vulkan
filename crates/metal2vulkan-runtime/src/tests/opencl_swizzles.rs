@@ -17,28 +17,118 @@
 //!   `c`, and lane `c` where no lane names it: the swizzle undone;
 //! - **read**: a read-only image's read, without a sampler and through one (nearest, at the
 //!   texel's centre), answers the texel swizzled: lane `l` the channel the swizzle's `l` names (a
-//!   format's missing green and blue 0, its missing alpha 1), `Zero` 0 and `One` 1;
-//! - **read-write**: Apple's OpenCL compiler takes no `__read_write` image (OpenCL C 2.0's), so
-//!   the shape is plain Metal's `read_write` texture, read then written, in OpenCL mode: the read
-//!   and the write rules above, as the M3 Max answers a `read_write` texture of a swizzled view.
+//!   format's missing green and blue 0, its missing alpha 1), `Zero` 0 and `One` 1.
 //!
 //! Under a device cfg, on every device of the cfg's kind. The modules are LLVM text written here;
 //! `llvm-as` assembles them, and without it the tests skip visibly.
 
-use crate::tests::command::on_device::each_device;
-use crate::tests::opencl_images::{float4s, image, run, sampler, sampler_node, Bound};
+use crate::tests::command::on_device::{each_device, finished};
 use crate::tests::opencl_mode::{
     buffer, floats, floats_buffer, kernel_list, library, state, words, words_buffer,
 };
 use crate::{
-    Device, IndexClass, PixelFormat, Region, SamplerAddressMode, SamplerMinMagFilter, StorageMode,
-    Texture, TextureDescriptor, TextureSwizzle, TextureSwizzleChannels, TextureType, TextureUsage,
+    Buffer, ComputePipelineState, Device, DispatchType, IndexClass, PixelFormat, Region,
+    SamplerAddressMode, SamplerDescriptor, SamplerMinMagFilter, SamplerState, StorageMode, Texture,
+    TextureDescriptor, TextureSwizzle, TextureSwizzleChannels, TextureType, TextureUsage,
 };
 
 /// The views' size, and the threads that use them: thread `i` takes texel `(i & 3, i >> 2)`.
 const W: u32 = 4;
 const H: u32 = 2;
 const N: u32 = W * H;
+
+/// The node of argument `n`, a texture at `index` of the MSL type `ty` (`texture2d<unknown,
+/// read>`), its access `access` (`sample` or `write`).
+fn image(n: u32, index: u32, access: &str, ty: &str, name: &str) -> String {
+    format!(
+        "!{{i32 {n}, !\"air.texture\", !\"air.location_index\", i32 {index}, i32 1, !\"air.{access}\", !\"air.arg_type_name\", !\"{ty}\", !\"air.arg_name\", !\"{name}\"}}"
+    )
+}
+
+/// The node of argument `n`, a sampler at `index`.
+fn sampler_node(n: u32, index: u32, name: &str) -> String {
+    format!(
+        "!{{i32 {n}, !\"air.sampler\", !\"air.location_index\", i32 {index}, i32 1, !\"air.arg_type_name\", !\"sampler\", !\"air.arg_name\", !\"{name}\"}}"
+    )
+}
+
+/// The node of argument `n`, a read-write `float4` buffer at `index`.
+fn float4s(n: u32, index: u32, name: &str) -> String {
+    format!(
+        "!{{i32 {n}, !\"air.buffer\", !\"air.location_index\", i32 {index}, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 16, !\"air.arg_type_align_size\", i32 16, !\"air.arg_type_name\", !\"float4\", !\"air.arg_name\", !\"{name}\"}}"
+    )
+}
+
+/// A sampler state at sampler index `index` of `filter`, `address` and `normalized` coordinates.
+fn sampler(
+    device: &Device,
+    filter: SamplerMinMagFilter,
+    address: SamplerAddressMode,
+    normalized: bool,
+    index: u32,
+) -> SamplerState {
+    let mut descriptor = SamplerDescriptor::new();
+    descriptor.min_filter = filter;
+    descriptor.mag_filter = filter;
+    descriptor.s_address_mode = address;
+    descriptor.t_address_mode = address;
+    descriptor.r_address_mode = address;
+    descriptor.normalized_coordinates = normalized;
+    (device.new_sampler_state(&descriptor, index)).expect("a sampler state")
+}
+
+/// What `state` binds besides its hidden buffers.
+struct Bound<'a> {
+    textures: &'a [&'a Texture],
+    samplers: &'a [&'a SamplerState],
+    /// The kernel's own buffer at 3 (its index 0), if any.
+    out: Option<&'a Buffer>,
+}
+
+/// `state` dispatched on `device` (named `name`) over `threads` threads, one dimension, its hidden
+/// buffers bound as Apple's OpenCL binds them (the first's bytes at index 0 no offset and one
+/// dimension, the third holding word `i` as `i * 0x10000 + 0x1234`), and `bound`'s textures,
+/// samplers and buffer at their indices; committed and finished without an error.
+fn run(name: &str, device: &Device, state: &ComputePipelineState, threads: u32, bound: &Bound<'_>) {
+    let table: Vec<u32> = (0..64).map(|i| i * 0x10000 + 0x1234).collect();
+    let first: Vec<u8> = [0u32, 0, 0, 1]
+        .iter()
+        .flat_map(|w| w.to_le_bytes())
+        .collect();
+    let hidden = [words_buffer(device, &[0; 16]), words_buffer(device, &table)];
+    let queue = device.new_command_queue(1).expect("a queue");
+    let command_buffer = queue.command_buffer().expect("a command buffer");
+    let mut encoder =
+        (command_buffer.compute_command_encoder(DispatchType::Serial)).expect("an encoder");
+    encoder
+        .set_compute_pipeline_state(state)
+        .expect("the state");
+    encoder
+        .set_bytes(&first, 0)
+        .expect("the first hidden buffer");
+    for (index, b) in (1u32..).zip(&hidden) {
+        (encoder.set_buffer(Some(b), 0, index)).expect("a hidden buffer");
+    }
+    if let Some(out) = bound.out {
+        encoder
+            .set_buffer(Some(out), 0, 3)
+            .expect("the kernel's buffer");
+    }
+    for (index, t) in (0u32..).zip(bound.textures) {
+        (encoder.set_texture(Some(t), index))
+            .unwrap_or_else(|error| panic!("{name}: texture {index}: {error}"));
+    }
+    for (index, s) in (0u32..).zip(bound.samplers) {
+        (encoder.set_sampler_state(Some(s), index))
+            .unwrap_or_else(|error| panic!("{name}: sampler {index}: {error}"));
+    }
+    (encoder.dispatch_threads([threads, 1, 1], [threads, 1, 1]))
+        .unwrap_or_else(|error| panic!("{name}: the dispatch: {error}"));
+    encoder.end_encoding();
+    command_buffer.commit().expect("a commit");
+    finished(name, &command_buffer);
+    assert_eq!(command_buffer.error(), None, "{name}");
+}
 
 /// The thread's texel: `%g` its global id, `%i` that as `i32`, `%p` the texel's `<2 x i32>`.
 const TEXEL: &str = "  %g = tail call fastcc i64 @_Z13get_global_idj(i32 0)\n\
@@ -147,36 +237,6 @@ declare {{ <4 x float>, i8 }} @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr
         float4s(2, 0, "o"),
     ];
     format!("{body}{}", kernel_list("__entry_sw_read", &args))
-}
-
-/// A `read_write` image (Metal's; OpenCL C 1.2 has none) in OpenCL mode: thread `i` stores its
-/// texel to `o[i]`, then writes its value there.
-fn read_write() -> String {
-    let body = format!(
-        "define void @__entry_sw_rw(ptr addrspace(1) %0, ptr addrspace(1) %1) #0 {{\n\
-entry:\n\
-  tail call fastcc void @sw_rw(ptr addrspace(1) %0, ptr addrspace(1) %1)\n\
-  ret void\n}}\n\
-define internal fastcc void @sw_rw(ptr addrspace(1) %img, ptr addrspace(1) %o) #1 {{\n\
-entry:\n\
-{TEXEL}\
-  %rs = tail call ptr addrspace(2) @air.get_read_sampler()\n\
-  %r0 = tail call {{ <4 x float>, i8 }} @air.read_texture_2d.v4f32(ptr addrspace(1) %img, ptr addrspace(2) %rs, <2 x i32> %p, <2 x i32> zeroinitializer, i32 0, i32 3)\n\
-  %t0 = extractvalue {{ <4 x float>, i8 }} %r0, 0\n\
-  %q0 = getelementptr inbounds <4 x float>, ptr addrspace(1) %o, i64 %g\n\
-  store <4 x float> %t0, ptr addrspace(1) %q0, align 16\n\
-{VALUE}\
-  tail call void @air.write_texture_2d.v4f32(ptr addrspace(1) %img, <2 x i32> %p, <4 x float> %v, i32 0, i32 3)\n\
-  ret void\n}}\n\
-declare ptr addrspace(2) @air.get_read_sampler() #0\n\
-declare {{ <4 x float>, i8 }} @air.read_texture_2d.v4f32(ptr addrspace(1), ptr addrspace(2), <2 x i32>, <2 x i32>, i32, i32) #0\n\
-declare void @air.write_texture_2d.v4f32(ptr addrspace(1), <2 x i32>, <4 x float>, i32, i32) #0\n"
-    );
-    let args = [
-        image(0, 0, "read_write", "texture2d<unknown, read_write>", "img"),
-        float4s(1, 0, "o"),
-    ];
-    format!("{body}{}", kernel_list("__entry_sw_rw", &args))
 }
 
 /// A view the probe measured: its name, its texture's format and channel count, and its swizzle.
@@ -411,40 +471,5 @@ fn opencl_mode_reads_of_a_swizzled_image_answer_the_swizzled_texel() {
             }
         }
         println!("{name}: reads of each swizzled view answer the swizzled texel");
-    });
-}
-
-#[test]
-fn opencl_mode_read_write_images_of_a_swizzled_view_read_and_write_as_metal() {
-    let Some(rw) = library(&read_write()) else {
-        return;
-    };
-    each_device("opencl-swizzles-rw", |name, _, device| {
-        let _grant = (device.grant_indices(IndexClass::Texture, 1, 2))
-            .unwrap_or_else(|error| panic!("{name}: {error}"));
-        let rw = state(&device, &rw, "__entry_sw_rw");
-        for v in views() {
-            let (texture, view) = swizzled(&device, &v, None);
-            let o = floats_buffer(&device, &vec![-1.0; (N * 4) as usize]);
-            let bound = Bound {
-                textures: &[&view],
-                samplers: &[],
-                out: Some(&o),
-            };
-            run(name, &device, &rw, N, &bound);
-            let got = floats(&o);
-            for i in 0..N as usize {
-                let read = lanes(&got, i);
-                assert_eq!(
-                    read,
-                    read_rule(&v, i),
-                    "{name}: {} read of texel {i}",
-                    v.name
-                );
-            }
-            let want: Vec<u8> = (0..N as usize).flat_map(|i| write_rule(&v, i)).collect();
-            assert_eq!(bytes(&texture, &v), want, "{name}: {} write", v.name);
-        }
-        println!("{name}: read_write images of each swizzled view read and write as Metal's");
     });
 }

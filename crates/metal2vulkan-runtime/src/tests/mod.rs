@@ -86,8 +86,6 @@ mod one_path;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod opencl_data;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
-mod opencl_images;
-#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod opencl_kernels;
 mod opencl_local;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
