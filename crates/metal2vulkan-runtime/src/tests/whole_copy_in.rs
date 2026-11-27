@@ -40,21 +40,21 @@ fn private(pf: PixelFormat, [w, h, d]: [u32; 3], usage: TextureUsage) -> Texture
     descriptor
 }
 
-/// The old layout of the move before a copy of `aspect` into `origin` and `size` of `level` of
-/// `texture`'s first layer.
-fn from(
+/// Whether the move before a copy of `aspect` into `origin` and `size` of `level` of `texture`'s
+/// first layer starts from undefined.
+fn discards(
     texture: &Texture,
     aspect: vk::ImageAspectFlags,
     level: u32,
     (origin, size): ([u32; 3], [u32; 3]),
-) -> vk::ImageLayout {
+) -> bool {
     let placed = Placed {
         level,
         layer: 0,
         origin,
         size,
     };
-    texture.away_into(&placed, aspect).old_layout
+    texture.away_into(&placed, aspect).old_layout == vk::ImageLayout::UNDEFINED
 }
 
 #[test]
@@ -67,21 +67,12 @@ fn the_move_before_a_copy_in_starts_from_undefined_for_a_whole_subresource() {
                 .unwrap_or_else(|error| panic!("{name}: a texture: {error}"))
         };
         let colour = vk::ImageAspectFlags::COLOR;
-        let undefined = vk::ImageLayout::UNDEFINED;
         // R8, 64 x 32, three levels: level 1 is 32 x 16.
         let mut d = private(PixelFormat::R8Unorm, [64, 32, 1], read);
         d.mipmap_level_count = 3;
         let flat = make(&d, 1);
-        assert_eq!(
-            from(&flat, colour, 0, ([0; 3], [64, 32, 1])),
-            undefined,
-            "{name}"
-        );
-        assert_eq!(
-            from(&flat, colour, 1, ([0; 3], [32, 16, 1])),
-            undefined,
-            "{name}"
-        );
+        assert!(discards(&flat, colour, 0, ([0; 3], [64, 32, 1])), "{name}");
+        assert!(discards(&flat, colour, 1, ([0; 3], [32, 16, 1])), "{name}");
         for short in [
             ([0, 0, 0], [63, 32, 1]),
             ([0, 0, 0], [64, 31, 1]),
@@ -89,32 +80,21 @@ fn the_move_before_a_copy_in_starts_from_undefined_for_a_whole_subresource() {
             ([0, 1, 0], [64, 31, 1]),
             ([0, 0, 0], [64, 16, 1]),
         ] {
-            assert_ne!(
-                from(&flat, colour, 0, short),
-                undefined,
-                "{name}: {short:?}"
-            );
+            assert!(!discards(&flat, colour, 0, short), "{name}: {short:?}");
         }
-        assert_ne!(
-            from(&flat, colour, 1, ([0; 3], [64, 32, 1])),
-            undefined,
-            "{name}"
-        );
+        assert!(!discards(&flat, colour, 1, ([0; 3], [64, 32, 1])), "{name}");
         // A 3D level: its depth whole, and short.
         let volume = make(&private(PixelFormat::R8Unorm, [16, 16, 8], read), 2);
-        assert_eq!(
-            from(&volume, colour, 0, ([0; 3], [16, 16, 8])),
-            undefined,
+        assert!(
+            discards(&volume, colour, 0, ([0; 3], [16, 16, 8])),
             "{name}"
         );
-        assert_ne!(
-            from(&volume, colour, 0, ([0; 3], [16, 16, 7])),
-            undefined,
+        assert!(
+            !discards(&volume, colour, 0, ([0; 3], [16, 16, 7])),
             "{name}"
         );
-        assert_ne!(
-            from(&volume, colour, 0, ([0, 0, 1], [16, 16, 7])),
-            undefined,
+        assert!(
+            !discards(&volume, colour, 0, ([0, 0, 1], [16, 16, 7])),
             "{name}"
         );
         // One aspect of depth and stencil, and both.
@@ -126,9 +106,13 @@ fn the_move_before_a_copy_in_starts_from_undefined_for_a_whole_subresource() {
         if let Ok(both) = device.new_texture(&both, Some(3)) {
             let whole = ([0; 3], [64, 32, 1]);
             let all = vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL;
-            assert_eq!(from(&both, all, 0, whole), undefined, "{name}");
+            assert!(discards(&both, all, 0, whole), "{name}");
             for one in [vk::ImageAspectFlags::DEPTH, vk::ImageAspectFlags::STENCIL] {
-                assert_ne!(from(&both, one, 0, whole), undefined, "{name}: {one:?}");
+                assert!(
+                    !discards(&both, one, 0, whole),
+                    "{name}: aspect {:#x}",
+                    one.as_raw()
+                );
             }
         }
         // A texture in place over a buffer keeps the buffer's bytes.
@@ -141,9 +125,8 @@ fn the_move_before_a_copy_in_starts_from_undefined_for_a_whole_subresource() {
         d.usage = read;
         let over = (buffer.new_texture(&d, Some(4), 0, pitch)).expect("a texture over the buffer");
         if over.copied_over().is_none() {
-            assert_ne!(
-                from(&over, colour, 0, ([0; 3], [256, 64, 1])),
-                undefined,
+            assert!(
+                !discards(&over, colour, 0, ([0; 3], [256, 64, 1])),
                 "{name}"
             );
         }
