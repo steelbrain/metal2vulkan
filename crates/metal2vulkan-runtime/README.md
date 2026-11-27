@@ -4722,12 +4722,12 @@ cache is answered compile-required on both.
   its pass is 140 and takes neither, nor do its draws (job m3-max-75974). Every render state keeps
   its descriptor, and through it its functions' libraries, while it lives: in states-only plays of
   two recorded replay streams on lavapipe, that kept no library alive that was not alive without it
-  (jobs m3-max-75968 and m3-max-75969). Keeping it costs every render state's make the
-  descriptor's copy, and its drop the copy's: a make of a content the device already holds takes
-  about 13,500 user-space instructions on lavapipe against about 11,800 without it (jobs
-  m3-max-75974 and m3-max-75975), once a state and never a draw. A state that names a colour its pass leaves unset between
-  two colour attachments stays refused (`DrawKind::AttachmentFormats`): there plain Metal writes
-  that colour's value into the next attachment (`pass-pipeline-color-unattached-between`, job
+  (jobs m3-max-75968 and m3-max-75969). Keeping it costs every render state's make the descriptor's
+  copy, and its drop the copy's: a make of a content the device already holds takes about 13,500
+  user-space instructions on lavapipe against about 11,800 without it (jobs m3-max-75974 and
+  m3-max-75975), once a state and never a draw. A state that names a colour its pass leaves unset
+  between two colour attachments stays refused (`DrawKind::AttachmentFormats`): there plain Metal
+  writes that colour's value into the next attachment (`pass-pipeline-color-unattached-between`, job
   m3-max-75934).
 
 ### Known gaps of render encoders
