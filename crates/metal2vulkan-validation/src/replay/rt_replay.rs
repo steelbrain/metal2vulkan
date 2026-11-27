@@ -29,6 +29,10 @@
 //!   dispatch plays, nothing refused or skipped.
 //! - A compute pipeline state the runtime answers with a typed gap is skipped and counted by the
 //!   gap, and a dispatch of it is skipped, and the play goes on.
+//! - A compute pipeline state made in OpenCL mode (`openClMode`) plays as the runtime makes one:
+//!   its kernel, in the shape Apple's OpenCL compiler writes, reads the dispatch's global offset
+//!   from the first hidden buffer, its arguments passed by value 3 past their indices, and writes
+//!   the buffer bound 3 past its own, nothing skipped.
 //! - Each pipeline state's making is split by the runtime's counters into the translator's time,
 //!   the driver's and the rest, beside what it made: a kernel's first state and a render state
 //!   are of contents new to the device, which lowered their functions and made a `VkPipeline`,
@@ -1928,6 +1932,128 @@ fn a_compute_state_the_runtime_does_not_build_is_counted_and_its_dispatch_skippe
     let line =
         "skipped compute states IndirectCommandBuffers { kind: ComputeCommands } 1, the first #5: ";
     assert!(lines.iter().any(|l| l.starts_with(line)), "{lines:?}");
+}
+
+/// `__kernel void v(__global float *o, float k, struct S s)`, `struct S { float a; int b; }`:
+/// `o[get_global_id(0)] = k + s.a`, written here in the shape Apple's OpenCL compiler writes it
+/// (an entry `__entry_v` that reads each argument passed by value from its constant pointer, the
+/// struct into a private `byval` copy, and calls the kernel; `get_global_id` through a wrapper).
+const OPENCL_BY_VALUE: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"
+target triple = \"air64_v29-apple-macosx27.0.0\"
+%struct.S = type { float, i32 }
+define void @__entry_v(ptr addrspace(1) %0, ptr addrspace(2) %1, ptr addrspace(2) %2) #0 {
+entry:
+  %3 = alloca i64, align 8
+  %4 = load float, ptr addrspace(2) %1, align 4
+  %5 = load i64, ptr addrspace(2) %2, align 4
+  store i64 %5, ptr %3, align 8
+  tail call fastcc void @v(ptr addrspace(1) %0, float %4, ptr nonnull byval(%struct.S) %3)
+  ret void
+}
+define internal fastcc void @v(ptr addrspace(1) %o, float %k, ptr byval(%struct.S) align 4 %s) #1 {
+entry:
+  %i = tail call fastcc i64 @_Z13get_global_idj(i32 0)
+  %pa = getelementptr inbounds %struct.S, ptr %s, i64 0, i32 0
+  %a = load float, ptr %pa, align 4
+  %r = fadd float %k, %a
+  %po = getelementptr inbounds float, ptr addrspace(1) %o, i64 %i
+  store float %r, ptr addrspace(1) %po, align 4
+  ret void
+}
+define internal fastcc i64 @_Z13get_global_idj(i32 %0) #2 {
+  %2 = tail call i32 @air.get_global_id.i32(i32 %0) #3
+  %3 = zext i32 %2 to i64
+  ret i64 %3
+}
+declare i32 @air.get_global_id.i32(i32) #3
+attributes #0 = { nounwind }
+attributes #1 = { convergent nounwind }
+attributes #2 = { nounwind optsize }
+attributes #3 = { nounwind readnone willreturn }
+!air.kernel = !{!0}
+!air.version = !{!7}
+!air.language_version = !{!8}
+!0 = !{ptr @__entry_v, !1, !2}
+!1 = !{}
+!2 = !{!3, !4, !5}
+!3 = !{i32 0, !\"air.buffer\", !\"air.location_index\", i32 0, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"float\", !\"air.arg_name\", !\"o\"}
+!4 = !{i32 1, !\"air.constant\", !\"air.location_index\", i32 1, i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"float\", !\"air.arg_name\", !\"k\"}
+!5 = !{i32 2, !\"air.constant\", !\"air.location_index\", i32 2, i32 1, !\"air.struct_type_info\", !6, !\"air.arg_type_size\", i32 8, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"S\", !\"air.arg_name\", !\"s\"}
+!6 = !{i32 0, i32 4, i32 0, !\"float\", !\"a\", i32 4, i32 4, i32 0, !\"int\", !\"b\"}
+!7 = !{i32 2, i32 9, i32 0}
+!8 = !{!\"Metal\", i32 1, i32 1, i32 0}
+";
+
+/// A compute pipeline state made with `openClMode` plays as the runtime makes one, the kernel
+/// bound as a pipeline of OpenCL mode binds it: the first hidden buffer (index 0, a `setBytes`)
+/// holds the global offset 1 and one dimension, `o` is bound at 3 and `k` and `s` at 4 and 5. Of
+/// three threads, `o[1..4]` take `k + s.a`, 1.5 + 2.25, and `o[0]`, below the offset, keeps the
+/// -1 written before; nothing is skipped.
+#[test]
+fn a_compute_state_of_opencl_mode_plays_its_kernel_as_opencl_mode_binds_it() {
+    let dir = ScratchDir::new("rt-replay-opencl-mode").unwrap();
+    let ll = dir.path().join("opencl_by_value.ll");
+    std::fs::write(&ll, OPENCL_BY_VALUE).unwrap();
+    let path = written(&dir, |w| {
+        let library = w.blob(&library_of(&dir, &ll, &[("__entry_v", 2, 0)]))?;
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        let library = [Value::Blob(library)];
+        w.call("newLibraryWithData:error:", 1, 3, &library, &[])?;
+        let kernel = [Value::Str("__entry_v".into())];
+        w.call("newFunctionWithName:", 3, 4, &kernel, &[])?;
+        let state = Value::Map(vec![
+            ("function".into(), Value::Object(4)),
+            ("openClMode".into(), Value::Bool(true)),
+        ]);
+        let made = "newComputePipelineStateWithDescriptor:options:reflection:error:";
+        w.call(made, 1, 5, &[state, Value::Uint(0), Value::Nil], &[])?;
+        let shared = [Value::Uint(16), Value::Uint(0)];
+        w.call("newBufferWithLength:options:", 1, 6, &shared, &[])?;
+        w.call(
+            "m2v.write",
+            6,
+            0,
+            &[Value::Uint(0), floats(&[-1.0; 4])],
+            &[],
+        )?;
+        w.call("commandBuffer", 2, 7, &[], &[])?;
+        w.call("computeCommandEncoder", 7, 8, &[], &[])?;
+        w.call("setComputePipelineState:", 8, 0, &[Value::Object(5)], &[])?;
+        // `__global_offset_and_num_dims`: the offset in each dimension, then the dimensions.
+        let offsets: Vec<u8> = [1u32, 0, 0, 1]
+            .iter()
+            .flat_map(|w| w.to_le_bytes())
+            .collect();
+        let bytes = |data: Vec<u8>, at: u64| {
+            let length = Value::Uint(data.len() as u64);
+            [Value::Bytes(data), length, Value::Uint(at)]
+        };
+        w.call("setBytes:length:atIndex:", 8, 0, &bytes(offsets, 0), &[])?;
+        let o = [Value::Object(6), Value::Uint(0), Value::Uint(3)];
+        w.call("setBuffer:offset:atIndex:", 8, 0, &o, &[])?;
+        let k = 1.5f32.to_le_bytes().to_vec();
+        w.call("setBytes:length:atIndex:", 8, 0, &bytes(k, 4), &[])?;
+        let s = [2.25f32.to_le_bytes(), 7i32.to_le_bytes()].concat();
+        w.call("setBytes:length:atIndex:", 8, 0, &bytes(s, 5), &[])?;
+        let size = |n| uints(&[("width", n), ("height", 1), ("depth", 1)]);
+        let dispatch = "dispatchThreadgroups:threadsPerThreadgroup:";
+        w.call(dispatch, 8, 0, &[size(1), size(3)], &[])?;
+        w.call("endEncoding", 8, 0, &[], &[])?;
+        w.call("commit", 7, 0, &[], &[])?;
+        w.call(WAIT_COMPLETED, 7, 0, &[], &[])
+    });
+    let (report, lines, words) = play_then("opencl-mode", &path, |backend| {
+        let bytes = backend.read(6).unwrap();
+        let word = |at: usize| f32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+        [word(0), word(4), word(8), word(12)]
+    });
+    assert_eq!(words, [-1.0, 3.75, 3.75, 3.75], "{lines:?}");
+    let executed = &report.total.executed;
+    for skipped in ["skipped_compute_states", "skipped_dispatches"] {
+        assert_eq!(executed[skipped], 0, "{skipped}: {executed:?}");
+    }
+    assert_eq!(report.first_skip, None);
 }
 
 /// The milliseconds `line` gives after `label`: its making's or makings' `wall W ms =
