@@ -510,9 +510,9 @@ pub(crate) struct Block {
     /// The block whose allocation this block's buffer is bound in ([`surface_view`]): given back
     /// after this one, so the block-maker thread destroys the buffer before it frees the memory.
     _under: Option<Arc<Block>>,
-    /// An import over several dma-bufs' chunks, in order ([`sparse_block`]): given back after
-    /// this one, so the block-maker thread destroys the sparse buffer before it frees any of
-    /// their memory, the last of them holding the release.
+    /// An import over several dma-bufs' chunks, in order (`sparse_block`, on Unix): given back
+    /// after this one, so the block-maker thread destroys the sparse buffer before it frees any
+    /// of their memory, the last of them holding the release.
     _chunks: Vec<Block>,
     /// Of an exported block: set once a public call hands out a device address of its memory
     /// ([`address_out`](Self::address_out)), which the textures over it read at each submission
