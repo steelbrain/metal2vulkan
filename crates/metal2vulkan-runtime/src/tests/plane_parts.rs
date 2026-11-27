@@ -30,6 +30,12 @@ fn staged(raw: u64, signals: &[u64]) -> Staged {
 /// An info as its command buffers and its signals, each signal as its semaphore and value.
 type Info = (Vec<u64>, Vec<(u64, u64)>);
 
+/// The parts as their values and infos.
+type Parts = Vec<(u64, Vec<Info>)>;
+
+/// The hand-overs asked for, as their planes and whether each acquires.
+type Asked = Vec<(Vec<char>, bool)>;
+
 /// The parts of `segments`, the first `ahead` of them uploads, at the last value 10, each as its
 /// value and its infos; with each hand-over asked for, as its planes and whether it acquires.
 /// Each hand-over's command buffer is numbered from 100 in the order asked.
@@ -38,7 +44,7 @@ fn shape(
     ahead: usize,
     leads: &[usize],
     planes: &[Vec<char>],
-) -> (Vec<(u64, Vec<Info>)>, Vec<(Vec<char>, bool)>) {
+) -> (Parts, Asked) {
     let mut asked = Vec::new();
     let made = parts(
         segments,
