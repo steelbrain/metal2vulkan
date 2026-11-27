@@ -2,11 +2,13 @@
 //! a texture over a buffer in place ([`Buffer::new_texture`](crate::Buffer::new_texture)), its
 //! texels live in an optimal image of the runtime's, and the device copies the bytes shaders
 //! reach (a Managed buffer's device copy, where it has one) into it and back, one
-//! `vkCmdCopyBufferToImage` or `vkCmdCopyImageToBuffer` region a texture, with no CPU copy. Over a
-//! Managed buffer's device copy, only Metal's Managed events copy ([`ManagedOvers`]); over any
-//! other buffer, the Shared rules, but for a buffer in an exported block, whose leading copy waits
-//! for an event that changes its bytes, a write through an address among them only once an address
-//! of the block went out ([`ExportedOvers`]):
+//! `vkCmdCopyBufferToImage` or `vkCmdCopyImageToBuffer` region a texture, with no CPU copy. A copy
+//! in writes the image's whole level and slice, so its move starts from the undefined layout and
+//! discards what the image held first; a copy back's move starts from the image's home layout,
+//! which keeps it. Over a Managed buffer's device copy, only Metal's Managed events copy
+//! ([`ManagedOvers`]); over any other buffer, the Shared rules, but for a buffer in an exported
+//! block, whose leading copy waits for an event that changes its bytes, a write through an address
+//! among them only once an address of the block went out ([`ExportedOvers`]):
 //!
 //! - **In, once a submission.** The upload that leads a submission copies the bytes into the
 //!   image of every such texture a segment of the submission uses before any command of the
@@ -425,7 +427,10 @@ pub(crate) unsafe fn record(
 }
 
 /// Records `copies` into `command`: each buffer's bytes into its image (`into`), or back, between
-/// one pair of barriers, counted in `cause`, one of the barrier causes.
+/// one pair of barriers, counted in `cause`, one of the barrier causes. A copy into an image moves
+/// it from the undefined layout, discarding what it held: its one region writes the image's whole
+/// level and slice, of its only aspect, the colour one (`texture::over_texel` refuses any other
+/// texture over a buffer). A copy back moves it from home, which keeps its texels.
 ///
 /// # Safety
 ///
@@ -462,9 +467,13 @@ pub(crate) unsafe fn record_side(
                 layer_count: 1,
             })
     };
+    let from = |copy: &OverCopy| match into {
+        true => vk::ImageLayout::UNDEFINED,
+        false => copy.home,
+    };
     let away: Vec<_> = (copies.iter())
         .map(|copy| {
-            image(copy, copy.home, layout)
+            image(copy, from(copy), layout)
                 .src_stage_mask(S::ALL_COMMANDS)
                 .src_access_mask(A::MEMORY_WRITE)
                 .dst_stage_mask(S::COPY)

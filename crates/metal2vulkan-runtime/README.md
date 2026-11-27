@@ -3054,7 +3054,9 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   of a texture records the same copy, not measured) can leave one aligned 4 x 2 cell of the
   texture's earlier contents, in about 4 of 1,000 copies whose region covers the texture's last
   56 rows; refilling rows 864 to 1079, the cells lay in rows 1026 to 1058. A copy of a whole
-  level and slice does not, as it discards the earlier contents first. A driver fault: the same
+  level and slice does not, as it discards the earlier contents first: a blit encoder's, and the
+  runtime's own copy of a texture over a buffer (`Buffer::new_texture`) into the image of its own
+  that the texture takes where the device's linear image does not hold it. A driver fault: the same
   copy in plain Vulkan does it, and the validation layer, with its synchronization checks, reports
   nothing on the same calls refilling the whole texture. At 1920 x 1088 and 1024 x 1024, refills
   of the bottom 216 rows left such a cell 10 to 18 rows below the band's top in 4 and 3 of 4,000;
