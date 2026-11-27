@@ -33,7 +33,10 @@
 //! read of its image, and every layout recorded for the image, its descriptor's included, is the
 //! general layout but the move home's old one, preinitialized. The image is host-accessible at
 //! every moment, so it and the buffer are aliases that interpret their bytes alike (Vulkan's
-//! memory aliasing): a copy that moved it to a transfer layout fails this.
+//! memory aliasing): a copy that moved it to a transfer layout fails this. A copy from a buffer
+//! into a texture of its own memory moves it from the undefined layout where the copy writes the
+//! whole level and slice, through a blit and through `replace_region` alike, and from home where
+//! it does not.
 
 use ash::vk;
 use std::collections::{HashMap, HashSet};
@@ -1023,8 +1026,8 @@ mod on_device {
     use crate::tests::command::on_device::{each_device, finished};
     use crate::texture::TextureObject;
     use crate::{
-        BufferLayout, ClearColor, IndexClass, LoadAction, MemoryClass, PixelFormat, Region,
-        RenderPassDescriptor, StorageMode, StoreAction, TextureDescriptor, TexturePlace,
+        BufferLayout, ClearColor, HostBytes, IndexClass, LoadAction, MemoryClass, PixelFormat,
+        Region, RenderPassDescriptor, StorageMode, StoreAction, TextureDescriptor, TexturePlace,
         TextureType, TextureUsage,
     };
     use ash::vk;
@@ -1446,6 +1449,85 @@ mod on_device {
                 "{name}: the discards taken, each with its whole copy: {after:?}"
             );
             drop((queue, plain, texture, buffer));
+            (device.release_block(block)).unwrap_or_else(|error| panic!("{name}: {error}"));
+        });
+    }
+
+    /// A copy from a buffer into a texture of its own memory moves its level and layer from the
+    /// undefined layout where it writes the whole subresource, and from home where it does not
+    /// (`TextureObject::away_into`), through each entry that records one: a blit's
+    /// `copy_from_buffer` into the whole first level, then into the second short of its edge, and
+    /// `replace_region` of the whole first level. Each copy's move is the last barrier naming the
+    /// image before it.
+    #[test]
+    fn a_whole_copy_in_moves_from_undefined_through_each_entry_and_a_short_one_from_home() {
+        let _recording = Recording::start();
+        each_device("whole copy in layouts", |name, _, device| {
+            let handle = device.core().device.handle();
+            let block = (device.take_block(MemoryClass::Shared, LEN))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let source = (device.new_buffer(block.id, 0, LEN, None))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let mut d =
+                TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, WIDTH, HEIGHT);
+            d.mipmap_level_count = 2;
+            d.usage = TextureUsage::SHADER_READ;
+            d.storage_mode = StorageMode::Shared;
+            let texture = (device.new_texture_for_views(&d))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let packed = BufferLayout {
+                offset: 0,
+                bytes_per_row: ROW,
+                bytes_per_image: 0,
+            };
+            let level = |level| TexturePlace {
+                level,
+                ..TexturePlace::default()
+            };
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut blit = command_buffer.blit_command_encoder().expect("an encoder");
+            let done = |result: Result<(), crate::Error>| {
+                result.unwrap_or_else(|error| panic!("{name}: {error}"))
+            };
+            done(blit.copy_from_buffer(&source, packed, [WIDTH, HEIGHT, 1], &texture, level(0)));
+            let short = [WIDTH / 2 - 1, HEIGHT / 2, 1];
+            done(blit.copy_from_buffer(&source, packed, short, &texture, level(1)));
+            blit.end_encoding();
+            command_buffer.commit().expect("a commit");
+            finished(name, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+            let texels = vec![0x5a; (ROW * u64::from(HEIGHT)) as usize];
+            let whole = Region {
+                origin: [0; 3],
+                size: [WIDTH, HEIGHT, 1],
+            };
+            (texture.replace_region(whole, 0, 0, HostBytes::from(&texels[..]), ROW, 0))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            // The upload runs ahead of a command buffer committed after it.
+            let after = queue.command_buffer().expect("a command buffer");
+            after.commit().expect("a commit");
+            finished(name, &after);
+            // Each copy's old layout, by its number: the last barrier's for the image before it.
+            let (mut old, mut froms) = (None, Vec::new());
+            for n in named(handle, texture.image()) {
+                match n.what {
+                    "a barrier's old layout" => old = Some(n.layout.as_raw()),
+                    COPY_IN => froms.push(old),
+                    _ => {}
+                }
+            }
+            println!("whole copy in layouts: {name}: copies in from {froms:?}");
+            let undefined = Some(vk::ImageLayout::UNDEFINED.as_raw());
+            assert!(
+                froms.len() == 3
+                    && froms[0] == undefined
+                    && froms[1].is_some_and(|from| Some(from) != undefined)
+                    && froms[2] == undefined,
+                "{name}: the blit's whole copy from undefined (0), its short copy from home, \
+                 replace_region's whole copy from undefined: {froms:?}"
+            );
+            drop((after, command_buffer, queue, texture, source));
             (device.release_block(block)).unwrap_or_else(|error| panic!("{name}: {error}"));
         });
     }
