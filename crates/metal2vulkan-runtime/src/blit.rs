@@ -637,19 +637,23 @@ impl BlitCommandEncoder {
             ),
         };
         let earlier = [memory_barrier(Reach::Commands)];
+        // A copy into the image that writes its whole subresource moves it from undefined
+        // (`TextureObject::away_into`).
+        let away_of = |copy: &BufferCopy| match into_image {
+            true => texture.away_into(&copy.placed, copy.unit.aspect),
+            false => texture.away(&copy.placed, layout, access),
+        };
         // One copy, a copy call's, takes its barriers on the stack; a synchronize's of each level
         // and slice, in lists.
         let (away_one, back_one, away_each, back_each);
         let (away, back): (&[_], &[_]) = match copies {
             [copy] => {
-                away_one = [texture.away(&copy.placed, layout, access)];
+                away_one = [away_of(copy)];
                 back_one = [texture.back(&copy.placed, layout)];
                 (&away_one, &back_one)
             }
             _ => {
-                away_each = (copies.iter())
-                    .map(|copy| texture.away(&copy.placed, layout, access))
-                    .collect::<Vec<_>>();
+                away_each = copies.iter().map(away_of).collect::<Vec<_>>();
                 back_each = (copies.iter())
                     .map(|copy| texture.back(&copy.placed, layout))
                     .collect::<Vec<_>>();

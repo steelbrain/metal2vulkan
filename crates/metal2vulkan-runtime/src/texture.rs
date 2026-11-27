@@ -3912,6 +3912,48 @@ impl TextureInner {
             .dst_access_mask(access)
     }
 
+    /// The barrier that moves `placed`'s level and layer, every aspect, from home to the copy
+    /// layout of `TRANSFER_DST_OPTIMAL` for a copy of `aspect` from a buffer into it: `away`'s,
+    /// its scopes over every earlier access of the image, from undefined where the copy writes
+    /// every texel the barrier names ([`writes_whole`](Self::writes_whole)). Vulkan discards the
+    /// contents of that range alone, which the copy then writes whole, so no earlier texel is
+    /// left for a program to see.
+    fn away_into(
+        &self,
+        placed: &Placed,
+        aspect: vk::ImageAspectFlags,
+    ) -> vk::ImageMemoryBarrier2<'static> {
+        let away = self.away(
+            placed,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            vk::AccessFlags2::TRANSFER_WRITE,
+        );
+        match self.writes_whole(placed, aspect) {
+            true => away.old_layout(vk::ImageLayout::UNDEFINED),
+            false => away,
+        }
+    }
+
+    /// Whether a copy of `aspect` into `placed` writes every texel of the range its barrier names
+    /// (one level, its one layer, every aspect): `aspect` is every aspect of the image, and the
+    /// region starts at the level's first texel and reaches its edge on every axis, a 3D level's
+    /// depth included (its barrier names every slice), a compressed level's edge as
+    /// [`place`] clamps the region to it. Only an image whose contents are its own, in memory of
+    /// its own or placed in a heap: one in place over a buffer, a surface plane's and an
+    /// import's keep the bytes another reaches, and a copy into them never discards.
+    fn writes_whole(&self, placed: &Placed, aspect: vk::ImageAspectFlags) -> bool {
+        let image = self.imaged();
+        let own = image.first == vk::ImageLayout::UNDEFINED
+            && !image.surface()
+            && image.foreign.is_none();
+        let Some(level) = placed.level.checked_sub(self.base()[0]) else {
+            return false;
+        };
+        let d = &self.descriptor;
+        let extent = [d.width, d.height, d.depth].map(|e| (e >> level).max(1));
+        own && aspect == image.aspects && placed.origin == [0; 3] && placed.size == extent
+    }
+
     /// The barrier that moves `placed`'s level and layer back home from the copy layout of
     /// `layout` once a copy has run, its writes (a copy into the image, whose transfer layout is
     /// `TRANSFER_DST_OPTIMAL`, or within one subresource, in `GENERAL`) visible to every later
@@ -4045,7 +4087,12 @@ impl TextureInner {
             ),
             false => (vk::ImageLayout::TRANSFER_SRC_OPTIMAL, Access::TRANSFER_READ),
         };
-        let away = [self.away(&copy.placed, layout, access)];
+        // A copy into the image that writes its whole subresource moves it from undefined
+        // (`away_into`).
+        let away = match to_image {
+            true => [self.away_into(&copy.placed, copy.unit.aspect)],
+            false => [self.away(&copy.placed, layout, access)],
+        };
         let home = [self.back(&copy.placed, layout)];
         let image = self.imaged();
         let named = image.copy_layout(layout);
@@ -5521,6 +5568,17 @@ pub(crate) trait TextureObject {
         access: vk::AccessFlags2,
     ) -> vk::ImageMemoryBarrier2<'static> {
         TextureInner::away(self.object(), placed, layout, access)
+    }
+
+    /// The barrier that moves `placed` from home to `TRANSFER_DST_OPTIMAL` for a copy of `aspect`
+    /// from a buffer into it, after every earlier command's writes: from undefined where the copy
+    /// writes the whole subresource (`TextureInner::away_into`).
+    fn away_into(
+        &self,
+        placed: &Placed,
+        aspect: vk::ImageAspectFlags,
+    ) -> vk::ImageMemoryBarrier2<'static> {
+        TextureInner::away_into(self.object(), placed, aspect)
     }
 
     /// The barrier that moves `placed` back home from the copy layout of the transfer `layout`
