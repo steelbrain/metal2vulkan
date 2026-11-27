@@ -219,9 +219,9 @@ impl Case for PassUnattachedBetween {
         )?;
         // Each pass's own three targets, so neither pass's planes hold the other's draw.
         let mut targets = [[Handle(0); 3]; 2];
-        for (at, role) in ["every", "lacking"].into_iter().enumerate() {
-            for which in 0..FORMATS.len() {
-                targets[at][which] = made(
+        for (made_for, role) in targets.iter_mut().zip(["every", "lacking"]) {
+            for (which, slot) in made_for.iter_mut().enumerate() {
+                *slot = made(
                     sites,
                     &format!("target:{role}:{which}"),
                     side.target(&target(which)),
