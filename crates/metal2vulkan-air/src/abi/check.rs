@@ -365,7 +365,9 @@ fn number_or_vector(m: &Module, ty: TypeId) -> bool {
 
 /// A function-constant predicate names the global the static initializer stores the predicate
 /// into: a defined, writable, non-externally-initialized constant-space global of integer type
-/// (the frontend stores `bool` predicates as `i8`, and a few as `i16` or `i32`).
+/// (the frontend stores `bool` predicates as `i8`, and a few as `i16` or `i32`), or of `half` or
+/// `float` type for a constant of that type (the two float types
+/// `air.normalize_function_constant_predicate` takes).
 fn predicate(m: &Module, p: Option<&Predicate>, site: &Site) -> Result<(), Error> {
     let Some(p) = p else {
         return Ok(());
@@ -378,7 +380,7 @@ fn predicate(m: &Module, p: Option<&Predicate>, site: &Site) -> Result<(), Error
             && g.init.is_some()
             && matches!(
                 m.types().get(g.value_ty),
-                Some(Type::Int(_) | Type::Half | Type::Float | Type::Double)
+                Some(Type::Int(_) | Type::Half | Type::Float)
             )
     });
     if ok {

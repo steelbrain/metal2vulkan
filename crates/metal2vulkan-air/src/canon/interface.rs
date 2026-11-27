@@ -59,6 +59,7 @@ use crate::budget::Meter;
 use crate::error::{AbiError, CanonError, DiagName, InputError, InputErrorKind, Location};
 use crate::intrinsics::{AbsentAccess, AtomicSpace, NumTy, Texture};
 use crate::intrinsics::{AirIntrinsic, FunctionConstant, LlvmIntrinsic, Operand, TexOp, TexRole};
+use crate::ir::TypeTable;
 use crate::ir::{Arena, ArgIdx, Body, Callee, Const, ConstId, ConstTable, Constant, FuncId};
 use crate::ir::{CastOp, FastMath, Inst, TailKind, TypeLayouts, Value};
 use crate::ir::{Global, GlobalId, Idx, InstId, InstKind, Layout, ModuleParts, Type, TypeId};
@@ -75,6 +76,7 @@ use private::Private;
 
 /// Read-only view of the globals once they hold their pipeline values.
 pub(super) struct Values<'a> {
+    pub types: &'a TypeTable,
     pub globals: &'a Arena<GlobalId, Global>,
     pub consts: &'a ConstTable,
     /// Function constants and the globals derived from them.
@@ -120,14 +122,24 @@ impl Values<'_> {
         )
     }
 
-    /// Whether the floating-point constant global `g` holds is non-zero; an unsupplied one's is
-    /// not.
-    fn float_nonzero(&self, g: GlobalId) -> bool {
+    /// Whether the floating-point constant global `g` holds is non-zero, by value as the
+    /// predicate's normalization compares it (`-0.0` is zero, a NaN is not); an unsupplied one's
+    /// is not. A global of neither `half` nor `float` type is not evaluable.
+    fn float_nonzero(&self, g: GlobalId) -> Result<bool, Error> {
+        let global = self.globals.get(g).ok_or_else(not_evaluable)?;
+        let magnitude = match self.types.get(global.value_ty) {
+            Some(Type::Half) => 0x7fff,
+            Some(Type::Float) => 0x7fff_ffff,
+            _ => return Err(not_evaluable()),
+        };
         if self.fcs.get(&g).is_some_and(|f| !f.supplied) {
-            return false;
+            return Ok(false);
         }
-        let init = self.globals.get(g).and_then(|g| g.init);
-        matches!(init.and_then(|c| self.consts.get(c)).map(|c| &c.value), Some(Const::Float(b)) if *b != 0)
+        let init = global.init.and_then(|c| self.consts.get(c));
+        match init.map(|c| &c.value) {
+            Some(Const::Float(bits)) => Ok((bits & magnitude) != 0),
+            _ => Err(not_evaluable()),
+        }
     }
 
     fn resolve(&self, v: &mut AbiInt) -> Result<(), Error> {
@@ -148,7 +160,7 @@ impl Values<'_> {
         match p {
             // A function constant that is not a `bool`, of floating-point type, is normalized to
             // 1.0 where it is supplied and non-zero and to 0.0 otherwise.
-            Some(p) if self.holds_float(p.global) => Ok(self.float_nonzero(p.global)),
+            Some(p) if self.holds_float(p.global) => self.float_nonzero(p.global),
             Some(p) => Ok(self.int(p.global)? != 0),
             None => Ok(true),
         }

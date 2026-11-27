@@ -1072,6 +1072,12 @@ fn predicates_name_a_static_initializer_integer_or_float_global() {
     refused(kernel_with_predicate(|b| {
         fc_global(b, "fc0", Some(Section::FcInitializer))
     }));
+    // A `double`: the predicate's normalization takes `half` and `float` only.
+    refused(kernel_with_predicate(|b| {
+        let t = b.ty(Type::Double);
+        let zero = b.constant(t, Const::Float(0));
+        b.simple_global("pred", t, AddrSpace::Constant, Some(zero))
+    }));
     // Not a number.
     refused(kernel_with_predicate(|b| {
         let t = b.ptr(AddrSpace::Device);

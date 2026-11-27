@@ -1405,8 +1405,9 @@ fn float_constant(v: f32) -> ConstValue {
 
 /// Apple's OpenGL front end's shape for a function constant that is a `float` (a point size):
 /// the static initializer stores the constant's normalized predicate, a `float`, into `pred`,
-/// which gates parameter 1.
-fn float_predicate() -> (Module, AirAbi) {
+/// which gates parameter 1. With `normalized` false it stores the constant itself, so `pred`
+/// holds the value as supplied.
+fn float_predicate(normalized: bool) -> (Module, AirAbi) {
     let mut m = ModuleBuilder::new();
     let void = m.void();
     let ft = m.float();
@@ -1417,7 +1418,10 @@ fn float_predicate() -> (Module, AirAbi) {
     let (size_addr, pred_addr) = (m.global_addr(size), m.global_addr(pred));
     static_init(&mut m, "init", |f| {
         let v = load(f, ft, size_addr);
-        let p = normalize_f32(f, ft, v);
+        let p = match normalized {
+            true => normalize_f32(f, ft, v),
+            false => v,
+        };
         store(f, p, pred_addr);
     });
     let fty = m.fn_ty(void, &[dev, dev]);
@@ -1441,14 +1445,28 @@ fn float_predicate() -> (Module, AirAbi) {
 
 #[test]
 fn a_float_function_constant_gates_a_parameter_where_it_is_supplied_and_non_zero() {
-    let kept = |constants: &[(u32, ConstValue)]| -> Vec<u32> {
-        let (module, abi) = float_predicate();
-        let e = specialize(module, &abi, &request(constants), &mut meter()).unwrap();
-        e.ep.params.iter().map(|p| p.param).collect()
-    };
-    assert_eq!(kept(&[(0, float_constant(1.5))]), [0, 1], "non-zero is on");
-    assert_eq!(kept(&[(0, float_constant(0.0))]), [0], "zero is off");
-    assert_eq!(kept(&[]), [0], "unsupplied is off");
+    for normalized in [true, false] {
+        let kept = |constants: &[(u32, ConstValue)]| -> Vec<u32> {
+            let (module, abi) = float_predicate(normalized);
+            let e = specialize(module, &abi, &request(constants), &mut meter()).unwrap();
+            e.ep.params.iter().map(|p| p.param).collect()
+        };
+        let at = format!("normalized {normalized}");
+        assert_eq!(
+            kept(&[(0, float_constant(1.5))]),
+            [0, 1],
+            "non-zero is on, {at}"
+        );
+        assert_eq!(kept(&[(0, float_constant(0.0))]), [0], "zero is off, {at}");
+        // By value, as the normalization compares: -0.0 is zero.
+        assert_eq!(kept(&[(0, float_constant(-0.0))]), [0], "-0.0 is off, {at}");
+        assert_eq!(
+            kept(&[(0, float_constant(f32::NAN))]),
+            [0, 1],
+            "NaN is on, {at}"
+        );
+        assert_eq!(kept(&[]), [0], "unsupplied is off, {at}");
+    }
 }
 
 #[test]

@@ -835,6 +835,7 @@ pub fn specialize_dynamic(
 
     // ABI resolution, the absent arguments' values, then pruning.
     let values = interface::Values {
+        types: &parts.types,
         globals: &parts.globals,
         consts: &parts.consts,
         fcs: &fcs,
@@ -1315,6 +1316,7 @@ pub fn static_values(
         );
     }
     let values = interface::Values {
+        types: &parts.types,
         globals: &parts.globals,
         consts: &parts.consts,
         fcs: &fcs,
