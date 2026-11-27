@@ -2854,7 +2854,11 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
         // it, and every later command, in this submission and after it, is ordered after that
         // wait (`crate::import::Sparse`).
         #[cfg(unix)]
-        if let Some((timeline, value)) = (core.imports.sparse.as_ref()).and_then(|s| s.owed()) {
+        let owed = (core.imports.sparse.as_ref()).and_then(|s| s.owed());
+        // No such import on any other host.
+        #[cfg(not(unix))]
+        let owed: Option<(vk::Semaphore, u64)> = None;
+        if let Some((timeline, value)) = owed {
             if let Some(first) = parts.first_mut().and_then(|(_, part)| part.first_mut()) {
                 first.waits.push(
                     vk::SemaphoreSubmitInfo::default()

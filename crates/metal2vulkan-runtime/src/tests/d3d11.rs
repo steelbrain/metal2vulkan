@@ -116,10 +116,11 @@ mod on_device {
                 let mut past = luma;
                 past.descriptor.width = most + 1;
                 let error = device.import_d3d11_surface(&[past]).err();
+                let max = made.max_extent;
                 println!(
                     "d3d11: {name}: the import query's maxExtent for the luma {:?}; a plane {} wide: \
                      {error:?}",
-                    made.max_extent,
+                    [max.width, max.height, max.depth],
                     most + 1
                 );
                 assert!(
@@ -724,21 +725,25 @@ mod on_device {
                     .unwrap_or_else(|| panic!("{name}: no DXGI adapter of LUID {luid:02x?}"));
                 let core = device.core();
                 // The old layouts of the acquires of `surface`'s planes recorded since `from`,
-                // each plane's in order, the luma's first.
-                let acquires = |surface: &Surface, from: usize| -> Vec<Vec<vk::ImageLayout>> {
+                // each plane's in order, the luma's first, as their raw values (undefined 0,
+                // general 1).
+                let acquires = |surface: &Surface, from: usize| -> Vec<Vec<i32>> {
                     let recorded = lock(&core.work.acquired);
                     (surface.planes().iter())
                         .map(|texture| {
                             let image = Arc::as_ptr(&texture.held_image()) as usize;
                             (recorded[from..].iter())
                                 .filter(|&&(at, _)| at == image)
-                                .map(|&(_, layout)| layout)
+                                .map(|&(_, layout)| layout.as_raw())
                                 .collect()
                         })
                         .collect()
                 };
                 let mark = || lock(&core.work.acquired).len();
-                let (undefined, general) = (vk::ImageLayout::UNDEFINED, vk::ImageLayout::GENERAL);
+                let (undefined, general) = (
+                    vk::ImageLayout::UNDEFINED.as_raw(),
+                    vk::ImageLayout::GENERAL.as_raw(),
+                );
 
                 // rt's first use, with no Direct3D 11 access before it.
                 let textures = PLANES
