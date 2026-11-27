@@ -2747,6 +2747,14 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   m3-max-68314), and 1 failing suite run of 11 (m3-max-68142). No other device the suites run on
   shows it, no split dispatch has shown it, and a kernel that checks each of its reads met no wrong
   one in 5 runs (m3-max-68367). The cause is not found.
+- An event's encoded signal or wait puts Metal's value on the event's timeline semaphore as it is.
+  Vulkan requires that value to lie within the device's `maxTimelineSemaphoreValueDifference` of
+  the semaphore's value and of every signal and wait pending on it
+  (`VUID-VkSubmitInfo2-semaphore-03883`, `VUID-VkSubmitInfo2-semaphore-03884`), and a device may
+  report a limit as low as 2,147,483,647. So on a device whose limit is below the jump, a program
+  whose encoded signal or wait moves an event's value further than that limit is outside Vulkan's
+  valid usage. A host's `set_signaled_value` raises the event's host value without signalling the
+  semaphore, so it meets no such limit.
 
 ## Compute encoders
 
