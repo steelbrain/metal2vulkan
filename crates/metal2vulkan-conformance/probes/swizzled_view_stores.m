@@ -63,6 +63,13 @@
 //            MTLTextureUsageRenderTarget (0x04)", and every compute path with "Compute
 //            Function(kw): writes texture (t[0]) whose usage (0x11) doesn't specify
 //            MTLTextureUsageShaderWrite (0x02)".
+// The usage path, job m3-max-76856 (the render and compute lines as 76829's), the same with
+// MTL_DEBUG_LAYER=1 and unset (usage, the swizzle answered, the parent):
+//   base 0x17 rgba none; plain 0x17 rgba base; identity 0x17 rgba base; bgra 0x11 bgra base;
+//   bgra/plain 0x11 bgra bgra; bgra/identity 0x11 rgba bgra; bgra/bgra 0x11 bgra bgra;
+//   bgra/gbra 0x11 gbra bgra; plain/bgra 0x11 bgra plain. A view answers its parent's usage, less
+//   RenderTarget and ShaderWrite where it is made with a swizzle other than the identity (the
+//   swizzle passed, not the combined one); its swizzle is the one passed, else its parent's.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <math.h>
