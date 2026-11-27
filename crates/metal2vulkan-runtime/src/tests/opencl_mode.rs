@@ -29,6 +29,14 @@
 //!   toward zero, up and down; `float` to integers of 8 to 64 bits to nearest even, up and down;
 //!   and `.sat` between integers.
 //!
+//! Not run here: a kernel of OpenCL mode that takes a 1D image (`image1d_t` or `image1d_array_t`,
+//! which Apple's OpenCL binds as a 2D texture of height 1 or a 2D array of that height), whose
+//! channel queries, reads, samples and writes the M3 Max and the Radeon Pro 5300M answer. The
+//! runtime refuses each such kernel's pipeline state at its making: "the translator made no
+//! pipeline of __entry_<name>: unsupported: IdentityDomains (state of a bound texture or sampler
+//! beyond its resource ID (OpenClLineTexture { slot: SlotRef { stage: Kernel, class: Texture,
+//! index: <i> } })); needs NotImplemented" (the runtime's README, Known gaps of pipeline states).
+//!
 //! The modules are LLVM text written here; `llvm-as` assembles them, and without it the tests skip
 //! visibly.
 

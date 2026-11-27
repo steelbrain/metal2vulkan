@@ -3950,6 +3950,13 @@ cache is answered compile-required on both.
   (`Gap::KernelInput`, whose `KernelInputKind` names what the runtime found: `Slot` for an
   intersection-function table). So is a state for indirect command buffers
   (`Gap::IndirectCommandBuffers`, `IndirectCommandsKind::ComputeCommands`).
+- An OpenCL program's kernel that takes a 1D image (`image1d_t` or `image1d_array_t`) cannot be
+  made into a compute pipeline state of OpenCL mode (`open_cl_mode_enabled`), where Metal makes
+  it: Apple's OpenCL binds such an image as a 2D texture of height 1 (a 1D array as a 2D array of
+  that height), and the translator's form of the kernel depends on whether the texture bound for
+  the image is 1D (`RuntimeFact::OpenClLineTexture`), state of the bound texture beyond its
+  resource ID, which the runtime does not supply. The making fails with `Error::Translation`
+  (`Unsupported{IdentityDomains, NotImplemented}`), whatever else the kernel does.
 - A visible-function table's words take a Shared block of their own, 64 KiB at the least, for a
   table of any size.
 - A state whose kernel the consumer compiled (`StageSource::Compiled`) holds no linked functions
