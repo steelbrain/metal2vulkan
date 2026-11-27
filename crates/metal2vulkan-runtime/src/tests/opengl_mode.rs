@@ -1,12 +1,13 @@
-//! OpenGL mode (`PrivateRenderState::open_gl_mode_enabled`) makes the two render states Metal
-//! refuses without it, each drawing as an Apple M3 Max draws it (probe
-//! `conformance/probes/opengl_mode.m`, macOS 27.0.1): a fragment function writing depth without a
-//! depth attachment draws its colors as with one; a rasterizing state whose vertex function returns
-//! `void` runs the vertex function and rasterizes nothing. Without the mode Metal refuses the
-//! second ("RasterizationEnabled is true but the vertex shader's return type is void"), as the
-//! translator's link does (`DescriptorError::RasterizedVoidVertex`). The first only the M3 Max's
-//! driver refuses ("depthAttachmentPixelFormat is not valid and shader writes to depth"), and the
-//! runtime makes it in either mode (docs/API.md, accepted differences).
+//! OpenGL mode (`PrivateRenderState::open_gl_mode_enabled`) makes two render states Metal refuses
+//! without it, as an Apple M3 Max draws them (probe `conformance/probes/opengl_mode.m`, macOS
+//! 27.0.1): a fragment function writing depth without a depth attachment draws its colors as with
+//! one; a rasterizing state whose vertex function returns `void` runs the vertex function and
+//! rasterizes nothing. The runtime draws the first as Metal does, and makes it without the mode
+//! too, where only the M3 Max's driver refuses it ("depthAttachmentPixelFormat is not valid and
+//! shader writes to depth"; docs/API.md, accepted differences). It refuses the second in either
+//! mode, as the translator's link does (`DescriptorError::RasterizedVoidVertex`): without the mode
+//! as Metal does ("RasterizationEnabled is true but the vertex shader's return type is void"), and
+//! with it a known gap (the runtime's README, Known gaps of render pipeline states).
 //!
 //! Device tests, under a device cfg on every device of the cfg's kind. The functions are those of
 //! the owned fixture `validation/fixtures/public/examples/icb_linked_arguments.ll`; `llvm-as`
@@ -40,7 +41,7 @@ mod on_device {
     use metal2vulkan_devtools::fixtures_dir;
 
     /// The texel `tint` holds at (1, 0), which the depth-writing fragment function writes as its
-    /// depth and the `void` vertex function stores.
+    /// depth.
     const TEXEL: [f32; 4] = [0.25, 0.5, 0.75, 1.0];
 
     /// The index `tint` takes.
@@ -163,6 +164,29 @@ mod on_device {
         });
     }
 
+    /// Asserts that `device` refuses a rasterizing state of the `void` vertex function as the
+    /// translator's link does, in OpenGL mode where `gl`, with or without a fragment function.
+    fn refuses_the_void_vertex_function(name: &str, device: &Device, library: &Library, gl: bool) {
+        for fragment in [None, Some("inputless_fragment")] {
+            let functions = ("void_store_vertex", fragment);
+            let refused = device.new_render_pipeline_state(
+                &descriptor(library, functions, gl),
+                crate::tests::no_constexpr_samplers,
+            );
+            match refused {
+                Err(Error::Translation {
+                    error:
+                        metal2vulkan::error::Error::InvalidDescriptor(
+                            DescriptorError::RasterizedVoidVertex,
+                        ),
+                    ..
+                }) => {}
+                Err(other) => panic!("{name}: {fragment:?}: another error: {other:?}"),
+                Ok(_) => panic!("{name}: {fragment:?}: made"),
+            }
+        }
+    }
+
     /// Without the mode, a rasterizing state whose vertex function returns `void` is refused
     /// with Metal's error, with or without a fragment function.
     #[test]
@@ -171,25 +195,24 @@ mod on_device {
             return;
         };
         each_device("opengl_mode_void_refused", |name, _, device| {
-            for fragment in [None, Some("inputless_fragment")] {
-                let functions = ("void_store_vertex", fragment);
-                let refused = device.new_render_pipeline_state(
-                    &descriptor(&library, functions, false),
-                    crate::tests::no_constexpr_samplers,
-                );
-                match refused {
-                    Err(Error::Translation {
-                        error:
-                            metal2vulkan::error::Error::InvalidDescriptor(
-                                DescriptorError::RasterizedVoidVertex,
-                            ),
-                        ..
-                    }) => {}
-                    Err(other) => panic!("{name}: {fragment:?}: not Metal's error: {other:?}"),
-                    Ok(_) => panic!("{name}: {fragment:?}: made"),
-                }
-            }
+            refuses_the_void_vertex_function(name, &device, &library, false);
             println!("{name}: a rasterizing void vertex function refused without OpenGL mode");
+        });
+    }
+
+    /// With the mode too, a rasterizing state whose vertex function returns `void` is refused,
+    /// with or without a fragment function, as the translator's link refuses it whatever the
+    /// mode. Metal makes it there (an Apple M3 Max, macOS 27.0.1, the probe): a state whose draw
+    /// runs the vertex function, its three stores landing, and rasterizes nothing. The difference
+    /// is a known gap (the runtime's README, Known gaps of render pipeline states).
+    #[test]
+    fn opengl_mode_refuses_a_rasterizing_void_vertex_function() {
+        let Some(library) = examples() else {
+            return;
+        };
+        each_device("opengl_mode_void", |name, _, device| {
+            refuses_the_void_vertex_function(name, &device, &library, true);
+            println!("{name}: a rasterizing void vertex function refused in OpenGL mode");
         });
     }
 }

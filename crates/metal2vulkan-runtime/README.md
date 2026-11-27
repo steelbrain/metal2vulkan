@@ -4313,6 +4313,11 @@ cache is answered compile-required on both.
   The states-only plays of the 35 replay streams on lavapipe refuse none of their render or compute
   states (jobs m3-max-63105 to 63108, and m3-max-63132 and m3-max-63156 for the two streams that
   ran past those jobs' 300-second limit).
+- Under the private OpenGL mode (`PrivateRenderState::open_gl_mode_enabled`), a render pipeline
+  whose vertex function returns `void` with rasterization enabled is refused, an
+  `Error::Translation` naming `RasterizedVoidVertex`, where Metal makes a state that runs the
+  vertex function and rasterizes nothing (an Apple M3 Max, macOS 27.0.1, the probe
+  `metal2vulkan-conformance/probes/opengl_mode.m`).
 - On a device that does not list `VK_EXT_shader_stencil_export`, a fragment function's `[[stencil]]`
   output is drawn by bits (`RuntimeFact::StencilBitDraws`). Each draw through its state is drawn
   once under the stencil reference 0, then once for each bit of the low 8 of the write masks of
