@@ -25,14 +25,28 @@
 //!   value its exchange succeeded on as its ticket. Each work-group's sum and count, the total
 //!   sum and count, and the tickets (each work-group's `__local` ones every value below 128 once,
 //!   the `__global` ones every value below 2048 once) are what no lost update can give.
+//! - **sampler**: two `sampler_t` constants whose OpenCL bits differ from Metal's sampler words,
+//!   which Apple's compiler writes as `air.sampler_states` globals of Metal's two words:
+//!   `CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST`
+//!   (`0x7bff0000088049`), read with integer coordinates (`air.convert` to `float`, then
+//!   `air.sample_texture_2d`, access 0), and `CLK_NORMALIZED_COORDS_TRUE | CLK_ADDRESS_REPEAT |
+//!   CLK_FILTER_LINEAR` (`0x7bff0000080a92`), read with `float` ones; each work-item reads a 4 by 2
+//!   `RGBA8Unorm` image through both. The first at `(i - 2, 3 (i & 1) - 1)`, a texel coordinate
+//!   on each side of the image, answers the texel clamped to the edge; the second at
+//!   `(((i & 3) + 1) / 4, ((i >> 2) + 0.5) / 2)`, half-way between texel `(i & 3, i >> 2)` and the
+//!   next one across, which wraps to the row's first, answers their mean. Every byte of the image
+//!   is even, so each mean is a whole byte.
 //!
 //! Under a device cfg, on every device of the cfg's kind. The modules are LLVM text written here;
 //! `llvm-as` assembles them, and without it the tests skip visibly.
 
 use crate::tests::command::on_device::{each_device, finished};
-use crate::tests::opencl_mode::{buffer, kernel_list, library, state, words, words_buffer};
+use crate::tests::opencl_mode::{
+    buffer, floats, floats_buffer, kernel_list, library, state, words, words_buffer,
+};
 use crate::{
-    Buffer, ComputePipelineState, Device, DispatchType, IndexClass, PixelFormat, Region,
+    Buffer, ComputePipelineDescriptor, ComputePipelineState, Device, DispatchType,
+    FunctionDescriptor, IndexClass, Library, NumberedSampler, PixelFormat, Region, StageSource,
     StorageMode, Texture, TextureDescriptor, TextureSwizzle, TextureSwizzleChannels, TextureType,
     TextureUsage,
 };
@@ -388,5 +402,151 @@ fn opencl_mode_atomics_on_local_and_global_memory_lose_no_update() {
             &missing[..missing.len().min(8)]
         );
         println!("{name}: {GROUPS} work-groups of {GROUP} lose no __local or __global update");
+    });
+}
+
+/// `__kernel void ocl_sampler(__read_only image2d_t img, __global float4 *o)`, of the constant
+/// samplers `s_edge` (clamp to edge, nearest, unnormalized) and `s_repeat` (repeat, linear,
+/// normalized): work-item `i` stores `read_imagef(img, s_edge, (int2)(i - 2, 3 * (i & 1) - 1))`
+/// to `o[2i]` and `read_imagef(img, s_repeat, (float2)(((i & 3) + 1) / 4.0, ((i >> 2) + 0.5) /
+/// 2))` to `o[2i + 1]`.
+fn sampler() -> String {
+    let body = "@__air_sampler_state.1 = internal addrspace(2) constant [2 x i64] [i64 34901797601020562, i64 0], align 8\n\
+@__air_sampler_state = internal addrspace(2) constant [2 x i64] [i64 34901797601050697, i64 0], align 8\n\
+define void @__entry_ocl_sampler(ptr addrspace(1) %0, ptr addrspace(1) %1) #0 {\n\
+entry:\n\
+  tail call fastcc void @ocl_sampler(ptr addrspace(1) %0, ptr addrspace(1) %1)\n\
+  ret void\n}\n\
+define internal fastcc void @ocl_sampler(ptr addrspace(1) %img, ptr addrspace(1) %o) #1 {\n\
+entry:\n\
+  %call = tail call fastcc i64 @_Z13get_global_idj(i32 0)\n\
+  %conv = trunc i64 %call to i32\n\
+  %sub = add nsw i32 %conv, -2\n\
+  %vecinit = insertelement <2 x i32> undef, i32 %sub, i64 0\n\
+  %and = and i32 %conv, 1\n\
+  %mul = mul nuw nsw i32 %and, 3\n\
+  %sub1 = add nsw i32 %mul, -1\n\
+  %vecinit2 = insertelement <2 x i32> %vecinit, i32 %sub1, i64 1\n\
+  %call3 = tail call fastcc <4 x float> @_Z11read_imagef14ocl_image2d_ro11ocl_samplerDv2_i(ptr addrspace(1) %img, ptr addrspace(2) @__air_sampler_state, <2 x i32> %vecinit2)\n\
+  %mul4 = shl nsw i32 %conv, 1\n\
+  %idxprom = sext i32 %mul4 to i64\n\
+  %arrayidx = getelementptr inbounds <4 x float>, ptr addrspace(1) %o, i64 %idxprom\n\
+  store <4 x float> %call3, ptr addrspace(1) %arrayidx, align 16\n\
+  %and6 = and i32 %conv, 3\n\
+  %0 = tail call float @air.convert.f.f32.s.i32(i32 %and6)\n\
+  %add = fadd float %0, 1.000000e+00\n\
+  %div = fmul float %add, 2.500000e-01\n\
+  %vecinit7 = insertelement <2 x float> undef, float %div, i64 0\n\
+  %shr = ashr i32 %conv, 2\n\
+  %1 = tail call float @air.convert.f.f32.s.i32(i32 %shr)\n\
+  %add8 = fadd float %1, 5.000000e-01\n\
+  %div9 = fmul float %add8, 5.000000e-01\n\
+  %vecinit10 = insertelement <2 x float> %vecinit7, float %div9, i64 1\n\
+  %call11 = tail call fastcc <4 x float> @_Z11read_imagef14ocl_image2d_ro11ocl_samplerDv2_f(ptr addrspace(1) %img, ptr addrspace(2) @__air_sampler_state.1, <2 x float> %vecinit10)\n\
+  %add13 = or i32 %mul4, 1\n\
+  %idxprom14 = sext i32 %add13 to i64\n\
+  %arrayidx15 = getelementptr inbounds <4 x float>, ptr addrspace(1) %o, i64 %idxprom14\n\
+  store <4 x float> %call11, ptr addrspace(1) %arrayidx15, align 16\n\
+  ret void\n}\n\
+define internal fastcc <4 x float> @_Z11read_imagef14ocl_image2d_ro11ocl_samplerDv2_f(ptr addrspace(1) %0, ptr addrspace(2) %1, <2 x float> %2) #2 {\n\
+  %4 = tail call { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1) %0, ptr addrspace(2) %1, <2 x float> %2, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.000000e+00, float 0.000000e+00, i32 0)\n\
+  %5 = extractvalue { <4 x float>, i8 } %4, 0\n\
+  ret <4 x float> %5\n}\n\
+define internal fastcc <4 x float> @_Z11read_imagef14ocl_image2d_ro11ocl_samplerDv2_i(ptr addrspace(1) %0, ptr addrspace(2) %1, <2 x i32> %2) #2 {\n\
+  %4 = tail call <2 x float> @air.convert.f.v2f32.s.v2i32(<2 x i32> %2)\n\
+  %5 = tail call { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1) %0, ptr addrspace(2) %1, <2 x float> %4, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.000000e+00, float 0.000000e+00, i32 0)\n\
+  %6 = extractvalue { <4 x float>, i8 } %5, 0\n\
+  ret <4 x float> %6\n}\n\
+declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr addrspace(2), <2 x float>, i1, <2 x i32>, i1, float, float, i32) #0\n\
+declare float @air.convert.f.f32.s.i32(i32) #3\n\
+declare <2 x float> @air.convert.f.v2f32.s.v2i32(<2 x i32>) #3\n\
+!air.sampler_states = !{!70, !71}\n\
+!70 = !{!\"air.sampler_state\", ptr addrspace(2) @__air_sampler_state.1}\n\
+!71 = !{!\"air.sampler_state\", ptr addrspace(2) @__air_sampler_state}\n";
+    let args = [
+        image(0, 0, "sample", "texture2d<unknown, read>", "img"),
+        buffer(1, 0, "read_write", 1, "float4", "o"),
+    ];
+    format!("{body}{}", kernel_list("__entry_ocl_sampler", &args))
+}
+
+/// The state of kernel `entry` of `library`, a pipeline of OpenCL mode whose two constant
+/// samplers take sampler indices 1 and 2.
+fn sampled_state(
+    name: &str,
+    device: &Device,
+    library: &Library,
+    entry: &str,
+) -> ComputePipelineState {
+    let function = library.function(entry).expect("the kernel");
+    let mut descriptor =
+        ComputePipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(function)));
+    descriptor.open_cl_mode_enabled = true;
+    (device.new_compute_pipeline_state(&descriptor, |samplers| {
+        assert!(
+            matches!(
+                samplers,
+                [NumberedSampler::Constexpr(_), NumberedSampler::Constexpr(_)]
+            ),
+            "{name}: {samplers:?}"
+        );
+        Ok(vec![1, 2])
+    }))
+    .unwrap_or_else(|error| panic!("{name}: {entry}: {error}"))
+}
+
+/// Byte `c` of texel `(x, y)` of the sampled image: even, as every byte of it is.
+fn sampled(x: u32, y: u32, c: usize) -> u8 {
+    [0x10, 0x30, 0x50, 0x90][c] + (0x20 * x + 0x08 * y) as u8
+}
+
+#[test]
+fn opencl_mode_constant_samplers_read_through_metals_words() {
+    let Some(sampler) = library(&sampler()) else {
+        return;
+    };
+    let texel = |x: u32, y: u32| -> [u8; 4] { std::array::from_fn(|c| sampled(x, y, c)) };
+    let mean = |a: [u8; 4], b: [u8; 4]| -> [u8; 4] {
+        std::array::from_fn(|c| ((u16::from(a[c]) + u16::from(b[c])) / 2) as u8)
+    };
+    let image: Vec<u8> = (0..N).flat_map(|i| texel(i % W, i / W)).collect();
+    each_device("opencl-shapes-sampler", |name, _, device| {
+        let _textures = (device.grant_indices(IndexClass::Texture, 1, 1))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let _samplers = (device.grant_indices(IndexClass::Sampler, 1, 2))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let sampler = sampled_state(name, &device, &sampler, "__entry_ocl_sampler");
+        let img = texture(name, &device, PixelFormat::RGBA8Unorm, &image);
+        let o = floats_buffer(&device, &vec![-1.0; (2 * N * 4) as usize]);
+        let bound = Bound {
+            textures: &[&img],
+            buffers: &[&o],
+            local: &[],
+        };
+        run(name, &device, &sampler, (N, N), &bound);
+        let got = floats(&o);
+        let bytes = |k: usize| -> [u8; 4] {
+            std::array::from_fn(|c| (got[4 * k + c] * 255.0).round() as u8)
+        };
+        for i in 0..N {
+            let edge = texel(
+                (i as i32 - 2).clamp(0, W as i32 - 1) as u32,
+                (3 * (i & 1) as i32 - 1).clamp(0, H as i32 - 1) as u32,
+            );
+            let (x, y) = (i % W, i / W);
+            let repeat = mean(texel(x, y), texel((x + 1) % W, y));
+            let k = 2 * i as usize;
+            assert_eq!(
+                bytes(k),
+                edge,
+                "{name}: work-item {i}'s clamped, nearest read"
+            );
+            assert_eq!(
+                bytes(k + 1),
+                repeat,
+                "{name}: work-item {i}'s repeated, linear read"
+            );
+        }
+        println!("{name}: both constant samplers read as their Metal words say");
     });
 }
