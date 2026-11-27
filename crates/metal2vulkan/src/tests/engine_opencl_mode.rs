@@ -970,11 +970,13 @@ fn an_opencl_mode_barrier_orders_the_memory_its_opencl_flags_name() {
 /// In OpenCL mode a barrier whose flags set a bit `cl_mem_fence_flags` does not name (4, which
 /// Metal's `mem_flags` read as `mem_texture`) is refused as an intrinsic outside the modeled set,
 /// as a constant and through the wrapper; without the mode the same AIR orders texture memory
-/// (`ImageMemory`).
+/// (`ImageMemory`), on the 780M's profile under the runtime's policy.
 #[test]
 fn an_opencl_mode_barrier_of_a_flag_opencl_does_not_name_is_refused() {
     let b = Budget::standard();
-    let dev = device("amd-780m-radv");
+    let (_, dev) = (runtime_devices().into_iter())
+        .find(|(stem, _)| stem == "amd-780m-radv")
+        .expect("the 780M's profile");
     let routes = [
         (
             "inline",
