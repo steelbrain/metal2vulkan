@@ -4724,7 +4724,10 @@ impl Texture {
         TextureObject::gpu_resource_id(self)
     }
 
-    /// `textureType`, `pixelFormat`, `width` and the rest, as made.
+    /// `textureType`, `pixelFormat`, `width` and the rest, as made. A view's `usage` is its base
+    /// texture's, which is what the view may be used with, where Metal's `usage` answers only
+    /// `ShaderRead` and `PixelFormatView` of a base of those, `ShaderWrite` and `RenderTarget`,
+    /// for a view made with a swizzle other than the identity and for every view of such a view.
     pub fn descriptor(&self) -> &TextureDescriptor {
         TextureObject::descriptor(self)
     }

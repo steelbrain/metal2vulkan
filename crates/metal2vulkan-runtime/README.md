@@ -2121,7 +2121,12 @@ made, with no lock, and never rewritten for layouts.
   such a texture, is `Gap::SwizzledReadWrite`, found when the pipeline state or a binding
   changes: its read would answer the texel unswizzled, where Metal reads it through the swizzle. A texture's
   own descriptor takes a swizzle only without shader-write and render-target usage
-  (`Refusal::TextureSwizzleWithWrites`), so this reaches views alone.
+  (`Refusal::TextureSwizzleWithWrites`), so this reaches views alone. A view's descriptor reports
+  its base texture's usage, which is what the view may be used with, so a draw into such a view
+  and a kernel's write through it run, where Metal reports only `ShaderRead` and
+  `PixelFormatView` of a base of those, `ShaderWrite` and `RenderTarget`, for a view made with a
+  swizzle other than the identity and for every view of such a view (M3 Max, macOS 27.0.1,
+  `metal2vulkan-conformance/probes/swizzled_view_stores.m`).
 - A kernel, a vertex function or a fragment function samples a 2D texture slot through a bicubic
   constexpr sampler, at normalized or at pixel coordinates, by the arm its slot's pushed word
   selects, which the runtime writes from the bound texture's format and swizzle
