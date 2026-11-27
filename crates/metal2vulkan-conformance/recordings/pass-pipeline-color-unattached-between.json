@@ -1,0 +1,553 @@
+{
+  "format": 1,
+  "case": "pass-pipeline-color-unattached-between",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "color_groups.ll",
+      "entry": "cg_cover+cg_five",
+      "source_sha256": "8d94c468fe7cb1a6a948523c513fc23097e64b7d940a329dd593fa6ac01b1ff8"
+    },
+    {
+      "fixture": "color_groups.air.ll",
+      "entry": "cg_cover+cg_five",
+      "source_sha256": "91affcfe19856f8a2b77fad0028cd6fd0b015896c09211ed581db1396c00418c"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "air",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "8d94c468fe7cb1a6a948523c513fc23097e64b7d940a329dd593fa6ac01b1ff8"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "91affcfe19856f8a2b77fad0028cd6fd0b015896c09211ed581db1396c00418c"
+                        }
+                      }
+                    },
+                    {
+                      "name": "render-pipeline",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "9b5e92700a02ac8d2a8c32392ccea6d5a079cf9ac326045ea3b9b749c240381b"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:every",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "d5219c8af0ba0a3d2d32d0c36c038c8f3cdc2b155170f41730722b986402cf79"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:lacking",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "cbfc73fa104c492c854d70c2ea8f31a8cb0b4924ceeef1ab1990e81ffc5c2960"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "417966ecee724a43e4bdb9d66ec6b356383e5ee401411c1b424d02676fa8a800"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "08d7a3241305751620a29d1dff7bfcda1ecf29dd209ba19eabd789a9690996da"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:2",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "4d690b8a0e61a89ce8ed9be6f151a37dc26f4d25dba9ef93bb9f60de30abd140"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "render-pipeline",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:every:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:every:1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:every:2",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:lacking:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:lacking:1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:lacking:2",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "render",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/every/0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/every/1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/every/2",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/lacking/0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back/lacking/2",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "drawn",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "pass:every",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:lacking",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "command-buffer-error",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "None",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "every:color0",
+                      "observed": {
+                        "value": {
+                          "bytes": "93gIQOd4GEDXeChAx3g4QLd4SECneFhAl3hoQId4eED3aAhA52gYQNdoKEDHaDhAt2hIQKdoWECXaGhAh2h4QPdYCEDnWBhA11goQMdYOEC3WEhAp1hYQJdYaECHWHhA90gIQOdIGEDXSChAx0g4QLdISECnSFhAl0hoQIdIeEAHBQP6BwUD+gcFA/oHBQP6BwUD+gcFA/oHBQP6BwUD+gcFA/oHBQP6BwUD+gcFA/oHBQP6BwUD+gcFA/oHBQP6BwUD+gcFA/oHBQP6BwUD+gcFA/oHBQP6BwUD+gcFA/oHBQP6BwUD+gcFA/oHBQP6BwUD+gcFA/oHBQP6BwUD+g=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "texture": {
+                                "level": 0,
+                                "slice": 0,
+                                "aspect": "color",
+                                "sample": 0,
+                                "origin": [
+                                  0,
+                                  0,
+                                  0
+                                ],
+                                "size": [
+                                  8,
+                                  8,
+                                  1
+                                ]
+                              }
+                            },
+                            "element": "u8",
+                            "row_offset": 0,
+                            "row_elements": 32,
+                            "row_pitch": 32,
+                            "rows": 8,
+                            "image_pitch": 256,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "every:color1",
+                      "observed": {
+                        "value": {
+                          "bytes": "gDfAO4A3QDuAN8A6gDdAOoA3wDmAN0A5gDfAOIA3QDiANsA7gDZAO4A2wDqANkA6gDbAOYA2QDmANsA4gDZAOIA1wDuANUA7gDXAOoA1QDqANcA5gDVAOYA1wDiANUA4gDTAO4A0QDuANMA6gDRAOoA0wDmANEA5gDTAOIA0QDgAMAA2ADAANgAwADYAMAA2ADAANgAwADYAMAA2ADAANgAwADYAMAA2ADAANgAwADYAMAA2ADAANgAwADYAMAA2ADAANgAwADYAMAA2ADAANgAwADYAMAA2ADAANgAwADYAMAA2ADAANgAwADYAMAA2ADAANgAwADYAMAA2ADAANg=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "texture": {
+                                "level": 0,
+                                "slice": 0,
+                                "aspect": "color",
+                                "sample": 0,
+                                "origin": [
+                                  0,
+                                  0,
+                                  0
+                                ],
+                                "size": [
+                                  8,
+                                  8,
+                                  1
+                                ]
+                              }
+                            },
+                            "element": "u8",
+                            "row_offset": 0,
+                            "row_elements": 32,
+                            "row_pitch": 32,
+                            "rows": 8,
+                            "image_pitch": 256,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "every:color2",
+                      "observed": {
+                        "value": {
+                          "bytes": "90AIeOdAGHjXQCh4x0A4eLdASHinQFh4l0BoeIdAeHj3QAho50AYaNdAKGjHQDhot0BIaKdAWGiXQGhoh0B4aPdACFjnQBhY10AoWMdAOFi3QEhYp0BYWJdAaFiHQHhY90AISOdAGEjXQChIx0A4SLdASEinQFhIl0BoSIdAeEgLDRHwCw0R8AsNEfALDRHwCw0R8AsNEfALDRHwCw0R8AsNEfALDRHwCw0R8AsNEfALDRHwCw0R8AsNEfALDRHwCw0R8AsNEfALDRHwCw0R8AsNEfALDRHwCw0R8AsNEfALDRHwCw0R8AsNEfALDRHwCw0R8AsNEfALDRHwCw0R8A=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "texture": {
+                                "level": 0,
+                                "slice": 0,
+                                "aspect": "color",
+                                "sample": 0,
+                                "origin": [
+                                  0,
+                                  0,
+                                  0
+                                ],
+                                "size": [
+                                  8,
+                                  8,
+                                  1
+                                ]
+                              }
+                            },
+                            "element": "u8",
+                            "row_offset": 0,
+                            "row_elements": 32,
+                            "row_pitch": 32,
+                            "rows": 8,
+                            "image_pitch": 256,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "lacking:color0",
+                      "observed": {
+                        "value": {
+                          "bytes": "93gIQOd4GEDXeChAx3g4QLd4SECneFhAl3hoQId4eED3aAhA52gYQNdoKEDHaDhAt2hIQKdoWECXaGhAh2h4QPdYCEDnWBhA11goQMdYOEC3WEhAp1hYQJdYaECHWHhA90gIQOdIGEDXSChAx0g4QLdISECnSFhAl0hoQIdIeEAHBQP6BwUD+gcFA/oHBQP6BwUD+gcFA/oHBQP6BwUD+gcFA/oHBQP6BwUD+gcFA/oHBQP6BwUD+gcFA/oHBQP6BwUD+gcFA/oHBQP6BwUD+gcFA/oHBQP6BwUD+gcFA/oHBQP6BwUD+gcFA/oHBQP6BwUD+gcFA/oHBQP6BwUD+g=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "texture": {
+                                "level": 0,
+                                "slice": 0,
+                                "aspect": "color",
+                                "sample": 0,
+                                "origin": [
+                                  0,
+                                  0,
+                                  0
+                                ],
+                                "size": [
+                                  8,
+                                  8,
+                                  1
+                                ]
+                              }
+                            },
+                            "element": "u8",
+                            "row_offset": 0,
+                            "row_elements": 32,
+                            "row_pitch": 32,
+                            "rows": 8,
+                            "image_pitch": 256,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "lacking:color2",
+                      "observed": {
+                        "value": {
+                          "bytes": "gDfAO4A3QDuAN8A6gDdAOoA3wDmAN0A5gDfAOIA3QDiANsA7gDZAO4A2wDqANkA6gDbAOYA2QDmANsA4gDZAOIA1wDuANUA7gDXAOoA1QDqANcA5gDVAOYA1wDiANUA4gDTAO4A0QDuANMA6gDRAOoA0wDmANEA5gDTAOIA0QDgLDRHwCw0R8AsNEfALDRHwCw0R8AsNEfALDRHwCw0R8AsNEfALDRHwCw0R8AsNEfALDRHwCw0R8AsNEfALDRHwCw0R8AsNEfALDRHwCw0R8AsNEfALDRHwCw0R8AsNEfALDRHwCw0R8AsNEfALDRHwCw0R8AsNEfALDRHwCw0R8A=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "texture": {
+                                "level": 0,
+                                "slice": 0,
+                                "aspect": "color",
+                                "sample": 0,
+                                "origin": [
+                                  0,
+                                  0,
+                                  0
+                                ],
+                                "size": [
+                                  8,
+                                  8,
+                                  1
+                                ]
+                              }
+                            },
+                            "element": "u8",
+                            "row_offset": 0,
+                            "row_elements": 32,
+                            "row_pitch": 32,
+                            "rows": 8,
+                            "image_pitch": 256,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": {
+        "stopped": {
+          "call": "render",
+          "message": "Set Render Pipeline State Validation\nFor color attachment 1, the renderPipelineState pixelFormat must be MTLPixelFormatInvalid, as no texture is set.\nthe pipelineState's per sample imageBlock usage(12) is greater than the encoder's perSample imageBlock usage(8)"
+        }
+      }
+    }
+  ]
+}
