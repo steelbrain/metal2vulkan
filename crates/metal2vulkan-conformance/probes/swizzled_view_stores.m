@@ -9,6 +9,7 @@
 //                                       child process with MTL_DEBUG_LAYER=1 (its exit status; on
 //                                       stderr any assertion of Metal's validation)
 //   ./swizzled_view_stores CASE PATH    one case (its index) and path (render or compute)
+//   ./swizzled_view_stores 0 usage      the usage path alone
 //
 // Cases: a base texture, 8 x 2, usage ShaderRead | ShaderWrite | RenderTarget | PixelFormatView,
 // and a view of it made with newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:.
@@ -24,6 +25,14 @@
 //   C1 = (0x1a, 0x4d, 0x99, 0xe6) / 255     C2 = (0x33, 0x66, 0xb3, 0xcc) / 255
 // Then the base's bytes are read (the buffer's bytes for a texture over a buffer, a blit to a
 // buffer otherwise) and a kernel samples every texel through the view (nearest, at its centre).
+//   usage    no draw or write: the usage, swizzle and parent each view reports, of an RGBA8Unorm
+//            Private base of the usage above. The views, all RGBA8Unorm 2D over level 0 and
+//            slice 0: plain (made by the call without a swizzle); identity (made with
+//            (Red, Green, Blue, Alpha) passed); bgra (Blue, Green, Red, Alpha); and of bgra:
+//            bgra/plain (without a swizzle), bgra/identity (Red, Green, Blue, Alpha passed),
+//            bgra/bgra (Blue, Green, Red, Alpha passed, which over bgra combines to the
+//            identity) and bgra/gbra (Green, Blue, Red, Alpha passed, combining to
+//            (Green, Red, Blue, Alpha)); and plain/bgra, bgra made of plain.
 //
 // A line per kind of texel (clear, draw, write; untouched: x >= 4 after the write) prints the
 // base's bytes of texel (x0, 0), one group a channel in memory order, the channels of the view's
@@ -437,6 +446,65 @@ static void runCompute(Ctx *x, int ci)
 	printKind(head, "untouched", k, bytes, samples, kSplit, kW, NULL);
 }
 
+// An RGBA8Unorm 2D view of `t` over level 0 and slice 0, made with `s` where it is given, else by
+// the call without a swizzle.
+static id<MTLTexture> usageView(id<MTLTexture> t, const MTLTextureSwizzleChannels *s)
+{
+	if (t == nil)
+		return nil;
+	if (s == NULL)
+		return [t newTextureViewWithPixelFormat:MTLPixelFormatRGBA8Unorm
+		                            textureType:MTLTextureType2D
+		                                 levels:NSMakeRange(0, 1)
+		                                 slices:NSMakeRange(0, 1)];
+	return [t newTextureViewWithPixelFormat:MTLPixelFormatRGBA8Unorm
+	                            textureType:MTLTextureType2D
+	                                 levels:NSMakeRange(0, 1)
+	                                 slices:NSMakeRange(0, 1)
+	                                swizzle:*s];
+}
+
+// The usage, swizzle and parent `t` reports; the parent named where it is `base`, `plain` or `swz`.
+static void usageLine(const char *name, id<MTLTexture> t, id<MTLTexture> base, id<MTLTexture> plain, id<MTLTexture> swz)
+{
+	if (t == nil) {
+		printf("layer=%s path=usage view=%s made=no\n", gLayer, name);
+		return;
+	}
+	id<MTLTexture> p = t.parentTexture;
+	const char *parent = p == nil ? "none" : p == base ? "base" : p == plain ? "plain" : p == swz ? "bgra" : "other";
+	MTLTextureSwizzleChannels s = t.swizzle;
+	printf("layer=%s path=usage view=%s usage=%#lx swizzle=%c%c%c%c parent=%s\n", gLayer, name,
+	       (unsigned long)t.usage, source(s.red), source(s.green), source(s.blue), source(s.alpha), parent);
+}
+
+static void runUsage(Ctx *x)
+{
+	MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+	                                                                              width:kW
+	                                                                             height:kH
+	                                                                          mipmapped:NO];
+	td.usage = kUsage;
+	td.storageMode = MTLStorageModePrivate;
+	id<MTLTexture> base = [x->d newTextureWithDescriptor:td];
+	if (base == nil) {
+		printf("layer=%s path=usage base=nil\n", gLayer);
+		return;
+	}
+	const MTLTextureSwizzleChannels identity = S(Red, Green, Blue, Alpha), bgra = S(Blue, Green, Red, Alpha),
+	                                gbra = S(Green, Blue, Red, Alpha);
+	id<MTLTexture> plain = usageView(base, NULL), same = usageView(base, &identity), swz = usageView(base, &bgra);
+	usageLine("base", base, base, plain, swz);
+	usageLine("plain", plain, base, plain, swz);
+	usageLine("identity", same, base, plain, swz);
+	usageLine("bgra", swz, base, plain, swz);
+	usageLine("bgra/plain", usageView(swz, NULL), base, plain, swz);
+	usageLine("bgra/identity", usageView(swz, &identity), base, plain, swz);
+	usageLine("bgra/bgra", usageView(swz, &bgra), base, plain, swz);
+	usageLine("bgra/gbra", usageView(swz, &gbra), base, plain, swz);
+	usageLine("plain/bgra", usageView(plain, &bgra), base, plain, swz);
+}
+
 static bool setUp(Ctx *x)
 {
 	x->d = MTLCreateSystemDefaultDevice();
@@ -485,8 +553,12 @@ static void validated(const char *self, int ci, const char *path)
 		return;
 	}
 	waitpid(pid, &status, 0);
-	printf("layer=on case=%d(%s) path=%s exit=%d signal=%d\n", ci, kCases[ci].name, path,
-	       WIFEXITED(status) ? WEXITSTATUS(status) : -1, WIFSIGNALED(status) ? WTERMSIG(status) : 0);
+	if (!strcmp(path, "usage"))
+		printf("layer=on path=usage");
+	else
+		printf("layer=on case=%d(%s) path=%s", ci, kCases[ci].name, path);
+	printf(" exit=%d signal=%d\n", WIFEXITED(status) ? WEXITSTATUS(status) : -1,
+	       WIFSIGNALED(status) ? WTERMSIG(status) : 0);
 }
 
 int main(int argc, char **argv)
@@ -502,7 +574,9 @@ int main(int argc, char **argv)
 			int ci = atoi(argv[1]);
 			if (ci < 0 || ci >= kCaseCount)
 				return 2;
-			if (!strcmp(argv[2], "render"))
+			if (!strcmp(argv[2], "usage"))
+				runUsage(&x);
+			else if (!strcmp(argv[2], "render"))
 				runRender(&x, ci);
 			else
 				runCompute(&x, ci);
@@ -512,10 +586,12 @@ int main(int argc, char **argv)
 			runRender(&x, ci);
 			runCompute(&x, ci);
 		}
+		runUsage(&x);
 		for (int ci = 0; ci < kCaseCount; ci++) {
 			validated(argv[0], ci, "render");
 			validated(argv[0], ci, "compute");
 		}
+		validated(argv[0], 0, "usage");
 	}
 	return 0;
 }
