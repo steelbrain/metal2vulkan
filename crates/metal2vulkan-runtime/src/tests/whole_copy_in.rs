@@ -133,9 +133,25 @@ fn the_move_before_a_copy_in_starts_from_undefined_for_a_whole_subresource() {
     });
 }
 
-/// The byte at column `x` of row `y` in refill `r`: 37 more each refill.
-fn pattern(r: u64, x: u32, y: u32) -> u8 {
-    (u64::from((x * 3) ^ (y * 5)) + r * 37) as u8
+/// The byte at column `x` of row `y` in refill 0; each refill's is 37 more than the last's.
+fn pattern(x: u32, y: u32) -> u8 {
+    ((x * 3) ^ (y * 5)) as u8
+}
+
+/// Adds 37 to each byte of `bytes`, eight at a time: no carry crosses a byte, as each byte's low
+/// seven bits and 37's sum below 256 and the high bit is added apart.
+fn advance(bytes: &mut [u8]) {
+    const K: u64 = 0x2525_2525_2525_2525;
+    const H: u64 = 0x8080_8080_8080_8080;
+    let mut chunks = bytes.chunks_exact_mut(8);
+    for chunk in &mut chunks {
+        let a = u64::from_ne_bytes((&*chunk).try_into().expect("eight bytes"));
+        let sum = ((a & !H) + (K & !H)) ^ ((a ^ K) & H);
+        chunk.copy_from_slice(&sum.to_ne_bytes());
+    }
+    for byte in chunks.into_remainder() {
+        *byte = byte.wrapping_add(37);
+    }
 }
 
 #[test]
@@ -174,13 +190,12 @@ fn refill(name: &str, device: &Device, texture: &Texture) {
         level: 0,
         origin: [0; 3],
     };
-    let mut want = vec![0u8; bytes as usize];
+    let mut want: Vec<u8> = (0..HEIGHT)
+        .flat_map(|y| (0..WIDTH).map(move |x| pattern(x, y)))
+        .collect();
     let mut stale = Vec::new();
     for r in 1..=REFILLS {
-        for (at, byte) in want.iter_mut().enumerate() {
-            let (x, y) = (at as u32 % WIDTH, at as u32 / WIDTH);
-            *byte = pattern(r, x, y);
-        }
+        advance(&mut want);
         // SAFETY: the staging buffer is mapped for `bytes`, and no work uses it now.
         unsafe {
             std::ptr::copy_nonoverlapping(want.as_ptr(), host(&staging).as_ptr(), want.len())
