@@ -39,7 +39,21 @@
 // swizzle's lane l names, a missing channel 0 or alpha 1), and whether they are the colour as
 // written.
 //
-// Not yet run.
+// WHAT IT MEASURED, Apple M3 Max, macOS 27.0.1 (potluck job m3-max-76829, MTL_DEBUG_LAYER unset):
+//   render   every case, clear and draw: as-written, on all 8 texels of each kind. Case 0: clear
+//            d1d0d03d.9b9a9a3e (0.1020, 0.3020), draw cdcc4c3e.cdcccc3e (0.2, 0.4), sampled
+//            r, g, 0, 1. Case 1: the same bytes, sampled g, r, 0, 1. Case 2: clear 1a.4d.99.e6,
+//            draw 33.66.b3.cc, sampled b, g, r, a. Every sample is the read rule's over the
+//            stored texel.
+//   compute  case 0 as-written (cdcc4c3e.cdcccc3e); case 1 permuted, channels g, r
+//            (cdcccc3e.cdcc4c3e); case 2 permuted, channels b, g, r, a (b3.66.33.cc). The sample
+//            through the view then answers the colour as written. Texels x >= 4 keep 0xee.
+//   usage    every view's usage is 0x11 (ShaderRead | PixelFormatView) over a base of 0x17.
+//   layer    with MTL_DEBUG_LAYER=1 every case's render path ends the process (signal 6) with
+//            "Texture at colorAttachment[0] has usage (0x11) which doesn't specify
+//            MTLTextureUsageRenderTarget (0x04)", and every compute path with "Compute
+//            Function(kw): writes texture (t[0]) whose usage (0x11) doesn't specify
+//            MTLTextureUsageShaderWrite (0x02)".
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <math.h>
