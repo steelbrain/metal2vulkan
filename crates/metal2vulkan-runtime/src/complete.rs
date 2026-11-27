@@ -1,6 +1,28 @@
 //! The completion thread: it retires command buffers and uploads as the GPU completes them, runs
 //! their completed handlers, follows the event signals it submitted and runs listeners, and ends
 //! the work in flight at a loss.
+//!
+//! **What a value seen on the host means.** A host wait (`vkWaitSemaphores`) or a counter read
+//! (`vkGetSemaphoreCounterValue`) that finds a timeline semaphore at or above the value a
+//! submission signals means that signal operation has happened:
+//!
+//! - the Vulkan specification's Queue Operation section (3.2.1): "Before a fence or semaphore is
+//!   signaled, it is guaranteed that any previously submitted queue operations have completed
+//!   execution, and that memory writes from those queue operations are available to future queue
+//!   operations.";
+//! - its Semaphore Signaling section (7.4.1): a timeline semaphore "is considered signaled with
+//!   respect to the counter value set to be signaled";
+//! - `VK_KHR_timeline_semaphore`, issue 5: "Both a non-blocking query of the current payload value
+//!   of the synchronization primitive, and a blocking wait operation are provided.": the query is
+//!   one of the two documented forms of a host wait.
+//!
+//! Host Operations on Semaphores (7.4.4) carries no "defines an execution dependency" sentence,
+//! unlike the fence wait's (7.3, Fences). Host visibility does not come from the semaphore: it
+//! comes from the barrier `record::end` records at the end of each segment that writes Shared
+//! memory or signals an event (`Reach::Host`, whose second scope is `ALL_COMMANDS | HOST` with
+//! `HOST_READ` among its accesses). After it, host-coherent memory holds the writes for the host,
+//! and where the Shared memory type is not host-coherent, the flush then invalidate of
+//! `crate::coherence` makes them visible.
 
 use crate::capture::CopyIn;
 use crate::command::{self, CbInner, CommandBufferError, DeviceLoss, Gpu, Handlers, Pending};
