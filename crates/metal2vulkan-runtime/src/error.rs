@@ -270,8 +270,10 @@ pub enum Refusal {
     /// [`Device::new_buffer`](crate::Device::new_buffer) zeroing a buffer in a Private block).
     /// Refused on every device and whatever the runtime holds: a scheduled handler runs on the
     /// submit thread, before its command buffer's submission, and each of these calls may wait
-    /// for that thread to submit. Metal runs a scheduled handler on a thread of its own, where
-    /// each of these calls runs.
+    /// for that thread to submit. On Metal (Apple M3 Max, macOS 27.0.1, the conformance probe
+    /// `cross_queue_handler_waits`, 10 runs a case), a scheduled handler that waits for another
+    /// queue's completed handler holds neither queue back, and one queue's handlers run one at a
+    /// time, on one thread.
     ///
     /// Basis: ours (the consumer's scheduled handlers run on the submit thread, and the one
     /// consumer's make none of these calls; a guest's scheduled handler runs in the guest).
@@ -287,7 +289,10 @@ pub enum Refusal {
     /// [`CommandQueue::command_buffer`](crate::CommandQueue::command_buffer) on a queue whose
     /// maximum count of command buffers are made and not yet completed. A wait already met
     /// answers at once there. The condition is the program's own state: what it committed, and
-    /// what has completed. Metal runs handlers on a thread of its own, where the wait would end.
+    /// what has completed. On Metal (the same probe, 10 runs a case), a handler's wait for another
+    /// queue's completed handler ended, 7.6 to 9.3 ms after it began, and a scheduled handler's wait
+    /// for a completed handler of its own queue never did (its 5 s bound in every run, both handlers
+    /// on one thread): one queue's handlers run one at a time.
     ///
     /// Basis: ours (no wait of the runtime's hangs by construction).
     WaitOnOwnThread,
