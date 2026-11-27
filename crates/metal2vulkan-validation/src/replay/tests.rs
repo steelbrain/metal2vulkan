@@ -3463,6 +3463,7 @@ fn the_dump_compare_reports_a_differing_word_outside_every_cover() {
         differing: 2,
         covered: 1,
         first_uncovered: Some(0x600),
+        first_values: (Some(0), Some(1)),
         lengths: (0x2000, 0x2000),
     };
     assert_eq!(comparison.differences, [difference]);
@@ -3472,8 +3473,8 @@ fn the_dump_compare_reports_a_differing_word_outside_every_cover() {
     assert_eq!(
         lines,
         [
-            "differs cb #20 obj #3: 1 words outside every cover, the first word 1536; 1 covered; \
-             lengths 8192 and 8192",
+            "differs cb #20 obj #3: 1 words outside every cover, the first word 1536 (a \
+             0x00000000, b 0x00000001); 1 covered; lengths 8192 and 8192",
             "compared 2 buffers (0 as both plays' CPU copies, 0 as their device copies, read \
              back): 1 differ, 1 words outside every cover, 1 covered; 0 dumps in one play only, 0 \
              unread, 0 of different copies: DIFFER",
@@ -3496,6 +3497,7 @@ fn the_dump_compare_reports_a_word_whose_cover_the_buffer_s_last_write_voided() 
         differing: 2,
         covered: 0,
         first_uncovered: Some(4),
+        first_values: (Some(0), Some(1)),
         lengths: (0x2000, 0x2000),
     };
     assert_eq!(comparison.differences, [difference]);
@@ -3561,23 +3563,68 @@ fn the_dump_compare_leaves_out_a_covered_texture_and_reports_one_outside_every_c
     assert_eq!([cover(5), cover(6), cover(7)], ["0..32", "-", "-"]);
     let comparison = compare_dumps(a.path(), b.path()).unwrap();
     assert_eq!(comparison.compared, 3);
-    let differs = |object, covered, first_uncovered| Difference {
+    let differs = |object, covered, first_uncovered, first_values| Difference {
         command_buffer: 20,
         object,
         differing: 1,
         covered,
         first_uncovered,
+        first_values,
         lengths: (32, 32),
     };
     assert_eq!(
         comparison.differences,
-        [differs(5, 1, None), differs(7, 0, Some(0))]
+        [
+            differs(5, 1, None, (None, None)),
+            differs(7, 0, Some(0), (Some(7), Some(70)))
+        ]
     );
     assert!(!comparison.agrees());
     assert_eq!(
         comparison.lines()[0],
-        "differs cb #20 obj #7: 1 words outside every cover, the first word 0; 0 covered; \
-         lengths 32 and 32"
+        "differs cb #20 obj #7: 1 words outside every cover, the first word 0 (a 0x00000007, b \
+         0x00000046); 0 covered; lengths 32 and 32"
+    );
+}
+
+/// The compare prints the first word that differs outside every cover as each play's dump holds
+/// it: of three buffers, alike in their first word, the second word of #2 is 2 in `a` and 9 in
+/// `b`; #3's `b` ends 2 bytes into it, read with zeros above them; #4's `b` ends before it, none.
+#[test]
+fn the_dump_compare_prints_the_first_differing_word_of_each_play() {
+    let (a, b) = (
+        ScratchDir::new("dumps-a").unwrap(),
+        ScratchDir::new("dumps-b").unwrap(),
+    );
+    let words = |words: &[u32]| -> Vec<u8> { words.iter().flat_map(|w| w.to_le_bytes()).collect() };
+    let short = [&words(&[1])[..], &[0xFF, 0xEE]].concat();
+    for (object, b_bytes) in [(2, words(&[1, 9])), (3, short), (4, words(&[1]))] {
+        let name = format!("cb1-obj{object}.bin");
+        std::fs::write(a.path().join(&name), words(&[1, 2])).unwrap();
+        std::fs::write(b.path().join(&name), b_bytes).unwrap();
+    }
+    let comparison = compare_dumps(a.path(), b.path()).unwrap();
+    let values: Vec<_> = (comparison.differences.iter())
+        .map(|d| (d.object, d.first_uncovered, d.first_values))
+        .collect();
+    let first = |b| (Some(1), (Some(2), b));
+    let firsts = [
+        (2, first(Some(9))),
+        (3, first(Some(0xEEFF))),
+        (4, first(None)),
+    ];
+    let firsts = firsts.map(|(object, (word, values))| (object, word, values));
+    assert_eq!(values, firsts);
+    assert_eq!(
+        comparison.lines()[..3],
+        [
+            "differs cb #1 obj #2: 1 words outside every cover, the first word 1 (a 0x00000002, b \
+             0x00000009); 0 covered; lengths 8 and 8",
+            "differs cb #1 obj #3: 1 words outside every cover, the first word 1 (a 0x00000002, b \
+             0x0000eeff); 0 covered; lengths 8 and 6",
+            "differs cb #1 obj #4: 1 words outside every cover, the first word 1 (a 0x00000002, b \
+             none); 0 covered; lengths 8 and 4",
+        ]
     );
 }
 

@@ -296,6 +296,9 @@ pub struct Difference {
     pub covered: u64,
     /// The first differing word outside every cover, by its index (its byte offset over 4).
     pub first_uncovered: Option<u64>,
+    /// That word in each play's dump, little-endian, a short end's bytes read with zeros above
+    /// them: none past that dump's end, or where no word differs outside every cover.
+    pub first_values: (Option<u32>, Option<u32>),
     /// The two dumps' lengths in bytes.
     pub lengths: (u64, u64),
 }
@@ -347,7 +350,11 @@ impl Comparison {
     pub fn lines(&self) -> Vec<String> {
         let mut lines = Vec::new();
         for d in self.differences.iter().filter(|d| d.uncovered() > 0) {
-            let first = d.first_uncovered.map_or("-".to_owned(), |w| w.to_string());
+            let value = |v: Option<u32>| v.map_or("none".to_owned(), |v| format!("{v:#010x}"));
+            let first = d.first_uncovered.map_or("-".to_owned(), |w| {
+                let (a, b) = d.first_values;
+                format!("{w} (a {}, b {})", value(a), value(b))
+            });
             lines.push(format!(
                 "differs cb #{} obj #{}: {} words outside every cover, the first word {first}; \
                  {} covered; lengths {} and {}",
@@ -479,6 +486,18 @@ pub(super) fn words(a: &[u8], b: &[u8], covered: &[(u64, u64)]) -> (u64, u64, Op
     (differing, under, first)
 }
 
+/// Word `index` of `bytes`, little-endian, a short end's bytes read with zeros above them: none
+/// past its end.
+fn word_at(bytes: &[u8], index: u64) -> Option<u32> {
+    let at = usize::try_from(index).ok()?.checked_mul(4)?;
+    let word = bytes
+        .get(at..(at + 4).min(bytes.len()))
+        .filter(|w| !w.is_empty())?;
+    let mut four = [0; 4];
+    four[..word.len()].copy_from_slice(word);
+    Some(u32::from_le_bytes(four))
+}
+
 /// The dumps of two plays, in `a` and `b`, compared.
 pub fn compare_dumps(a: &Path, b: &Path) -> io::Result<Comparison> {
     let (mut a, mut b) = (read_dir(a)?, read_dir(b)?);
@@ -524,6 +543,7 @@ pub fn compare_dumps(a: &Path, b: &Path) -> io::Result<Comparison> {
                 differing,
                 covered: under,
                 first_uncovered: first,
+                first_values: first.map_or((None, None), |w| (word_at(&bx, w), word_at(&by, w))),
                 lengths: (bx.len() as u64, by.len() as u64),
             });
         }
