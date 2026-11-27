@@ -3049,6 +3049,14 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   range is refused alike (`Gap::OverlappingCopy`): the device lays the heap texture's texels out
   as it chooses, and Metal leaves the contents of aliased heap resources undefined, so nothing is
   emulated.
+- Measured on R8Unorm at 1920 x 1080 on a Radeon 780M under RADV (Mesa 26.2.6): a copy from a
+  buffer into part of a one-sample colour texture (`copy_from_buffer`; `replace_region` of part
+  of a texture records the same copy, not measured) can leave one aligned 4 x 2 cell of the
+  texture's earlier contents, in about 4 of 1,000 copies whose region covers the texture's last
+  56 rows. A copy of a whole level and slice does not, as it discards the earlier contents first.
+  A driver fault: the same copy in plain Vulkan does it, and the validation layer, with its
+  synchronization checks, reports nothing on the same calls refilling the whole texture. Other
+  sizes and formats of partial copies are not measured.
 
 ## Compute pipeline states
 
