@@ -59,8 +59,12 @@ use std::time::{Duration, Instant};
 /// retires the rest as the GPU completes it; the threads are joined; then every allocation is
 /// freed, after [`BlockMappings::unmap`] for each the consumer mapped, and the
 /// `VkDevice` is destroyed; every gauge reads zero only then. A last handle dropped on the
-/// consumer's thread tears the device down in that drop. Where the last handle drops in a handler
-/// or a listener, the reaper runs the teardown once the handler returns, and the consumer calls
+/// consumer's thread tears the device down in that drop, and so the drop waits, with no deadline,
+/// for every scheduled and completed handler of a command buffer still to retire, every listener
+/// whose value is reached before the threads end, and every [`BlockMappings`] hook or import
+/// release the block-maker thread runs, to return: a handler, listener or hook that waits for a
+/// lock the dropping thread holds never lets the drop return. Where the last handle drops in a
+/// handler or a listener, the reaper runs the teardown once the handler returns, and the consumer calls
 /// [`Instance::wait_until_devices_torn_down`](crate::Instance::wait_until_devices_torn_down)
 /// before it drops its instance or exits. Nothing relies on a static destructor or an `atexit`
 /// handler: the consumer drops every handle before the process exits, or, where a handle is still
