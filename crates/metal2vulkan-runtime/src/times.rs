@@ -172,8 +172,8 @@ pub(crate) struct Stamped {
 /// device's tick and the host nanoseconds of the same moment.
 #[derive(Clone, Copy)]
 pub(crate) struct Calibration {
-    tick: u64,
-    host: u64,
+    pub(crate) tick: u64,
+    pub(crate) host: u64,
 }
 
 impl Calibration {
