@@ -94,6 +94,7 @@ mod opencl_local;
 mod opencl_mode;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod opencl_swizzles;
+mod opengl_mode;
 mod over;
 mod over_aliases;
 mod over_causes;

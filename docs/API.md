@@ -2572,6 +2572,11 @@ named states the rule in full.
   same precise count as `Counting`, nonzero exactly where a sample passed
   (`RenderCommandEncoder::VISIBILITY_NOTE`, section 9). The conformance cases `visibility-boolean-*`
   compare its word as nonzero alone.
+- **A render pipeline state whose fragment function writes depth, with no depth attachment format,
+  is made, and its depth output goes nowhere**, where the driver of an Apple M3 Max (macOS
+  27.0.1) refuses it outside the private OpenGL mode with "depthAttachmentPixelFormat is not valid
+  and shader writes to depth" (the probe `metal2vulkan-conformance/probes/opengl_mode.m`), a
+  refusal no Metal document states (`MTLRenderPipeline.h`, `depthAttachmentPixelFormat`).
 
 **Resource IDs and identifiers**
 
