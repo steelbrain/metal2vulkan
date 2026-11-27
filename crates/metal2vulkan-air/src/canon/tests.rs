@@ -1472,8 +1472,13 @@ fn a_float_function_constant_gates_a_parameter_where_it_is_supplied_and_non_zero
             "non-zero is on, {at}"
         );
         assert_eq!(kept(&[(0, float_constant(0.0))]), [0], "zero is off, {at}");
-        // By value, as the normalization compares: -0.0 is zero.
-        assert_eq!(kept(&[(0, float_constant(-0.0))]), [0], "-0.0 is off, {at}");
+        // By its bits, as Metal reads it (an authored case's gated sample mask on the Apple M3
+        // Max, job m3-max-75714): -0.0 keeps the argument.
+        assert_eq!(
+            kept(&[(0, float_constant(-0.0))]),
+            [0, 1],
+            "-0.0 is on, {at}"
+        );
         assert_eq!(
             kept(&[(0, float_constant(f32::NAN))]),
             [0, 1],
@@ -1504,8 +1509,8 @@ fn a_half_function_constant_gates_a_parameter_where_it_is_supplied_and_non_zero(
         );
         assert_eq!(
             kept(&[(0, half_constant(0x8000))]),
-            [0],
-            "-0.0 is off, {at}"
+            [0, 1],
+            "-0.0 is on, {at}"
         );
         assert_eq!(
             kept(&[(0, half_constant(0x7e00))]),

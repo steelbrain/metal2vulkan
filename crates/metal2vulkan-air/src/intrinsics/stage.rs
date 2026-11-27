@@ -93,8 +93,8 @@ pub enum FunctionConstant {
     /// `air.is_function_constant_defined`: `i1 (ptr addrspace(2))`, the constant's global.
     IsDefined,
     /// `air.normalize_function_constant_predicate.<iN>`: `iN (iN)`; of a float constant, `.f16` or
-    /// `.f32`: the same over a float, 1.0 where it is a known non-zero and 0.0 where it is zero or
-    /// undefined.
+    /// `.f32`: the same over a float, 1.0 where its bits are not all zero (`-0.0` and a NaN
+    /// included) and 0.0 where it is `+0.0` or undefined.
     NormalizePredicate(Elem),
     /// The texture operation `t` (a read, sample, gather, query, or atomic) of a texture argument
     /// the pipeline's function constants removed, or through a sampler argument they removed,

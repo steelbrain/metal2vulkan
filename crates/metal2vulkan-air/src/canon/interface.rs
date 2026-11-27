@@ -122,22 +122,23 @@ impl Values<'_> {
         )
     }
 
-    /// Whether the floating-point constant global `g` holds is non-zero, by value as the
-    /// predicate's normalization compares it (`-0.0` is zero, a NaN is not); an unsupplied one's
-    /// is not. A global of neither `half` nor `float` type is not evaluable.
+    /// Whether the floating-point constant global `g` holds has a bit set, as Metal reads a float
+    /// predicate (`-0.0` and a NaN are non-zero, as the predicate's normalization makes them); an
+    /// unsupplied one's is not. A global of neither `half` nor `float` type is not evaluable.
     fn float_nonzero(&self, g: GlobalId) -> Result<bool, Error> {
         let global = self.globals.get(g).ok_or_else(not_evaluable)?;
-        let magnitude = match self.types.get(global.value_ty) {
-            Some(Type::Half) => 0x7fff,
-            Some(Type::Float) => 0x7fff_ffff,
-            _ => return Err(not_evaluable()),
-        };
+        if !matches!(
+            self.types.get(global.value_ty),
+            Some(Type::Half | Type::Float)
+        ) {
+            return Err(not_evaluable());
+        }
         if self.fcs.get(&g).is_some_and(|f| !f.supplied) {
             return Ok(false);
         }
         let init = global.init.and_then(|c| self.consts.get(c));
         match init.map(|c| &c.value) {
-            Some(Const::Float(bits)) => Ok((bits & magnitude) != 0),
+            Some(Const::Float(bits)) => Ok(*bits != 0),
             _ => Err(not_evaluable()),
         }
     }
@@ -159,7 +160,8 @@ impl Values<'_> {
     fn present(&self, p: &Option<Predicate>) -> Result<bool, Error> {
         match p {
             // A function constant that is not a `bool`, of floating-point type, is normalized to
-            // 1.0 where it is supplied and non-zero and to 0.0 otherwise.
+            // 1.0 where it is supplied and its bits are not all zero (`-0.0` and a NaN included)
+            // and to 0.0 otherwise.
             Some(p) if self.holds_float(p.global) => self.float_nonzero(p.global),
             Some(p) => Ok(self.int(p.global)? != 0),
             None => Ok(true),
