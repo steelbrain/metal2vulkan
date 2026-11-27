@@ -83,6 +83,7 @@ mod nil_slots;
 mod no_attachment;
 mod null_descriptor;
 mod one_path;
+mod opencl_local;
 mod over;
 mod over_aliases;
 mod over_causes;
