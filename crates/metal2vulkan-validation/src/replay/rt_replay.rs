@@ -32,7 +32,8 @@
 //! - A compute pipeline state made in OpenCL mode (`openClMode`) plays as the runtime makes one:
 //!   its kernel, in the shape Apple's OpenCL compiler writes, reads the dispatch's global offset
 //!   from the first hidden buffer, its arguments passed by value 3 past their indices, and writes
-//!   the buffer bound 3 past its own, nothing skipped.
+//!   the buffer bound 3 past its own, nothing skipped, its one dispatch in the form the device's
+//!   own answer gives a kernel's buffers (bound, or at their addresses), which the test prints.
 //! - Each pipeline state's making is split by the runtime's counters into the translator's time,
 //!   the driver's and the rest, beside what it made: a kernel's first state and a render state
 //!   are of contents new to the device, which lowered their functions and made a `VkPipeline`,
@@ -228,7 +229,17 @@ fn play_then<T>(
     then: impl FnOnce(&mut NewRuntime) -> T,
 ) -> (Report, Vec<String>, T) {
     let cache = ScratchCache::new().unwrap();
-    let mut backend = NewRuntime::new(rt_device(cache.path()), gpu::TEST_DEVICE).unwrap();
+    play_on(rt_device(cache.path()), test, path, then)
+}
+
+/// `path` played on `device` as [`play_then`] plays it.
+fn play_on<T>(
+    device: metal2vulkan_runtime::Device,
+    test: &str,
+    path: &Path,
+    then: impl FnOnce(&mut NewRuntime) -> T,
+) -> (Report, Vec<String>, T) {
+    let mut backend = NewRuntime::new(device, gpu::TEST_DEVICE).unwrap();
     let mut reader = StreamReader::open(&[path.to_path_buf()], None).unwrap();
     let (report, ended) = Player::new(&mut backend).play(&mut reader);
     let lines = backend.lines();
@@ -1988,7 +1999,9 @@ attributes #3 = { nounwind readnone willreturn }
 /// bound as a pipeline of OpenCL mode binds it: the first hidden buffer (index 0, a `setBytes`)
 /// holds the global offset 1 and one dimension, `o` is bound at 3 and `k` and `s` at 4 and 5. Of
 /// three threads, `o[1..4]` take `k + s.a`, 1.5 + 2.25, and `o[0]`, below the offset, keeps the
-/// -1 written before; nothing is skipped.
+/// -1 written before; nothing is skipped. The dispatch takes the form the device's own answer
+/// gives a kernel's buffers (`DeviceProfile::binds_kernel_buffers`): one bound dispatch where it
+/// binds them, else one address dispatch; the test prints which.
 #[test]
 fn a_compute_state_of_opencl_mode_plays_its_kernel_as_opencl_mode_binds_it() {
     let dir = ScratchDir::new("rt-replay-opencl-mode").unwrap();
@@ -2043,7 +2056,10 @@ fn a_compute_state_of_opencl_mode_plays_its_kernel_as_opencl_mode_binds_it() {
         w.call("commit", 7, 0, &[], &[])?;
         w.call(WAIT_COMPLETED, 7, 0, &[], &[])
     });
-    let (report, lines, words) = play_then("opencl-mode", &path, |backend| {
+    let cache = ScratchCache::new().unwrap();
+    let device = rt_device(cache.path());
+    let binds = device.translator().profile().binds_kernel_buffers();
+    let (report, lines, words) = play_on(device, "opencl-mode", &path, |backend| {
         let bytes = backend.read(6).unwrap();
         let word = |at: usize| f32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
         [word(0), word(4), word(8), word(12)]
@@ -2054,6 +2070,16 @@ fn a_compute_state_of_opencl_mode_plays_its_kernel_as_opencl_mode_binds_it() {
         assert_eq!(executed[skipped], 0, "{skipped}: {executed:?}");
     }
     assert_eq!(report.first_skip, None);
+    let [form, other] = match binds {
+        true => ["bound_dispatches", "address_dispatches"],
+        false => ["address_dispatches", "bound_dispatches"],
+    };
+    eprintln!("REPLAY opencl-mode form {form}: the device binds kernel buffers {binds}");
+    assert_eq!(
+        (executed[form], executed[other]),
+        (1, 0),
+        "{form}: {executed:?}"
+    );
 }
 
 /// The milliseconds `line` gives after `label`: its making's or makings' `wall W ms =
