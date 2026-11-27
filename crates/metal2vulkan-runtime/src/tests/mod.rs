@@ -134,6 +134,7 @@ mod texture_accesses;
 mod texture_buffers;
 mod translate;
 mod translator_fields;
+mod unattached_colors;
 mod upload;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod validation;

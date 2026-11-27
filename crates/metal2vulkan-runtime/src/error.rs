@@ -1794,10 +1794,15 @@ pub enum DrawKind {
     /// A viewport Vulkan's is not: a negative width (Metal mirrors the draw), a depth range past
     /// `[0, 1]`, or bounds past the device's viewport limits.
     Viewport,
-    /// A pipeline state whose colour or stencil formats are not its pass's attachments', or
-    /// whose `rasterSampleCount` is not their sample count: Metal's validation stops most such
-    /// draws, and plain Metal zeroes or drops the colours. Vulkan draws no other count
-    /// (VUID-vkCmdDraw-multisampledRenderToSingleSampled-07285).
+    /// A pipeline state whose colour, depth or stencil formats are not its pass's attachments',
+    /// or whose `rasterSampleCount` is not their sample count: Metal's validation stops such
+    /// draws. A colour the state names between two its pass attaches, the pass leaving it unset,
+    /// is among them: plain Metal writes the next colour's value into the attachment after it
+    /// (`pass-pipeline-color-unattached-between`, an Apple M3 Max under macOS 27.0.1, job
+    /// m3-max-75934). Vulkan draws no other sample count
+    /// (VUID-vkCmdDraw-multisampledRenderToSingleSampled-07285). A state whose colours past the
+    /// pass's last colour attachment are the only difference is drawn, as plain Metal draws it
+    /// ([`RenderCommandEncoder::set_render_pipeline_state`](crate::RenderCommandEncoder::set_render_pipeline_state)).
     AttachmentFormats,
     /// A draw that binds a texture whose image the pass renders, where neither the attachment
     /// feedback loop nor a copy into the image's shadow reads it: on a device without the

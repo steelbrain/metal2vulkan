@@ -957,7 +957,16 @@ impl RenderCommandEncoder {
 
     /// `setRenderPipelineState:`. The command buffer keeps the state until it retires.
     ///
-    /// Err: [`Refusal::OtherDevice`] for another device's state.
+    /// A state that names colours past the pass's last colour attachment, its formats up to that
+    /// attachment, its depth and stencil formats and its raster sample count all the pass's,
+    /// draws through the state of its descriptor without those colours, as plain Metal draws it
+    /// (Metal's validation stops it): one key of that descriptor and a lookup of the device's
+    /// contents at each such call, and that content's translation where the device holds none.
+    /// A state that renders into the pass takes neither.
+    ///
+    /// Err: [`Refusal::OtherDevice`] for another device's state; the error of making the state
+    /// without those colours (as `new_render_pipeline_state`), whose draws the encoder then
+    /// refuses as `DrawKind::AttachmentFormats`.
     pub fn set_render_pipeline_state(&mut self, state: &RenderPipelineState) -> Result<(), Error> {
         if !state.is_of(self.building().device.core()) {
             return Err(Error::Refused(Refusal::OtherDevice));
@@ -966,10 +975,27 @@ impl RenderCommandEncoder {
             return Ok(());
         }
         self.renders_into = state.inner.compiled.renders_into(&self.pass);
-        // SAFETY: the encoder holds the borrow, and it ends before its command buffer commits.
-        self.pipeline = Some(unsafe { self.building().lend_render_pipeline(state) });
+        let lacked = match self.renders_into {
+            true => None,
+            false => state.inner.compiled.lacked_past(&self.pass),
+        };
+        let Some(lacked) = lacked else {
+            // SAFETY: the encoder holds the borrow, and it ends before its command buffer commits.
+            self.pipeline = Some(unsafe { self.building().lend_render_pipeline(state) });
+            self.changed();
+            return Ok(());
+        };
+        let building = (self.building.as_ref())
+            .expect("an encoder holds its command buffer's recording until it ends");
+        let (drawn, failed) = match state.without_colors(&building.device, lacked, &self.pass) {
+            Ok(made) => (made, None),
+            Err(error) => (state.clone(), Some(error)),
+        };
+        self.renders_into = failed.is_none();
+        // SAFETY: as above.
+        self.pipeline = Some(unsafe { self.building().lend_render_pipeline(&drawn) });
         self.changed();
-        Ok(())
+        failed.map_or(Ok(()), Err)
     }
 
     /// `setVertexBuffer:offset:atIndex:` (`setVertexBuffers:offsets:withRange:` is a loop of it).

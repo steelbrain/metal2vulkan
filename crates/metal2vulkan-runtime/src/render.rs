@@ -116,6 +116,10 @@ pub(crate) struct RenderInner {
     pub(crate) compiled: Arc<RenderCompiled>,
     /// The samplers the state numbers and the indices the consumer gave them.
     pub(crate) numbered: Numbered,
+    /// The descriptor the state was made of, whose functions keep their library: the content of
+    /// a pass that lacks colours past its last colour attachment is made of it
+    /// ([`RenderPipelineState::without_colors`]).
+    descriptor: RenderPipelineDescriptor,
 }
 
 /// The vertex function's index in a draw's tables, and the fragment function's.
@@ -583,7 +587,11 @@ impl crate::Device {
             draw_input,
         )?;
         Ok(RenderPipelineState {
-            inner: Arc::new(RenderInner { compiled, numbered }),
+            inner: Arc::new(RenderInner {
+                compiled,
+                numbered,
+                descriptor: descriptor.clone(),
+            }),
         })
     }
 }
@@ -1409,6 +1417,32 @@ impl RenderCompiled {
             && fixed.samples == pass.samples
     }
 
+    /// The colours of the content `pass` has no attachment for, one bit an index, where the
+    /// content renders into the pass but for them and each lies past the pass's last colour
+    /// attachment: its colour formats up to the pass's last colour attachment are the pass's, its
+    /// depth and stencil formats and its raster sample count too, and it names a colour past
+    /// them. `None` otherwise, a colour it names before the pass's last colour attachment that the
+    /// pass leaves unset among them: there plain Metal writes the next colour's value into the
+    /// attachment after the unset one (`pass-pipeline-color-unattached-between`, an Apple M3 Max
+    /// under macOS 27.0.1, job m3-max-75934), a draw [`DrawKind::AttachmentFormats`] refuses.
+    ///
+    /// [`DrawKind::AttachmentFormats`]: crate::DrawKind::AttachmentFormats
+    pub(crate) fn lacked_past(&self, pass: &Pass) -> Option<u8> {
+        let fixed = &self.fixed;
+        let format = |t: Option<&crate::pass::Target>| {
+            t.map_or(vk::Format::UNDEFINED, |t| t.attachment.format)
+        };
+        let (within, past) = fixed.colors.split_at_checked(pass.colors.len())?;
+        let renders = (within.iter().zip(&pass.colors)).all(|(&f, t)| f == format(t.as_ref()))
+            && fixed.depth == format(pass.depth.as_ref())
+            && fixed.stencil == format(pass.stencil.as_ref())
+            && fixed.samples == pass.samples;
+        let lacked = (past.iter().enumerate())
+            .filter(|(_, &f)| f != vk::Format::UNDEFINED)
+            .fold(0u8, |bits, (at, _)| bits | 1 << (pass.colors.len() + at));
+        (renders && lacked != 0).then_some(lacked)
+    }
+
     /// A `VkPipeline` of the content for draws of the class of `topology`, a list topology, under
     /// `raster`, made through the device's pipeline data, rendering dynamically into the
     /// descriptor's attachment formats. A draw sets its own topology within the class as dynamic
@@ -1528,7 +1562,58 @@ fn release(core: &Core, stages: &[Module]) {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The calls of [`RenderPipelineState::without_colors`] on this thread, each of which takes the
+    /// translator's key of a descriptor and a lookup of the device's map of contents, which a test
+    /// reads.
+    pub(crate) static WITHOUT_COLORS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 impl RenderPipelineState {
+    /// The state of this state's descriptor with the colours of `lacked` (one bit an index)
+    /// unset, for a pass that has no attachment for them ([`RenderCompiled::lacked_past`]): a
+    /// content of its own, which the device's map of contents holds as any content, and which the
+    /// calling thread makes where the device holds none, its functions lowered again, the fragment
+    /// function storing those colours nowhere as for any descriptor that leaves them unset. Its
+    /// samplers are numbered at this state's indices; its `VkPipeline` is made by the first draw
+    /// (a first-use wait, `Metrics::first_use_unfinished_waits`).
+    ///
+    /// Err: as [`new_render_pipeline_state`](crate::Device::new_render_pipeline_state);
+    /// [`DrawKind::AttachmentFormats`](crate::DrawKind::AttachmentFormats) where that content
+    /// numbers other samplers or does not render into `pass`.
+    pub(crate) fn without_colors(
+        &self,
+        device: &crate::Device,
+        lacked: u8,
+        pass: &Pass,
+    ) -> Result<RenderPipelineState, Error> {
+        #[cfg(test)]
+        WITHOUT_COLORS.with(|calls| calls.set(calls.get() + 1));
+        let refused = || {
+            Error::Unsupported(Gap::Draw {
+                kind: crate::DrawKind::AttachmentFormats,
+            })
+        };
+        let mut descriptor = self.inner.descriptor.clone();
+        for (at, color) in descriptor.color_attachments.iter_mut().enumerate() {
+            if lacked & 1 << at != 0 {
+                *color = None;
+            }
+        }
+        let numbered = (&self.inner.compiled.numbered, &self.inner.numbered.ids);
+        let state = device.render_pipeline_state(&descriptor, |samplers| {
+            match samplers == numbered.0.as_slice() {
+                true => Ok(numbered.1.clone()),
+                false => Err(refused()),
+            }
+        })?;
+        match state.inner.compiled.renders_into(pass) {
+            true => Ok(state),
+            false => Err(refused()),
+        }
+    }
+
     /// No Metal counterpart: makes the state's main `VkPipeline`s on the calling thread, through
     /// the device's pipeline cache, once the state's creation has answered. Metal compiles a
     /// render state when the state is made. Here the creation does everything up to the driver's
