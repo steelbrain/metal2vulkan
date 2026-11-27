@@ -184,6 +184,17 @@ done:
     /// computes a block of 32 by 32.
     const WORK: u32 = 8;
 
+    /// Where the multiply's two tiles of 32 by 32 floats live.
+    #[derive(Clone, Copy)]
+    enum Tiles {
+        /// Two `__local` arguments, `at` and `bt`, at threadgroup indices 0 and 1.
+        Local,
+        /// The threadgroup's own 2048 floats of a `__global float *scratch` argument at buffer
+        /// index 5, from float `2048 (get_group_id(1) (n / 32) + get_group_id(0))`: `at` there
+        /// and `bt` 1024 floats on.
+        Global,
+    }
+
     /// Our own tiled matrix multiply, `c = a b` with `a` of `m` rows by `k`, `b` of `k` rows by
     /// `n`, row-major, `k` a multiple of 32, in threadgroups of 32 by 4 threads over `n` by
     /// `m / 8` threads; written as the OpenCL compiler writes the OpenCL C below, its row loop
@@ -213,8 +224,13 @@ done:
     /// }
     /// ```
     ///
-    /// Its `barrier` is [`BARRIER_TWO_OPERANDS`], called as Apple's compiler calls it.
-    fn tiled_matmul() -> String {
+    /// Its `barrier` is [`BARRIER_TWO_OPERANDS`], called as Apple's compiler calls it, with
+    /// `flags` in place of `CLK_LOCAL_MEM_FENCE`; `tiles` says where `at` and `bt` live.
+    fn tiled_matmul(tiles: Tiles, flags: u32) -> String {
+        let space = match tiles {
+            Tiles::Local => 3,
+            Tiles::Global => 1,
+        };
         let (mut hoisted, mut tile_phis, mut loads) = (String::new(), String::new(), String::new());
         let (mut inner_phis, mut inner, mut exit_phis, mut stores) =
             (String::new(), String::new(), String::new(), String::new());
@@ -238,15 +254,15 @@ done:
   %pa{w} = getelementptr inbounds float, ptr addrspace(1) %a, i64 %ai{w}
   %va{w} = load float, ptr addrspace(1) %pa{w}, align 4
   %ti{w} = add i64 %rt{w}, %x
-  %pat{w} = getelementptr inbounds float, ptr addrspace(3) %at, i64 %ti{w}
-  store float %va{w}, ptr addrspace(3) %pat{w}, align 4
+  %pat{w} = getelementptr inbounds float, ptr addrspace({space}) %at, i64 %ti{w}
+  store float %va{w}, ptr addrspace({space}) %pat{w}, align 4
   %bk{w} = add i64 %t, %r{w}
   %bi{w}0 = mul i64 %bk{w}, %n64
   %bi{w} = add i64 %bi{w}0, %col
   %pb{w} = getelementptr inbounds float, ptr addrspace(1) %b, i64 %bi{w}
   %vb{w} = load float, ptr addrspace(1) %pb{w}, align 4
-  %pbt{w} = getelementptr inbounds float, ptr addrspace(3) %bt, i64 %ti{w}
-  store float %vb{w}, ptr addrspace(3) %pbt{w}, align 4
+  %pbt{w} = getelementptr inbounds float, ptr addrspace({space}) %bt, i64 %ti{w}
+  store float %vb{w}, ptr addrspace({space}) %pbt{w}, align 4
 "
             ));
             inner_phis.push_str(&format!(
@@ -254,8 +270,8 @@ done:
             ));
             inner.push_str(&format!(
                 "  %aj{w} = add i64 %rt{w}, %j
-  %paj{w} = getelementptr inbounds float, ptr addrspace(3) %at, i64 %aj{w}
-  %av{w} = load float, ptr addrspace(3) %paj{w}, align 4
+  %paj{w} = getelementptr inbounds float, ptr addrspace({space}) %at, i64 %aj{w}
+  %av{w} = load float, ptr addrspace({space}) %paj{w}, align 4
   %m{w} = fmul float %av{w}, %bv
   %e{w} = fadd float %q{w}, %m{w}
 "
@@ -271,15 +287,42 @@ done:
 "
             ));
         }
+        // The entry's tile arguments, the kernel's, and the global form's tile addresses: the
+        // group's own 2048 floats of `scratch`.
+        let (entry_tiles, n, k, passed, params, addresses) = match tiles {
+            Tiles::Local => (
+                "ptr addrspace(3) %5, ptr addrspace(3) %6",
+                "%7",
+                "%8",
+                "ptr addrspace(3) %5, ptr addrspace(3) %6",
+                "ptr addrspace(3) %at, ptr addrspace(3) %bt",
+                "",
+            ),
+            Tiles::Global => (
+                "ptr addrspace(1) %5",
+                "%6",
+                "%7",
+                "ptr addrspace(1) %5",
+                "ptr addrspace(1) %scratch",
+                "  %gx = tail call fastcc i64 @_Z12get_group_idj(i32 0)
+  %across = lshr i64 %n64, 5
+  %gl0 = mul i64 %gy, %across
+  %gl = add i64 %gl0, %gx
+  %tb = shl i64 %gl, 11
+  %at = getelementptr inbounds float, ptr addrspace(1) %scratch, i64 %tb
+  %bt = getelementptr inbounds float, ptr addrspace(1) %at, i64 1024
+",
+            ),
+        };
         let body = format!(
-            "define void @__entry_tiled_matmul(ptr addrspace(1) %0, ptr addrspace(1) %1, ptr addrspace(1) %2, ptr addrspace(2) %3, ptr addrspace(2) %4, ptr addrspace(3) %5, ptr addrspace(3) %6) #0 {{
+            "define void @__entry_tiled_matmul(ptr addrspace(1) %0, ptr addrspace(1) %1, ptr addrspace(1) %2, ptr addrspace(2) %3, ptr addrspace(2) %4, {entry_tiles}) #0 {{
 entry:
-  %7 = load i32, ptr addrspace(2) %3, align 4
-  %8 = load i32, ptr addrspace(2) %4, align 4
-  tail call fastcc void @tiled_matmul(ptr addrspace(1) %0, ptr addrspace(1) %1, ptr addrspace(1) %2, i32 %7, i32 %8, ptr addrspace(3) %5, ptr addrspace(3) %6)
+  {n} = load i32, ptr addrspace(2) %3, align 4
+  {k} = load i32, ptr addrspace(2) %4, align 4
+  tail call fastcc void @tiled_matmul(ptr addrspace(1) %0, ptr addrspace(1) %1, ptr addrspace(1) %2, i32 {n}, i32 {k}, {passed})
   ret void
 }}
-define internal fastcc void @tiled_matmul(ptr addrspace(1) %a, ptr addrspace(1) %b, ptr addrspace(1) %c, i32 %n, i32 %k, ptr addrspace(3) %at, ptr addrspace(3) %bt) #1 {{
+define internal fastcc void @tiled_matmul(ptr addrspace(1) %a, ptr addrspace(1) %b, ptr addrspace(1) %c, i32 %n, i32 %k, {params}) #1 {{
 entry:
   %x = tail call fastcc i64 @_Z12get_local_idj(i32 0)
   %y = tail call fastcc i64 @_Z12get_local_idj(i32 1)
@@ -290,23 +333,23 @@ entry:
   %row0 = mul i64 %gy, %rows
   %n64 = zext i32 %n to i64
   %k64 = zext i32 %k to i64
-{hoisted}  %none = icmp eq i32 %k, 0
+{addresses}{hoisted}  %none = icmp eq i32 %k, 0
   br i1 %none, label %exit, label %tile
 tile:
   %t = phi i64 [ 0, %entry ], [ %t1, %next ]
-{tile_phis}{loads}  tail call fastcc void @_Z7barrierj(i32 noundef 1)
+{tile_phis}{loads}  tail call fastcc void @_Z7barrierj(i32 noundef {flags})
   br label %inner
 inner:
   %j = phi i64 [ 0, %tile ], [ %j1, %inner ]
 {inner_phis}  %bj0 = shl i64 %j, 5
   %bj = add i64 %bj0, %x
-  %pbj = getelementptr inbounds float, ptr addrspace(3) %bt, i64 %bj
-  %bv = load float, ptr addrspace(3) %pbj, align 4
+  %pbj = getelementptr inbounds float, ptr addrspace({space}) %bt, i64 %bj
+  %bv = load float, ptr addrspace({space}) %pbj, align 4
 {inner}  %j1 = add nuw nsw i64 %j, 1
   %jend = icmp eq i64 %j1, 32
   br i1 %jend, label %next, label %inner
 next:
-  tail call fastcc void @_Z7barrierj(i32 noundef 1)
+  tail call fastcc void @_Z7barrierj(i32 noundef {flags})
   %t1 = add i64 %t, 32
   %tmore = icmp ult i64 %t1, %k64
   br i1 %tmore, label %tile, label %exit
@@ -315,15 +358,20 @@ exit:
 }}
 "
         );
-        let args = [
+        let mut args = vec![
             buffer(0, 0, "read", 1, "float", "a"),
             buffer(1, 1, "read", 1, "float", "b"),
             buffer(2, 2, "read_write", 1, "float", "c"),
             uint_value(3, 3, "n"),
             uint_value(4, 4, "k"),
-            buffer(5, 0, "read_write", 3, "float", "at"),
-            buffer(6, 1, "read_write", 3, "float", "bt"),
         ];
+        match tiles {
+            Tiles::Local => {
+                args.push(buffer(5, 0, "read_write", 3, "float", "at"));
+                args.push(buffer(6, 1, "read_write", 3, "float", "bt"));
+            }
+            Tiles::Global => args.push(buffer(5, 5, "read_write", 1, "float", "scratch")),
+        }
         format!(
             "{BARRIER_TWO_OPERANDS}{body}{}",
             kernel_list("__entry_tiled_matmul", &args)
@@ -384,20 +432,19 @@ exit:
         words.iter().map(|w| f32::from_le_bytes(*w)).collect()
     }
 
-    /// Four threadgroups of 64 each sum their `in[i] = i` through `__local` memory and a
-    /// barrier, as the M3 Max sums them, on every device.
-    #[test]
-    fn every_device_sums_each_threadgroup_through_local_memory_in_opencl_mode() {
+    /// lsum over `groups` threadgroups of `group` threads, its `in[i] = i`, on every device of
+    /// the cfg's kind; `check` judges each device's sums, one a threadgroup.
+    fn sums(test: &str, group: u32, groups: u32, check: impl Fn(&str, &[f32])) {
         let Some(descriptor) = descriptor(&lsum(), "__entry_lsum") else {
             return;
         };
-        each_device("opencl_local lsum", |name, _, device| {
+        let input: Vec<f32> = (0..group * groups).map(|i| i as f32).collect();
+        each_device(test, |name, _, device| {
             let state = device
                 .new_compute_pipeline_state(&descriptor, crate::tests::no_constexpr_samplers)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let input: Vec<f32> = (0..256u16).map(f32::from).collect();
             let (_input_block, input) = shared(&device, &bytes_of(&input));
-            let (_out_block, out) = shared(&device, &[0xff; 16]);
+            let (_out_block, out) = shared(&device, &vec![0xff; groups as usize * 4]);
             let queue = device.new_command_queue(4).expect("a queue");
             let command_buffer = queue.command_buffer().expect("a command buffer");
             let mut encoder = command_buffer
@@ -407,17 +454,47 @@ exit:
             (encoder.set_bytes(&offset_and_dims(1), 0)).expect("the offset");
             encoder.set_buffer(Some(&input), 0, 3).expect("in");
             encoder.set_buffer(Some(&out), 0, 4).expect("out");
-            (encoder.set_threadgroup_memory_length(64 * 4, 0)).expect("tmp");
+            (encoder.set_threadgroup_memory_length(group * 4, 0)).expect("tmp");
             encoder
-                .dispatch_threads([256, 1, 1], [64, 1, 1])
+                .dispatch_threads([group * groups, 1, 1], [group, 1, 1])
                 .unwrap_or_else(|error| panic!("{name}: the dispatch: {error}"));
             encoder.end_encoding();
             command_buffer.commit().expect("a commit");
             finished(name, &command_buffer);
             assert_eq!(command_buffer.error(), None, "{name}");
-            let sums = floats(&out);
-            assert_eq!(sums, [2016.0, 6112.0, 10208.0, 14304.0], "{name}: lsum");
+            check(name, &floats(&out));
+        });
+    }
+
+    /// Four threadgroups of 64 each sum their `in[i] = i` through `__local` memory and a
+    /// barrier, as the M3 Max sums them, on every device.
+    #[test]
+    fn every_device_sums_each_threadgroup_through_local_memory_in_opencl_mode() {
+        sums("opencl_local lsum", 64, 4, |name, sums| {
             println!("{name}: lsum, each threadgroup's sum {sums:?}");
+            assert_eq!(sums, [2016.0, 6112.0, 10208.0, 14304.0], "{name}: lsum");
+        });
+    }
+
+    /// lsum in 64 threadgroups of 256 threads, more than one wave on every lab card, so each
+    /// group's sum reads `__local` words other waves wrote: group `g` sums to
+    /// `65536 g + 32640`, each partial sum an integer below 2^24 and so exact in `f32`, on every
+    /// device.
+    #[test]
+    fn every_device_sums_threadgroups_of_256_through_local_memory_across_waves_in_opencl_mode() {
+        sums("opencl_local lsum 256", 256, 64, |name, sums| {
+            let wrong: Vec<(u32, f32, f32)> = (0..)
+                .zip(sums)
+                .map(|(g, &got)| (g, got, (65_536 * g + 32_640) as f32))
+                .filter(|&(_, got, want)| got != want)
+                .collect();
+            println!(
+                "{name}: lsum of 256 threads a group: {} of 64 sums differ, the first \
+                 (group, got, want) {:?}",
+                wrong.len(),
+                &wrong[..wrong.len().min(8)]
+            );
+            assert!(wrong.is_empty(), "{name}: sums differ: {wrong:?}");
         });
     }
 
@@ -490,13 +567,34 @@ exit:
         found
     }
 
-    /// Our tiled matrix multiply, through two `__local` tiles of 4096 bytes at threadgroup
-    /// indices 0 and 1, dispatched [`REPEATS`] times over 160 by 3200 threads in threadgroups of
-    /// 32 by 4, computes every element of each `c` as the CPU does, on every device.
+    /// Our tiled matrix multiply through two `__local` tiles of 4096 bytes at threadgroup
+    /// indices 0 and 1, behind `barrier(CLK_LOCAL_MEM_FENCE)`, computes every element of each
+    /// `c` as the CPU does, on every device ([`multiplies`]).
     #[test]
     fn every_device_multiplies_matrices_through_two_local_tiles_in_opencl_mode() {
-        let test = "opencl_local tiled_matmul";
-        let Some(descriptor) = descriptor(&tiled_matmul(), "__entry_tiled_matmul") else {
+        multiplies("opencl_local tiled_matmul", Tiles::Local, 1);
+    }
+
+    /// The same behind `barrier(CLK_LOCAL_MEM_FENCE | CLK_GLOBAL_MEM_FENCE)`.
+    #[test]
+    fn every_device_multiplies_matrices_through_local_tiles_behind_both_fence_flags() {
+        multiplies("opencl_local tiled_matmul both", Tiles::Local, 3);
+    }
+
+    /// The same with the tiles in the threadgroup's own part of a `__global` buffer, so what
+    /// crosses waves goes through device memory, behind `barrier(CLK_GLOBAL_MEM_FENCE)` alone.
+    #[test]
+    fn every_device_multiplies_matrices_through_global_tiles_behind_the_global_fence_flag() {
+        multiplies("opencl_local tiled_matmul global", Tiles::Global, 2);
+    }
+
+    /// Our tiled matrix multiply, its tiles where `tiles` says and its `barrier` called with
+    /// `flags`, dispatched [`REPEATS`] times over 160 by 3200 threads in threadgroups of 32 by 4,
+    /// computes every element of each `c` as the CPU does, on every device of the cfg's kind;
+    /// `test` names the run.
+    fn multiplies(test: &str, tiles: Tiles, flags: u32) {
+        let Some(descriptor) = descriptor(&tiled_matmul(tiles, flags), "__entry_tiled_matmul")
+        else {
             return;
         };
         let a: Vec<f32> = (0..M)
@@ -520,6 +618,8 @@ exit:
             })
             .collect();
         let tile = 32 * 32 * 4;
+        // The global form's scratch: each threadgroup's two tiles.
+        let scratch_len = u64::from(N / 32 * (M / WORK / 4) * 2 * tile);
         each_device(test, |name, _, device| {
             let state = device
                 .new_compute_pipeline_state(&descriptor, crate::tests::no_constexpr_samplers)
@@ -540,8 +640,21 @@ exit:
             encoder.set_buffer(Some(&b), 0, 4).expect("b");
             encoder.set_bytes(&N.to_le_bytes(), 6).expect("n");
             encoder.set_bytes(&K.to_le_bytes(), 7).expect("k");
-            (encoder.set_threadgroup_memory_length(tile, 0)).expect("at");
-            (encoder.set_threadgroup_memory_length(tile, 1)).expect("bt");
+            let scratch = match tiles {
+                Tiles::Local => {
+                    (encoder.set_threadgroup_memory_length(tile, 0)).expect("at");
+                    (encoder.set_threadgroup_memory_length(tile, 1)).expect("bt");
+                    None
+                }
+                Tiles::Global => {
+                    let block = (device.take_block(MemoryClass::Shared, scratch_len))
+                        .expect("a Shared block");
+                    let buffer = (device.new_buffer(block.id, 0, scratch_len, Some(0)))
+                        .expect("the scratch");
+                    encoder.set_buffer(Some(&buffer), 0, 8).expect("scratch");
+                    Some((block, buffer))
+                }
+            };
             for (_, c) in &outputs {
                 encoder.set_buffer(Some(c), 0, 5).expect("c");
                 encoder
