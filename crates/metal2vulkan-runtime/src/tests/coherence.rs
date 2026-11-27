@@ -915,8 +915,9 @@ mod on_device {
     /// buffer fills a Shared buffer, signals the value, then waits. Before `signaledValue` shows
     /// the value, and before a wait for it returns, the buffer is flushed and invalidated over
     /// its atoms, once, after the submission's flush of it, and the host reads the fill's bytes.
-    /// Once the host sets the value waited for, the command buffer's completion invalidates the
-    /// buffer once more.
+    /// Once the host sets the value waited for, the submission of the command buffer's segment
+    /// after its wait flushes the buffer again, and its completion flushes and invalidates it once
+    /// more.
     #[test]
     fn every_device_opened_under_the_view_settles_the_writes_in_flight_before_a_signal_is_seen() {
         const OFFSET: u64 = 256;
@@ -988,9 +989,16 @@ mod on_device {
                     "{name}: {way}: the completion's invalidate"
                 );
                 assert_eq!(
+                    [at_completion[0], at_completion[1]],
+                    [2, 2 * widened],
+                    "{name}: {way}: the flush of the segment after the wait, then the completion's"
+                );
+                assert_eq!(
                     at_completion[5..],
-                    [0, widened, 0, 0],
-                    "{name}: {way}: the completion's settle, at the retirement's point"
+                    [widened, widened, 0, 0],
+                    "{name}: {way}: the submission of the segment after the wait flushes the \
+                     buffer at the submission's point, and the completion settles it at the \
+                     retirement's"
                 );
             }
         });
