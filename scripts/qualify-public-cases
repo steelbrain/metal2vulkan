@@ -37,6 +37,24 @@ cases=(
     # An AIR 1.8 fragment (engine/air_1_8_sampling) that samples plainly and by gradient through
     # an argument sampler: the forms an AIR library declares before AIR 2.0.
     884ad7d75a221a11480581ae8d55ef5773defdd021c4fc56c6bde51445e87d37
+    # A float (engine/fc_float_gate) and a half (engine/fc_half_gate) function constant that gate
+    # a kernel's argument and a fragment's sample mask: Metal keeps what they gate where the
+    # value's bits are not all zero (1.5, -0.0 and a quiet NaN), and drops it at +0.0 and unsupplied.
+    3a843c7911108e011ac425010de8918ea2ffaabc680efe846d1fa60427bb89da
+    ad28780327b4d7bfdfbeba9985f9a065b96766455d39f2187a45aa667acbcb9d
+    c7440f65e3dc4b2a20e5a80e1303bd4733973ef4a9d7e0da4f8b2d852b82ead8
+    8e22d09b34c6911bf89e9a3819fe8935c877298faf69b235cba74f83cc9f0d1e
+    4db5409a6e7d85d95d16cf6a0c2c6a386ee0a2ca281834c5ebf7d54481a115e5
+    0ec889df18ff07ab70791b6116fe2dd30331251d9715e62f6644c561ff411426
+    03cbdd46a5c0dbe4edcd3aaee7205110805835347288f0f8269131e743362d4d
+    8235cf2527e58712c73b1baacb72b2cd576cf45786fe3024b3776d88c969b71f
+    579eb7c4c5c2eb7cd30871124eac021cbb131e7931e514cd6ee03234bcc68983
+    16bb9c40891adce3e478f143c4d0cf1abd093e6b6c8ba1b5793bcff70f50487a
+    deeca6b1a5f4a5daa333c7cb757bd330eccc2f50870a4b73afe7b3704328c853
+    0d652c7e36e231111b77232853ae8237603e2eaf0205a30a08c9e517e2b27dfe
+    4534a2f6acfe169228698c79410b9f69a2a27193be26d24df48f04bfa212f134
+    18c8aab797757953abb8725f36053c4607a1829a8b4f1dcb8c5b877d697fdf1b
+    b9bfa9f2737e76d6052e4f705891209af9e7306206b5999acae1a9c30d7a13aa
 )
 
 for case_id in "${cases[@]}"; do
