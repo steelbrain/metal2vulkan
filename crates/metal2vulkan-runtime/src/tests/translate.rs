@@ -5163,18 +5163,21 @@ declare void @air.wg.barrier(i32, i32)
         });
     }
 
-    /// Metal's fence pattern, the last to arrive gathers (MSL §6.16.1, §6.16.3): each thread `t`
-    /// of a threadgroup of 256 (`g` in the grid, `w` its threadgroup's position) stores its word
-    /// `v(g) = (g * 2654435761) ^ 0x5A5A5A5A` to `data[g]`, then
-    /// `atomic_thread_fence(mem_flags::mem_device, memory_order_seq_cst, $SCOPE)`, then adds one
+    /// Metal's fence pattern, the last to arrive gathers, in MSL 4.1 (AIR 2.9), whose
+    /// `atomic_thread_fence` takes a release and an acquire order (MSL §6.16.1, §6.16.3): each
+    /// thread `t` of a threadgroup of 256 (`g` in the grid, `w` its threadgroup's position) stores
+    /// its word `v(g) = (g * 2654435761) ^ 0x5A5A5A5A` to `data[g]`, then
+    /// `atomic_thread_fence(mem_flags::mem_device, memory_order_release, $SCOPE)`, then adds one
     /// to `count[w]` with a relaxed `atomic_fetch_add_explicit`. The thread that reads 255 there,
-    /// the last of its threadgroup, fences again and copies its threadgroup's 256 words of `data`
-    /// to the same words of `out`. No thread waits for another and no barrier orders anything:
-    /// the copy sees every word because each other thread's fence and add came before the last
-    /// thread's add, and the last thread's fence comes after it. `$NAME` and `$SCOPE` are filled
-    /// by [`fence_kernel`].
+    /// the last of its threadgroup, then
+    /// `atomic_thread_fence(mem_flags::mem_device, memory_order_acquire, $SCOPE)`, and copies its
+    /// threadgroup's 256 words of `data` to the same words of `out`. No thread waits for another
+    /// and no barrier orders anything: the copy sees every word because each other thread's
+    /// release fence and add came before the last thread's add, whose acquire fence comes after
+    /// it. (A `seq_cst` fence, the only order before MSL 4.1, is a refusal the runtime's README
+    /// records among its known gaps.) `$NAME` and `$SCOPE` are filled by [`fence_kernel`].
     const FENCE_LAST: &str = r#"target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
-target triple = "air64_v28-apple-macosx26.0.0"
+target triple = "air64_v29-apple-macosx27.0.0"
 
 define void @$NAME(ptr addrspace(1) %data, ptr addrspace(1) %count, ptr addrspace(1) %out, i32 %t, i32 %g, i32 %w) {
 entry:
@@ -5182,14 +5185,14 @@ entry:
   %v = xor i32 %h, 1515870810
   %pd = getelementptr inbounds i32, ptr addrspace(1) %data, i32 %g
   store i32 %v, ptr addrspace(1) %pd, align 4
-  tail call void @air.atomic.fence(i32 1, i32 5, i32 $SCOPE)
+  tail call void @air.atomic.fence(i32 1, i32 3, i32 $SCOPE)
   %pc = getelementptr inbounds i32, ptr addrspace(1) %count, i32 %w
-  %old = tail call i32 @air.atomic.global.add.u.i32(ptr addrspace(1) %pc, i32 1, i32 0, i32 2, i1 true)
+  %old = tail call i32 @air.atomic.global.add.u.i32(ptr addrspace(1) %pc, i32 1, i32 0, i32 2, i32 0, i1 false)
   %last = icmp eq i32 %old, 255
   br i1 %last, label %gather, label %done
 
 gather:
-  tail call void @air.atomic.fence(i32 1, i32 5, i32 $SCOPE)
+  tail call void @air.atomic.fence(i32 1, i32 2, i32 $SCOPE)
   %base = sub i32 %g, %t
   br label %copy
 
@@ -5209,7 +5212,7 @@ done:
 }
 
 declare void @air.atomic.fence(i32, i32, i32)
-declare i32 @air.atomic.global.add.u.i32(ptr addrspace(1), i32, i32, i32, i1)
+declare i32 @air.atomic.global.add.u.i32(ptr addrspace(1), i32, i32, i32, i32, i1)
 
 !air.kernel = !{!0}
 !air.version = !{!9}
@@ -5223,8 +5226,8 @@ declare i32 @air.atomic.global.add.u.i32(ptr addrspace(1), i32, i32, i32, i1)
 !6 = !{i32 3, !"air.thread_index_in_threadgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"t"}
 !7 = !{i32 4, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"g"}
 !8 = !{i32 5, !"air.threadgroup_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"w"}
-!9 = !{i32 2, i32 8, i32 0}
-!10 = !{!"Metal", i32 4, i32 0, i32 0}
+!9 = !{i32 2, i32 9, i32 0}
+!10 = !{!"Metal", i32 4, i32 1, i32 0}
 "#;
 
     /// [`FENCE_LAST`] as `name`, its fences at the AIR `thread_scope` `scope` (threadgroup 1,
@@ -5239,10 +5242,10 @@ declare i32 @air.atomic.global.add.u.i32(ptr addrspace(1), i32, i32, i32, i1)
     /// each in 16 threadgroups of 256 threads: the last thread of each threadgroup to add reads
     /// the words its threadgroup's every thread stored, the other SIMD groups' included on every
     /// device. Every word it copies is the one its thread stored, `count` reads 256 for each
-    /// threadgroup, and `data` holds every thread's word: the answers the fences promise (MSL
-    /// §6.16.1: with `memory_order_seq_cst` on `atomic_thread_fence`, everything that happens
-    /// before a store in one thread is visible to the thread that performs the load), computed
-    /// here. Which thread is last is the device's; the answer does not depend on it.
+    /// threadgroup, and `data` holds every thread's word: the answers a release fence before an
+    /// atomic and an acquire fence after one that reads its value promise (MSL §6.16.3, with
+    /// §6.16.1.2's release-acquire visibility), computed here. Which thread is last is the
+    /// device's; the answer does not depend on it.
     #[test]
     fn every_device_gathers_every_simd_groups_word_past_a_fence_and_an_atomic_count() {
         const GROUPS: u32 = 16;
