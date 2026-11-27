@@ -414,10 +414,11 @@ mod on_device {
     /// of its own over the device's Shared type read through the refused device's view
     /// (`crate::tests::command::on_device::viewed`), which leaves that type not coherent: the
     /// device itself is made as the device tests make it, so this runs where the floor refuses
-    /// the view. At each point, a flush and then a settle of a Shared buffer's range count its
-    /// atoms at that point alone and at no other, the settle's invalidate among the invalidated
-    /// bytes, with no call failing; and the host time inside the calls is counted, the flushes'
-    /// apart from the invalidates'.
+    /// the view. At each point, the calls the runtime makes there (a flush before a submission, a
+    /// settle at a retirement and before an event's value is seen, both around its own host
+    /// accesses) over a Shared buffer's range count its atoms at that point alone and at no other,
+    /// a settle's invalidate among the invalidated bytes, with no call failing; and the host time
+    /// inside the calls is counted, the flushes' apart from the invalidates'.
     #[test]
     fn a_coherence_state_counts_each_call_at_its_point_and_times_it() {
         use crate::buffer::BufferObject;
@@ -448,40 +449,49 @@ mod on_device {
             let widened = atoms(block.offset + OFFSET, LEN, coherence.atom);
             let core = device.core();
             let start = counters.metrics();
+            // Each point with the calls the runtime makes there: whether it flushes, whether it
+            // settles.
             let points = [
-                ("the submission's", Point::Reach),
-                ("the retirement's", Point::Retirement),
-                ("the event's", Point::EventSeen),
-                ("the staging's", Point::Staging),
+                ("the submission's", Point::Reach, [true, false]),
+                ("the retirement's", Point::Retirement, [false, true]),
+                ("the event's", Point::EventSeen, [false, true]),
+                ("the staging's", Point::Staging, [true, true]),
             ];
-            for (at, (what, point)) in points.into_iter().enumerate() {
+            for (at, (what, point, [flushes, settles])) in points.into_iter().enumerate() {
                 let mut alone = [1, widened, 0, 0, 0, 0, 0, 0, 0];
                 alone[5 + at] = widened;
-                let mut settled_alone = alone;
-                settled_alone[2..4].copy_from_slice(&[1, widened]);
-                let before = counters.metrics();
-                coherence.flush(core, point, &[range]);
-                let flushed = counters.metrics();
-                coherence.settle(core, point, &[range]);
-                let settled = counters.metrics();
-                let flush = calls(&before, &flushed);
-                let settle = calls(&flushed, &settled);
-                println!(
-                    "coherence_points: {name}: at {what} point, a flush {flush:?}, a settle \
-                     {settle:?}; the buffer {widened} bytes"
-                );
-                assert_eq!(
-                    flush, alone,
-                    "{name}: a flush at {what} point, counted there alone"
-                );
-                assert_eq!(
-                    settle, settled_alone,
-                    "{name}: a settle at {what} point, its flush counted there alone"
-                );
+                if flushes {
+                    let before = counters.metrics();
+                    coherence.flush(core, point, &[range]);
+                    let flush = calls(&before, &counters.metrics());
+                    println!(
+                        "coherence_points: {name}: a flush at {what} point {flush:?}; the buffer \
+                         {widened} bytes"
+                    );
+                    assert_eq!(
+                        flush, alone,
+                        "{name}: a flush at {what} point, counted there alone"
+                    );
+                }
+                if settles {
+                    let mut settled_alone = alone;
+                    settled_alone[2..4].copy_from_slice(&[1, widened]);
+                    let before = counters.metrics();
+                    coherence.settle(core, point, &[range]);
+                    let settle = calls(&before, &counters.metrics());
+                    println!(
+                        "coherence_points: {name}: a settle at {what} point {settle:?}; the \
+                         buffer {widened} bytes"
+                    );
+                    assert_eq!(
+                        settle, settled_alone,
+                        "{name}: a settle at {what} point, its flush counted there alone"
+                    );
+                }
             }
             let [flush, invalidate] = nanos(&start, &counters.metrics());
             println!(
-                "coherence_points: {name}: 8 flushes in {flush} ns, 4 invalidates in {invalidate} \
+                "coherence_points: {name}: 5 flushes in {flush} ns, 3 invalidates in {invalidate} \
                  ns"
             );
             assert!(
