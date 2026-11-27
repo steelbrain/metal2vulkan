@@ -134,7 +134,9 @@ fn binding_a_callers_flags_does_no_work_of_its_own() {
 #[test]
 fn a_fence_whose_flags_its_callers_flags_compute_binds_after_folding() {
     // OpenCL C's `mem_fence(flags)` as Metal's compiler leaves it: CLK_GLOBAL_MEM_FENCE (2)
-    // becomes `mem_device` (1) by reversing the two flag bits, an `i2` operation.
+    // becomes `mem_device` (1) by reversing the two flag bits, an `i2` operation, and the fence's
+    // order is acq_rel (4), as Apple's OpenCL compiler writes `mem_fence` (the probe
+    // opencl_operand_encodings, job m3-max-76799).
     let body = "define void @k(ptr addrspace(1) %x) #0 {\n\
          \x20 store i32 1, ptr addrspace(1) %x, align 4\n\
          \x20 tail call fastcc void @fence(i32 2)\n\
@@ -144,7 +146,7 @@ fn a_fence_whose_flags_its_callers_flags_compute_binds_after_folding() {
          \x20 %t = trunc i32 %flags to i2\n\
          \x20 %r = tail call i2 @llvm.bitreverse.i2(i2 %t)\n\
          \x20 %m = zext i2 %r to i32\n\
-         \x20 tail call void @air.atomic.fence(i32 %m, i32 3, i32 1) #2\n\
+         \x20 tail call void @air.atomic.fence(i32 %m, i32 4, i32 1) #2\n\
          \x20 ret void\n}\n\
          declare void @air.atomic.fence(i32, i32, i32) #2\n\
          declare i2 @llvm.bitreverse.i2(i2) #3\n\
@@ -161,7 +163,7 @@ fn a_fence_whose_flags_its_callers_flags_compute_binds_after_folding() {
     let entry = entry.expect("specialized");
     let fence = Sync::Fence {
         flags: flags(1),
-        order: MemoryOrder::from_raw(3).expect("order"),
+        order: MemoryOrder::from_raw(4).expect("order"),
         scope: ThreadScope::from_raw(1).expect("scope"),
     };
     assert_eq!(syncs(&entry), [fence]);

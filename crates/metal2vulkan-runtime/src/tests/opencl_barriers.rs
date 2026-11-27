@@ -79,12 +79,14 @@ const BARRIER_THREE: &str = "define internal fastcc void @_Z7barrierj(i32 %0) #2
   ret void\n}\n\
 declare void @air.wg.barrier(i32, i32, i32) #4\n";
 
-/// `mem_fence(flags)`: `air.atomic.fence` of the flags' two bits reversed, out of line.
+/// `mem_fence(flags)`: `air.atomic.fence` of the flags' two bits reversed, out of line, its order
+/// acq_rel (4), as Apple's OpenCL compiler writes `mem_fence` (the probe
+/// opencl_operand_encodings, job m3-max-76799).
 const FENCE: &str = "define internal fastcc void @_Z9mem_fencej(i32 %0) #2 {\n\
   %2 = trunc i32 %0 to i2\n\
   %3 = tail call i2 @llvm.bitreverse.i2(i2 %2)\n\
   %4 = zext i2 %3 to i32\n\
-  tail call void @air.atomic.fence(i32 %4, i32 3, i32 1) #5\n\
+  tail call void @air.atomic.fence(i32 %4, i32 4, i32 1) #5\n\
   ret void\n}\n\
 declare void @air.atomic.fence(i32, i32, i32) #5\n\
 declare i2 @llvm.bitreverse.i2(i2) #9\n";

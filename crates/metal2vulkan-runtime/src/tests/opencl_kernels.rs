@@ -111,7 +111,9 @@ attributes #3 = { convergent nounwind }\n\
 !2 = !{!3}\n";
 
 /// `x[i] = 1`, `@fence(2)` (its flags `bitreverse.i2` of the parameter's low bits, as OpenCL C's
-/// `mem_fence(CLK_GLOBAL_MEM_FENCE)` becomes `mem_device`), `x[i] = 2`.
+/// `mem_fence(CLK_GLOBAL_MEM_FENCE)` becomes `mem_device`, its order acq_rel (4), as Apple's
+/// OpenCL compiler writes `mem_fence`: the probe opencl_operand_encodings, job m3-max-76799),
+/// `x[i] = 2`.
 const FENCE: &str = "define void @store2(ptr addrspace(1) nocapture %x) #3 {\n\
   %id = tail call i32 @air.get_global_id.i32(i32 0)\n\
   %i = zext i32 %id to i64\n\
@@ -124,7 +126,7 @@ define internal fastcc void @fence(i32 %flags) #2 {\n\
   %t = trunc i32 %flags to i2\n\
   %r = tail call i2 @llvm.bitreverse.i2(i2 %t)\n\
   %m = zext i2 %r to i32\n\
-  tail call void @air.atomic.fence(i32 %m, i32 3, i32 1) #1\n\
+  tail call void @air.atomic.fence(i32 %m, i32 4, i32 1) #1\n\
   ret void\n}\n\
 declare void @air.atomic.fence(i32, i32, i32) #1\n\
 declare i2 @llvm.bitreverse.i2(i2) #9\n\
