@@ -2,7 +2,8 @@
 //! the highest value known is left out, whichever queue it is on; the host's value of a shared
 //! event reads at once below a GPU signal still pending and never signals the semaphore, and a
 //! host value above a pending GPU signal stays the event's value once that signal lands; the
-//! largest value is kept; a value the host sees is one a host wait confirmed, a steady value
+//! largest value is kept; a value the host sees is one a host wait confirmed, each value a GPU
+//! signal raises confirmed by exactly one wait before the host first sees it, a steady value
 //! asking for no wait and the completion thread waiting on the GPU, not spinning, for a value
 //! still to come; and a shared event's listeners run on one thread, not the posting one, in the
 //! order posted.
@@ -289,6 +290,38 @@ fn a_value_the_host_sees_is_one_a_host_wait_confirmed() {
         );
         assert_eq!(event.signaled_value(), later, "{name}");
         drop((first, second, busy, queue, event, device));
+    });
+}
+
+/// Each value a GPU signal raises is confirmed by one host wait before the host first sees it
+/// (`EventInner::reached`), never taken from the counter read alone. For each of three signals,
+/// run in turn: once its command buffer completed and the completion thread took the value in (no
+/// signal pending, so neither thread reads the value as new again), `signaledValue` reads the
+/// value, and one wait was made since the signal was committed, on whichever thread read the value
+/// first. A second read of a value is the cost test's
+/// ([`a_value_the_host_sees_is_one_a_host_wait_confirmed`]). The counts are printed.
+#[test]
+fn each_value_a_gpu_signal_raises_is_confirmed_by_one_wait_before_the_host_sees_it() {
+    each_device("event_value_confirmed_once", |name, _, device| {
+        let event = shared_event(&device);
+        let queue = queue(&device);
+        let counters = device.counters();
+        for value in [3, 9, 20] {
+            let before = counters.event_reads().waits;
+            let command_buffer = signal(name, &device, &queue, event.as_event(), value);
+            finished(name, &command_buffer);
+            within(name, || pending(event.as_event()).is_empty());
+            let seen = event.signaled_value();
+            let waits = counters.event_reads().waits - before;
+            println!("{name}: the signal of {value}: seen as {seen}, after {waits} waits");
+            assert_eq!(
+                (seen, waits),
+                (value, 1),
+                "{name}: the value a signal raised, and the waits that confirmed it before the \
+                 host saw it"
+            );
+        }
+        drop((queue, event, device));
     });
 }
 
