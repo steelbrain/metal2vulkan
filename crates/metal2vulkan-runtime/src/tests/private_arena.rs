@@ -16,17 +16,26 @@
 //! block the dispatch took new, and none for a kernel without an arena, whose dispatches beside
 //! it add no barrier.
 //!
+//! A third test takes a new arena block while the consumer's map hook (`BlockMappings::map`)
+//! holds the dispatching thread, and checks that a dispatch on another thread goes on.
+//!
 //! `llvm-as` assembles the kernels; without it the tests skip visibly.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
-    use crate::tests::command::on_device::{each_device, finished};
+    use crate::device::lock;
+    use crate::tests::command::on_device::{each_device, each_device_with, finished, PATIENCE};
     use crate::{
-        Buffer, ComputePipelineDescriptor, ComputePipelineState, Device, DispatchType,
+        AllocationId, AllocationInfo, BlockMappings, Buffer, CommandBuffer, CommandQueue,
+        ComputePipelineDescriptor, ComputePipelineState, Device, DeviceOptions, DispatchType,
         FunctionDescriptor, Library, MemoryClass, StageSource,
     };
     use metal2vulkan_devtools::{llvm_assemble_text, AssembleError};
+    use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering::Relaxed;
+    use std::sync::{mpsc, Arc, Mutex};
+    use std::thread;
+    use std::time::Duration;
 
     /// Threadgroups of a dispatch, and threads of each.
     const GROUPS: u32 = 8;
@@ -297,6 +306,170 @@ entry:
                 "{name}: plain's words last"
             );
             drop((arena, plain, out));
+            (device.release_block(block)).unwrap_or_else(|error| panic!("{name}: {error}"));
+        });
+    }
+
+    /// The words of the race's kernel, 36 KiB a thread: the dispatch of [`GROUPS`] threadgroups
+    /// takes 18 MiB of slots, a block of [`NEW_BLOCK`] bytes.
+    const RACE_WORDS: u32 = 9216;
+    /// The new arena block's length: 18 MiB rounded up to a power of two, past the pool's 16 MiB
+    /// allocations, so no free range holds it and its take makes an allocation of its own on the
+    /// dispatching thread, where the consumer's map hook runs.
+    const NEW_BLOCK: u64 = 32 << 20;
+    /// The arena budget of the race, past the new block, so the dispatch takes it whole on every
+    /// device.
+    const RACE_BUDGET: u64 = 64 << 20;
+    /// How long the hook waits for the other thread's dispatch to return.
+    const HOOK_WAIT: Duration = Duration::from_secs(10);
+
+    /// The consumer's map hook of the race. Armed by a thread, its first map on that thread of a
+    /// Private allocation of at least [`NEW_BLOCK`] bytes says so on `inside` and waits up to
+    /// [`HOOK_WAIT`] for `returned`; it accepts every map.
+    #[derive(Default)]
+    struct Racing {
+        armed: Mutex<Option<Armed>>,
+        /// The armed map ran.
+        ran: AtomicBool,
+        /// The armed map's wait ended at [`HOOK_WAIT`] with nothing returned.
+        waited_out: AtomicBool,
+    }
+
+    struct Armed {
+        thread: thread::ThreadId,
+        inside: mpsc::Sender<()>,
+        returned: mpsc::Receiver<()>,
+    }
+
+    impl Racing {
+        /// Arms the hook for this thread's next map of a new arena block.
+        fn arm(&self, inside: mpsc::Sender<()>, returned: mpsc::Receiver<()>) {
+            self.ran.store(false, Relaxed);
+            self.waited_out.store(false, Relaxed);
+            let thread = thread::current().id();
+            *lock(&self.armed) = Some(Armed {
+                thread,
+                inside,
+                returned,
+            });
+        }
+    }
+
+    impl BlockMappings for Racing {
+        fn map(&self, allocation: &AllocationInfo) -> bool {
+            let here = thread::current().id();
+            let armed = {
+                let mut slot = lock(&self.armed);
+                let ours = slot.as_ref().is_some_and(|armed| armed.thread == here)
+                    && allocation.class == MemoryClass::Private
+                    && allocation.len >= NEW_BLOCK;
+                match ours {
+                    true => slot.take(),
+                    false => None,
+                }
+            };
+            if let Some(armed) = armed {
+                self.ran.store(true, Relaxed);
+                let _ = armed.inside.send(());
+                if armed.returned.recv_timeout(HOOK_WAIT).is_err() {
+                    self.waited_out.store(true, Relaxed);
+                }
+            }
+            true
+        }
+
+        fn unmap(&self, _: AllocationId) {}
+    }
+
+    /// The arena's take runs off the arena's lock (`crate::arena::take`). Thread A dispatches the
+    /// kernel of 36 KiB a thread over 8 threadgroups, whose new block of 32 MiB no free range of
+    /// the pool holds, so the take makes an allocation on thread A and the consumer's map hook
+    /// runs there; the hook waits, up to 10 s, for thread B's dispatch of the same kernel over one
+    /// threadgroup, which takes an arena block too, to return. With the arena's lock held across
+    /// the take, B's dispatch waits for that lock and the hook waits out its 10 s; off the lock, B
+    /// returns first. Both command buffers then complete with the CPU's answers.
+    #[test]
+    fn every_device_takes_a_new_arena_block_off_the_arena_s_lock() {
+        let n = RACE_WORDS;
+        let bitcode = match llvm_assemble_text(&module(n)) {
+            Ok(bitcode) => bitcode,
+            Err(AssembleError::Missing(why)) => {
+                eprintln!("SKIPPED: {why}");
+                return;
+            }
+            Err(error) => panic!("private_arena: {error:?}"),
+        };
+        let library = Library::from_air(&bitcode).expect("the library");
+        let hook = Arc::new(Racing::default());
+        let options = || DeviceOptions {
+            block_mappings: Some(Arc::clone(&hook) as Arc<dyn BlockMappings>),
+            ..DeviceOptions::default()
+        };
+        each_device_with("private_arena_race", options, |name, _, device| {
+            let arena = state(name, &device, &library, "arena");
+            let block = (device.take_block(MemoryClass::Shared, 1 << 20)).expect("a block");
+            let outs: Vec<Buffer> = (0..2)
+                .map(|k| (device.new_buffer(block.id, 4096 * k, 4096, Some(0))).expect("a buffer"))
+                .collect();
+            let queues: Vec<CommandQueue> = (0..2)
+                .map(|_| device.new_command_queue(1).expect("a queue"))
+                .collect();
+            device.core().arena_budget.store(RACE_BUDGET, Relaxed);
+            let encode = |queue: &CommandQueue, groups: u32, out: &Buffer| -> CommandBuffer {
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = (command_buffer.compute_command_encoder(DispatchType::Serial))
+                    .expect("an encoder");
+                encoder.set_compute_pipeline_state(&arena).expect("a state");
+                encoder.set_buffer(Some(out), 0, 0).expect("out");
+                (encoder.dispatch_threadgroups([groups, 1, 1], [THREADS, 1, 1]))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                encoder.end_encoding();
+                command_buffer
+            };
+            let (inside_sent, inside) = mpsc::channel();
+            let (returned, returned_seen) = mpsc::channel();
+            let (racing, queues, outs, encode) = (&hook, &queues, &outs, &encode);
+            let (a, b) = thread::scope(|scope| {
+                let a = scope.spawn(move || {
+                    racing.arm(inside_sent, returned_seen);
+                    encode(&queues[0], GROUPS, &outs[0])
+                });
+                // Thread A is in the hook, inside its dispatch's take.
+                (inside.recv_timeout(PATIENCE))
+                    .unwrap_or_else(|_| panic!("{name}: the new arena block's map on thread A"));
+                let b = scope.spawn(move || {
+                    let command_buffer = encode(&queues[1], 1, &outs[1]);
+                    let _ = returned.send(());
+                    command_buffer
+                });
+                (a.join().expect("thread A"), b.join().expect("thread B"))
+            });
+            device.core().arena_budget.store(0, Relaxed);
+            assert!(hook.ran.load(Relaxed), "{name}: the new arena block's map");
+            assert!(
+                !hook.waited_out.load(Relaxed),
+                "{name}: thread B's arena dispatch did not return while thread A's take ran the \
+                 map hook: it waited for the arena's lock"
+            );
+            for command_buffer in [&a, &b] {
+                command_buffer.commit().expect("a commit");
+                finished(name, command_buffer);
+                assert_eq!(command_buffer.error(), None, "{name}");
+            }
+            for (out, threads) in [(&outs[0], GROUPS * THREADS), (&outs[1], THREADS)] {
+                let want: Vec<u32> = (0..threads).map(|gid| reference(n, gid)).collect();
+                assert_eq!(
+                    words(out, threads as usize),
+                    want,
+                    "{name}: {threads} threads"
+                );
+            }
+            println!(
+                "{name}: thread B's arena dispatch returned while thread A's take of a {} MiB \
+                 block ran the map hook",
+                NEW_BLOCK >> 20
+            );
+            drop((arena, a, b));
             (device.release_block(block)).unwrap_or_else(|error| panic!("{name}: {error}"));
         });
     }
