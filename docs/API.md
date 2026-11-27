@@ -829,9 +829,10 @@ through buffer arguments it reads at any index.
     channel orders as a swizzled view (on an M3 Max, macOS 27.0.1, with `CL_UNORM_INT8`: `CL_R`,
     `CL_RG`, `CL_A`, `CL_RA` and `CL_INTENSITY` as `R8Unorm` or `RG8Unorm` views, `CL_BGRA`,
     `CL_ARGB` and `CL_RGB` as `RGBA8Unorm` views). A read (with a sampler or without) answers the
-    swizzled texel, a write stores it with the swizzle undone (each channel from the first lane
-    whose source it is), and a query answers the view's size and the hidden buffer's words, which
-    no swizzle reaches, as plain Metal answers for the same view; the order is never applied twice.
+    swizzled texel and a query answers the view's size and the hidden buffer's words, which no
+    swizzle reaches, as plain Metal answers for the same view; the order is never applied twice. A
+    write stores the value as written, where the M3 Max stores it with the swizzle undone (each
+    channel from the first lane whose source it is; section 10, Kernels).
     A storage slot the kernel only queries binds the texture's view with no swizzle. The reflection
     states each image argument as the texture bound for it, an `image1d_t` `TextureType::Type2D`
     and an `image1d_array_t` `Type2DArray`, of data type `DataType::None` (the AIR names its component
@@ -2883,6 +2884,12 @@ named states the rule in full.
   for `get_local_size`, `get_global_size` and `get_num_groups`, as OpenCL C defines them. The M3
   Max (macOS 27.0.1) leaves unwritten the store of `get_global_id(3) + get_local_size(4) +
   get_global_size(5)`, where the runtime stores 2.
+- **A kernel's write through a texture view whose swizzle permutes its format's channels is
+  stored as written** (`metal2vulkan-runtime`'s `Texture::new_texture_view_with_swizzle`), where
+  an Apple M3 Max (macOS 27.0.1) stores it through the swizzle (a write of `(0x33, 0x66, 0xb3,
+  0xcc)` through an `RGBA8Unorm` view of `(Blue, Green, Red, Alpha)` leaves `(0xb3, 0x66, 0x33,
+  0xcc)`, `crates/metal2vulkan-conformance/probes/swizzled_view_stores.m`) and Metal's validation
+  refuses the write, the view reporting no `ShaderWrite` usage.
 
 **Queues and command buffers**
 
