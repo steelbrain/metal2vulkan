@@ -1378,19 +1378,21 @@ fn copied_flag() -> (Module, AirAbi) {
     (module, abi)
 }
 
-fn normalize_f32(f: &mut FunctionBuilder<'_>, ty: TypeId, v: Value) -> Value {
+/// `air.normalize_function_constant_predicate.<f16|f32>(v)`, of `half` where `half`.
+fn normalize_float(f: &mut FunctionBuilder<'_>, ty: TypeId, half: bool, v: Value) -> Value {
+    use crate::intrinsics::Elem;
+    let (name, elem) = match half {
+        true => ("air.normalize_function_constant_predicate.f16", Elem::F16),
+        false => ("air.normalize_function_constant_predicate.f32", Elem::F32),
+    };
     let decl_ty = f.module().fn_ty(ty, &[ty]);
-    let decl = f
-        .module()
-        .declare("air.normalize_function_constant_predicate.f32", decl_ty);
+    let decl = f.module().declare(name, decl_ty);
     call(
         f,
         ty,
         Callee::Air {
             decl,
-            op: AirIntrinsic::FunctionConstant(FunctionConstant::NormalizePredicate(
-                crate::intrinsics::Elem::F32,
-            )),
+            op: AirIntrinsic::FunctionConstant(FunctionConstant::NormalizePredicate(elem)),
         },
         &[v],
     )
@@ -1403,14 +1405,26 @@ fn float_constant(v: f32) -> ConstValue {
     }
 }
 
-/// Apple's OpenGL front end's shape for a function constant that is a `float` (a point size):
-/// the static initializer stores the constant's normalized predicate, a `float`, into `pred`,
-/// which gates parameter 1. With `normalized` false it stores the constant itself, so `pred`
-/// holds the value as supplied.
-fn float_predicate(normalized: bool) -> (Module, AirAbi) {
+fn half_constant(bits: u16) -> ConstValue {
+    ConstValue {
+        ty: DataType::Half,
+        bytes: Box::new(bits.to_le_bytes()),
+    }
+}
+
+/// Apple's OpenGL front end's shape for a function constant that is a `float` (a point size), as
+/// the shading language compiler also writes it for a `float` or `half` constant named by an
+/// argument's `function_constant` attribute: the static initializer stores the constant's
+/// normalized predicate, of the constant's type, into `pred`, which gates parameter 1. Of `half`
+/// where `half`. With `normalized` false it stores the constant itself, so `pred` holds the value
+/// as supplied.
+fn float_predicate(half: bool, normalized: bool) -> (Module, AirAbi) {
     let mut m = ModuleBuilder::new();
     let void = m.void();
-    let ft = m.float();
+    let ft = match half {
+        true => m.ty(Type::Half),
+        false => m.float(),
+    };
     let dev = m.ptr(AddrSpace::Device);
     let size = fc_global(&mut m, "size", ft);
     let zero = m.constant(ft, Const::Float(0));
@@ -1419,7 +1433,7 @@ fn float_predicate(normalized: bool) -> (Module, AirAbi) {
     static_init(&mut m, "init", |f| {
         let v = load(f, ft, size_addr);
         let p = match normalized {
-            true => normalize_f32(f, ft, v),
+            true => normalize_float(f, ft, half, v),
             false => v,
         };
         store(f, p, pred_addr);
@@ -1447,7 +1461,7 @@ fn float_predicate(normalized: bool) -> (Module, AirAbi) {
 fn a_float_function_constant_gates_a_parameter_where_it_is_supplied_and_non_zero() {
     for normalized in [true, false] {
         let kept = |constants: &[(u32, ConstValue)]| -> Vec<u32> {
-            let (module, abi) = float_predicate(normalized);
+            let (module, abi) = float_predicate(false, normalized);
             let e = specialize(module, &abi, &request(constants), &mut meter()).unwrap();
             e.ep.params.iter().map(|p| p.param).collect()
         };
@@ -1462,6 +1476,39 @@ fn a_float_function_constant_gates_a_parameter_where_it_is_supplied_and_non_zero
         assert_eq!(kept(&[(0, float_constant(-0.0))]), [0], "-0.0 is off, {at}");
         assert_eq!(
             kept(&[(0, float_constant(f32::NAN))]),
+            [0, 1],
+            "NaN is on, {at}"
+        );
+        assert_eq!(kept(&[]), [0], "unsupplied is off, {at}");
+    }
+}
+
+#[test]
+fn a_half_function_constant_gates_a_parameter_where_it_is_supplied_and_non_zero() {
+    for normalized in [true, false] {
+        let kept = |constants: &[(u32, ConstValue)]| -> Vec<u32> {
+            let (module, abi) = float_predicate(true, normalized);
+            let e = specialize(module, &abi, &request(constants), &mut meter()).unwrap();
+            e.ep.params.iter().map(|p| p.param).collect()
+        };
+        let at = format!("normalized {normalized}");
+        assert_eq!(
+            kept(&[(0, half_constant(0x3e00))]),
+            [0, 1],
+            "1.5 is on, {at}"
+        );
+        assert_eq!(
+            kept(&[(0, half_constant(0x0000))]),
+            [0],
+            "zero is off, {at}"
+        );
+        assert_eq!(
+            kept(&[(0, half_constant(0x8000))]),
+            [0],
+            "-0.0 is off, {at}"
+        );
+        assert_eq!(
+            kept(&[(0, half_constant(0x7e00))]),
             [0, 1],
             "NaN is on, {at}"
         );
