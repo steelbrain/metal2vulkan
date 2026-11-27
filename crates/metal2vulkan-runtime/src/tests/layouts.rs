@@ -7,6 +7,11 @@
 //! renderings each colour attachment's view and image as made ([`rendered`]). Its barrier commands are counted too. The core commands that name a layout and that rt does not record get no entry, so
 //! that a call of one panics (ash's stub for a command it did not load) and the test learns of it.
 //!
+//! The same table counts each `vkFlushMappedMemoryRanges` and `vkInvalidateMappedMemoryRanges`
+//! call and the bytes of the ranges it names, a range of `VK_WHOLE_SIZE` to the end of its
+//! memory's mapping as `vkMapMemory` named it ([`coherence_calls`]): the calls themselves, which
+//! the runtime's own counters of them claim (`crate::coherence`).
+//!
 //! Each command buffer's barriers, copies to a buffer and timestamp writes are kept in the order
 //! recorded, for every command buffer submitted ([`submitted`]).
 //!
@@ -131,6 +136,9 @@ struct Driver {
     cmd_clear_depth_stencil_image: vk::PFN_vkCmdClearDepthStencilImage,
     cmd_begin_rendering: vk::PFN_vkCmdBeginRendering,
     cmd_write_timestamp2: vk::PFN_vkCmdWriteTimestamp2,
+    map_memory: vk::PFN_vkMapMemory,
+    flush_mapped_memory_ranges: vk::PFN_vkFlushMappedMemoryRanges,
+    invalidate_mapped_memory_ranges: vk::PFN_vkInvalidateMappedMemoryRanges,
 }
 
 #[derive(Default)]
@@ -140,6 +148,12 @@ struct Record {
     barriers: HashMap<vk::Device, u64>,
     /// Each recorded device's driver commands.
     drivers: HashMap<vk::Device, Driver>,
+    /// Each recorded device's `vkFlushMappedMemoryRanges` and `vkInvalidateMappedMemoryRanges`
+    /// calls and their ranges' bytes ([`coherence_calls`]).
+    coherence: HashMap<vk::Device, [u64; 4]>,
+    /// The end of each memory's mapping where `vkMapMemory` named its size, `None` where it named
+    /// `VK_WHOLE_SIZE`.
+    mapped: HashMap<(vk::Device, vk::DeviceMemory), Option<u64>>,
     /// Each command buffer's device.
     devices: HashMap<vk::CommandBuffer, vk::Device>,
     /// Each image view's image, type and range.
@@ -219,6 +233,14 @@ pub(crate) fn barriers(device: vk::Device) -> u64 {
 
 pub(crate) fn forget() {
     record().named.clear();
+}
+
+/// `device`'s `vkFlushMappedMemoryRanges` and `vkInvalidateMappedMemoryRanges` calls since it was
+/// made, and the bytes of the ranges they named: the flushes, their bytes, the invalidates, their
+/// bytes. A range whose end is unknown (`VK_WHOLE_SIZE` past a mapping of `VK_WHOLE_SIZE`) counts
+/// `u64::MAX` bytes. `None` for a device made while no [`Recording`] lived.
+pub(crate) fn coherence_calls(device: vk::Device) -> Option<[u64; 4]> {
+    record().coherence.get(&device).copied()
 }
 
 /// Every copy between images `device` recorded so far, in the order recorded.
@@ -397,9 +419,25 @@ pub(crate) unsafe fn recorded(instance: &ash::Instance, device: ash::Device) -> 
             cmd_write_timestamp2: std::mem::transmute::<*const c_void, vk::PFN_vkCmdWriteTimestamp2>(
                 load(c"vkCmdWriteTimestamp2"),
             ),
+            map_memory: std::mem::transmute::<*const c_void, vk::PFN_vkMapMemory>(load(
+                c"vkMapMemory",
+            )),
+            flush_mapped_memory_ranges: std::mem::transmute::<
+                *const c_void,
+                vk::PFN_vkFlushMappedMemoryRanges,
+            >(load(c"vkFlushMappedMemoryRanges")),
+            invalidate_mapped_memory_ranges: std::mem::transmute::<
+                *const c_void,
+                vk::PFN_vkInvalidateMappedMemoryRanges,
+            >(load(c"vkInvalidateMappedMemoryRanges")),
         }
     };
-    record().drivers.insert(handle, driver);
+    let mut fresh = record();
+    fresh.drivers.insert(handle, driver);
+    // A handle made again starts again.
+    fresh.coherence.insert(handle, [0; 4]);
+    fresh.mapped.retain(|&(device, _), _| device != handle);
+    drop(fresh);
     let ours = |name: &CStr| -> Option<*const c_void> {
         let function: *const c_void = match name.to_bytes() {
             b"vkBeginCommandBuffer" => begin_command_buffer as *const c_void,
@@ -418,6 +456,9 @@ pub(crate) unsafe fn recorded(instance: &ash::Instance, device: ash::Device) -> 
             b"vkCmdClearDepthStencilImage" => cmd_clear_depth_stencil_image as *const c_void,
             b"vkCmdBeginRendering" => cmd_begin_rendering as *const c_void,
             b"vkCmdWriteTimestamp2" => cmd_write_timestamp2 as *const c_void,
+            b"vkMapMemory" => map_memory as *const c_void,
+            b"vkFlushMappedMemoryRanges" => flush_mapped_memory_ranges as *const c_void,
+            b"vkInvalidateMappedMemoryRanges" => invalidate_mapped_memory_ranges as *const c_void,
             _ => return None,
         };
         Some(function)
@@ -478,6 +519,68 @@ unsafe fn slice<'a, T>(pointer: *const T, count: u32) -> &'a [T] {
         // SAFETY: the caller's contract.
         false => unsafe { std::slice::from_raw_parts(pointer, count as usize) },
     }
+}
+
+unsafe extern "system" fn map_memory(
+    device: vk::Device,
+    memory: vk::DeviceMemory,
+    offset: vk::DeviceSize,
+    size: vk::DeviceSize,
+    flags: vk::MemoryMapFlags,
+    data: *mut *mut c_void,
+) -> vk::Result {
+    let driver = record().drivers[&device];
+    let end = match size {
+        vk::WHOLE_SIZE => None,
+        size => Some(offset + size),
+    };
+    record().mapped.insert((device, memory), end);
+    // SAFETY: the caller's arguments, passed on.
+    unsafe { (driver.map_memory)(device, memory, offset, size, flags, data) }
+}
+
+/// Counts one call of `device`'s at `at` of its [`coherence_calls`] (0 a flush, 2 an
+/// invalidate), and the bytes of its `ranges` one further.
+fn mapped_call(device: vk::Device, at: usize, ranges: &[vk::MappedMemoryRange<'_>]) {
+    let mut record = record();
+    let bytes = (ranges.iter())
+        .map(|range| match range.size {
+            vk::WHOLE_SIZE => (record
+                .mapped
+                .get(&(device, range.memory))
+                .copied()
+                .flatten())
+            .map_or(u64::MAX, |end| end.saturating_sub(range.offset)),
+            size => size,
+        })
+        .fold(0, u64::saturating_add);
+    let tally = record.coherence.entry(device).or_default();
+    tally[at] += 1;
+    tally[at + 1] = tally[at + 1].saturating_add(bytes);
+}
+
+unsafe extern "system" fn flush_mapped_memory_ranges(
+    device: vk::Device,
+    count: u32,
+    ranges: *const vk::MappedMemoryRange<'_>,
+) -> vk::Result {
+    let driver = record().drivers[&device];
+    // SAFETY: the caller's `count` ranges.
+    mapped_call(device, 0, unsafe { slice(ranges, count) });
+    // SAFETY: the caller's arguments, passed on.
+    unsafe { (driver.flush_mapped_memory_ranges)(device, count, ranges) }
+}
+
+unsafe extern "system" fn invalidate_mapped_memory_ranges(
+    device: vk::Device,
+    count: u32,
+    ranges: *const vk::MappedMemoryRange<'_>,
+) -> vk::Result {
+    let driver = record().drivers[&device];
+    // SAFETY: the caller's `count` ranges.
+    mapped_call(device, 2, unsafe { slice(ranges, count) });
+    // SAFETY: the caller's arguments, passed on.
+    unsafe { (driver.invalidate_mapped_memory_ranges)(device, count, ranges) }
 }
 
 unsafe extern "system" fn allocate_command_buffers(

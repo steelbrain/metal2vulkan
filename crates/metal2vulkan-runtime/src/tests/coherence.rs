@@ -10,6 +10,13 @@
 //! with its bytes, and none fails. A device whose one host-visible, host-cached buffer type also
 //! holds the parameter ring is refused under the view, with its refusal.
 //!
+//! Every count is of calls the device made: each reading of its counters first holds its four
+//! coherence counters (the flushes, their bytes, the invalidates, their bytes) equal to the
+//! `vkFlushMappedMemoryRanges` and `vkInvalidateMappedMemoryRanges` calls the device's recorded
+//! table of commands saw it make since it was made, and the bytes of the ranges they named
+//! (`crate::tests::layouts::coherence_calls`), so a count with no call behind it, or a call over
+//! other bytes, fails where it is read.
+//!
 //! Every count also checks the points' identity: the flushed bytes by point (before a
 //! submission, at a retirement, before an event's value is seen, around the runtime's own host
 //! accesses) sum to the flushed bytes, and the invalidated bytes are the retirements' and the
@@ -53,6 +60,7 @@ mod on_device {
         each_device_under_the_view, finished, on_each_device, shared_event, within, PATIENCE,
     };
     use crate::tests::import::on_device::{free, host_memory, releasing, wait_until};
+    use crate::tests::layouts::{coherence_calls, Recording};
     use crate::texture::TextureObject;
     use crate::{
         Buffer, BufferLayout, ClearColor, CommandBuffer, CommandBufferStatus, CommandQueue,
@@ -97,6 +105,51 @@ mod on_device {
              {made:?}"
         );
         made
+    }
+
+    /// A device's counters, read through [`Seen::metrics`].
+    struct Seen<'a> {
+        name: &'a str,
+        device: &'a Device,
+    }
+
+    impl Seen<'_> {
+        /// The device's counters now, once its coherence counters (the flushes, their bytes, the
+        /// invalidates, their bytes) equal the `vkFlushMappedMemoryRanges` and
+        /// `vkInvalidateMappedMemoryRanges` calls the recorder saw the device make since it was
+        /// made and their ranges' bytes (`crate::tests::layouts::coherence_calls`); a call under
+        /// way is in the record before the counters, so a reading waits up to a second for them
+        /// to agree. A device made while no [`Recording`] lived has no record and fails.
+        fn metrics(&self) -> Metrics {
+            let handle = self.device.core().device.handle();
+            let read = || {
+                let metrics = self.device.counters().metrics();
+                let claimed = [
+                    metrics.shared_flushes,
+                    metrics.shared_flushed_bytes,
+                    metrics.shared_invalidates,
+                    metrics.shared_invalidated_bytes,
+                ];
+                (coherence_calls(handle), claimed, metrics)
+            };
+            let mut seen = read();
+            for _ in 0..100 {
+                if seen.0 == Some(seen.1) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                seen = read();
+            }
+            let (made, claimed, metrics) = seen;
+            assert_eq!(
+                made,
+                Some(claimed),
+                "{}: the Vulkan calls made and their ranges' bytes (flushes, flushed bytes, \
+                 invalidates, invalidated bytes), against the counters' claim",
+                self.name
+            );
+            metrics
+        }
     }
 
     /// From `before` to `after`: the host nanoseconds inside the flushes, then inside the
@@ -218,7 +271,7 @@ mod on_device {
     fn calls_of_the_work(name: &str, device: &Device, atom: Option<u64>) {
         const OFFSET: u64 = 256;
         const LEN: u64 = 64;
-        let counters = device.counters();
+        let counters = Seen { name, device };
         settled(device);
         within("the zero source", || device.core().filler.get().is_some());
         let made = counters.metrics();
@@ -379,6 +432,7 @@ mod on_device {
     /// which leaves no cached type coherent, so there every device builds the state.
     #[test]
     fn every_device_flushes_and_invalidates_only_where_its_shared_type_is_not_coherent() {
+        let _recording = Recording::start();
         use ash::vk::MemoryPropertyFlags as F;
         let runtime = crate::tests::validation::instance(&[]);
         let (_, vk_instance) = runtime.raw();
@@ -421,6 +475,7 @@ mod on_device {
     /// inside the calls is counted, the flushes' apart from the invalidates'.
     #[test]
     fn a_coherence_state_counts_each_call_at_its_point_and_times_it() {
+        let _recording = Recording::start();
         use crate::buffer::BufferObject;
         use crate::coherence::{Coherence, Point};
         const OFFSET: u64 = 320;
@@ -441,7 +496,10 @@ mod on_device {
             let coherence = (Coherence::of(&memory, device.memory_types(), atom))
                 .unwrap_or_else(|| panic!("{name}: the view leaves the Shared type not coherent"));
             settled(&device);
-            let counters = device.counters();
+            let counters = Seen {
+                name,
+                device: &device,
+            };
             let block = (device.take_block(MemoryClass::Shared, 4096)).expect("a Shared block");
             let buffer = (device.new_buffer(block.id, OFFSET, LEN, Some(0))).expect("a buffer");
             let range = (buffer.shared_range(coherence.atom))
@@ -511,6 +569,7 @@ mod on_device {
     /// refuses it under the view, with that choice's refusal, which is printed.
     #[test]
     fn every_device_opened_under_the_view_flushes_and_invalidates_the_shared_memory_work_reaches() {
+        let _recording = Recording::start();
         each_device_under_the_view("coherence", |name, _, device, _| {
             let atom = (device.core().coherence.as_ref()).map(|coherence| coherence.atom);
             assert!(atom.is_some(), "{name}: the view built the coherence state");
@@ -526,10 +585,14 @@ mod on_device {
     /// its own, whose bytes the submissions copy back. The destination holds the host's texels.
     #[test]
     fn every_device_opened_under_the_view_flushes_a_texture_over_a_shared_buffer_and_its_view() {
+        let _recording = Recording::start();
         const HEIGHT: u32 = 4;
         each_device_under_the_view("coherence_over", |name, _, device, _| {
             let atom = atom(name, &device);
-            let counters = device.counters();
+            let counters = Seen {
+                name,
+                device: &device,
+            };
             let format = PixelFormat::RGBA8Unorm;
             let align = (device.minimum_linear_texture_alignment(format))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -641,7 +704,7 @@ mod on_device {
         [held, out]: [&Buffer; 2],
         declare: impl FnOnce(&mut ComputeCommandEncoder),
     ) -> [u64; 9] {
-        let counters = device.counters();
+        let counters = Seen { name, device };
         let before = counters.metrics();
         let command_buffer = queue.command_buffer().expect("a command buffer");
         let mut encoder =
@@ -665,6 +728,7 @@ mod on_device {
     /// host wrote there.
     #[test]
     fn every_device_opened_under_the_view_flushes_a_buffer_declared_with_use_resource() {
+        let _recording = Recording::start();
         let Some(library) = library("ab_pointers") else {
             return;
         };
@@ -725,6 +789,7 @@ mod on_device {
     /// writes. The kernel reads the words the host wrote in the heap.
     #[test]
     fn every_device_opened_under_the_view_flushes_and_settles_a_shared_heap_named_by_use_heap() {
+        let _recording = Recording::start();
         let Some(library) = library("ab_pointers") else {
             return;
         };
@@ -773,10 +838,14 @@ mod on_device {
     /// hold the source's bytes.
     #[test]
     fn every_device_opened_under_the_view_flushes_a_blits_shared_source_before_its_submission() {
+        let _recording = Recording::start();
         const LEN: u64 = 1000;
         each_device_under_the_view("coherence_blit_source", |name, _, device, _| {
             let atom = atom(name, &device);
-            let counters = device.counters();
+            let counters = Seen {
+                name,
+                device: &device,
+            };
             let queue = device.new_command_queue(4).expect("a queue");
             let shared = (device.take_block(MemoryClass::Shared, 1)).expect("a block");
             let source = (device.new_buffer(shared.id, 256, LEN, None)).expect("a buffer");
@@ -830,6 +899,7 @@ mod on_device {
     /// what the function its entry holds returns, the entries swapped between two dispatches.
     #[test]
     fn every_device_opened_under_the_view_flushes_a_function_tables_words_before_a_call() {
+        let _recording = Recording::start();
         const CALLS: u32 = 12;
         let (Some(caller), Some(functions)) = (
             library("visible_table_caller"),
@@ -849,7 +919,10 @@ mod on_device {
         ));
         each_device_under_the_view("coherence_function_table", |name, _, device, _| {
             let atom = atom(name, &device);
-            let counters = device.counters();
+            let counters = Seen {
+                name,
+                device: &device,
+            };
             let state = (device
                 .new_compute_pipeline_state(&descriptor, crate::tests::no_constexpr_samplers))
             .unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -920,11 +993,15 @@ mod on_device {
     /// more.
     #[test]
     fn every_device_opened_under_the_view_settles_the_writes_in_flight_before_a_signal_is_seen() {
+        let _recording = Recording::start();
         const OFFSET: u64 = 256;
         const LEN: u64 = 64;
         each_device_under_the_view("coherence_event", |name, _, device, _| {
             let atom = atom(name, &device);
-            let counters = device.counters();
+            let counters = Seen {
+                name,
+                device: &device,
+            };
             let queue = device.new_command_queue(4).expect("a queue");
             let block = (device.take_block(MemoryClass::Shared, 1)).expect("a block");
             let buffer = (device.new_buffer(block.id, OFFSET, LEN, Some(0))).expect("a buffer");
@@ -1017,6 +1094,7 @@ mod on_device {
     /// the import, with its refusal, which is printed.
     #[test]
     fn every_device_opened_under_the_view_flushes_an_uploads_source_and_settles_its_texture() {
+        let _recording = Recording::start();
         const SOURCE: u64 = 4096;
         const AT: u64 = 64;
         const HEIGHT: u32 = 16;
@@ -1030,7 +1108,10 @@ mod on_device {
         const SIZE: [u32; 2] = [90, 12];
         each_device_under_the_view("coherence_upload", |name, _, device, _| {
             let atom = atom(name, &device);
-            let counters = device.counters();
+            let counters = Seen {
+                name,
+                device: &device,
+            };
             let format = PixelFormat::R8Unorm;
             let align = (device.minimum_linear_texture_alignment(format))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -1162,12 +1243,16 @@ mod on_device {
     /// reads the GPU's bytes, not the zeros.
     #[test]
     fn every_device_opened_under_the_view_flushes_a_range_a_submission_only_writes_before_it() {
+        let _recording = Recording::start();
         const AT: u64 = 192;
         const LEN: u64 = 1000;
         const HEIGHT: u32 = 4;
         each_device_under_the_view("coherence_written", |name, _, device, _| {
             let atom = atom(name, &device);
-            let counters = device.counters();
+            let counters = Seen {
+                name,
+                device: &device,
+            };
             settled(&device);
             let queue = device.new_command_queue(4).expect("a queue");
             let private = (device.take_block(MemoryClass::Private, 1)).expect("a block");
