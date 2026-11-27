@@ -95,6 +95,31 @@ static const struct Kernel kKernels[] = {
                     "__kernel void one_sampler(__read_only image2d_t img, __global float4 *o) {"
                     " o[0] = read_imagef(img, s_edge, (int2)(1, 0)); }\n"},
     {"writes", "__kernel void writes(__write_only image2d_t img) { write_imagef(img, (int2)(0, 0), (float4)(1.0f)); }\n"},
+    // The kernels of the runtime's tests opencl_shapes, whose modules follow what this compiles them to.
+    {"ocl_write", "__kernel void ocl_write(__write_only image2d_t img) { int i = get_global_id(0);"
+                  " float4 v = ((float4)(17.0f, 81.0f, 145.0f, 209.0f) + (float)i) / 255.0f;"
+                  " write_imagef(img, (int2)(i & 3, i >> 2), v); }\n"},
+    {"ocl_atomics", "__kernel void ocl_atomics(__global int *g, __global int *per, __global int *tick, __local int *l) {\n"
+                    "  int i = get_global_id(0); int t = get_local_id(0); int w = get_group_id(0);\n"
+                    "  if (t == 0) { l[0] = 0; l[1] = 0; }\n"
+                    "  barrier(CLK_LOCAL_MEM_FENCE);\n"
+                    "  atomic_add(&l[0], i);\n"
+                    "  int old = 0, prev;\n"
+                    "  while ((prev = atomic_cmpxchg(&l[1], old, old + 1)) != old) old = prev;\n"
+                    "  tick[2 * i] = old;\n"
+                    "  atomic_add(&g[0], i);\n"
+                    "  old = 0;\n"
+                    "  while ((prev = atomic_cmpxchg(&g[1], old, old + 1)) != old) old = prev;\n"
+                    "  tick[2 * i + 1] = old;\n"
+                    "  barrier(CLK_LOCAL_MEM_FENCE);\n"
+                    "  if (t == 0) { per[2 * w] = l[0]; per[2 * w + 1] = l[1]; }\n"
+                    "}\n"},
+    {"ocl_sampler", SAMPLERS "__kernel void ocl_sampler(__read_only image2d_t img, __global float4 *o) {\n"
+                             "  int i = get_global_id(0);\n"
+                             "  o[2 * i] = read_imagef(img, s_edge, (int2)(i - 2, 3 * (i & 1) - 1));\n"
+                             "  o[2 * i + 1] = read_imagef(img, s_repeat,"
+                             " (float2)(((float)(i & 3) + 1.0f) / 4.0f, ((float)(i >> 2) + 0.5f) / 2.0f));\n"
+                             "}\n"},
 };
 
 static void writeBytes(const char *path, const void *bytes, size_t n)
