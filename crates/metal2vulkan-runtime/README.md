@@ -560,8 +560,9 @@ at these points:
   interface writes, a resource it declares with `use_resource` for writing, a render pass's
   attachments and resolve targets, a visibility result buffer, a synchronize's buffer, the
   whole Shared memory of every heap it uses, and every texture over a Shared buffer in an image
-  of its own. The flush comes first because Vulkan leaves a range undefined when the host wrote
-  it and it is invalidated without a flush.
+  of its own. A texture over a Shared buffer among these counts as the whole buffer it lies over,
+  not only its own bytes in it. The flush comes first because Vulkan leaves a range undefined when
+  the host wrote it and it is invalidated without a flush.
 - Around its own host accesses: the bytes `Texture::replace_region` stages are flushed before
   their copy, and so are the bytes `Texture::upload_region` copies from a Managed texture's
   named buffer, at the call; the bytes a copy stages for `Texture::get_bytes` are flushed and
