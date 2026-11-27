@@ -851,6 +851,7 @@ const OBSERVED: &[(&str, &str)] = &[
     // Function constants, fragment, imageblocks.
     ("air.is_function_constant_defined", "i1 (p2)"),
     ("air.normalize_function_constant_predicate.i8", "i8 (i8)"),
+    ("air.normalize_function_constant_predicate.f32", "f32 (f32)"),
     ("air.discard_fragment", "void ()"),
     (
         "air.map_physical_to_screen_coordinates.v2f32.p2i8.i32",

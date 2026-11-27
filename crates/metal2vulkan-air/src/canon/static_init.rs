@@ -539,7 +539,10 @@ impl<'a> Eval<'a> {
                         Some(SVal::Opaque) => return Ok(Step::Next(Some(SVal::Opaque))),
                         _ => return Err(not_evaluable(at)),
                     };
-                    let c = self.folder.normalize_predicate(ty, x, m)?;
+                    let c = match self.folder.normalize_predicate_float(ty, x, m)? {
+                        Some(c) => Some(c),
+                        None => self.folder.normalize_predicate(ty, x, m)?,
+                    };
                     SVal::C(c.ok_or_else(|| not_evaluable(at.clone()))?)
                 }
                 Callee::Llvm {

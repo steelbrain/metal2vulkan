@@ -111,6 +111,22 @@ impl Values<'_> {
         }
     }
 
+    /// Whether global `g`'s initializer is a floating-point constant.
+    fn holds_float(&self, g: GlobalId) -> bool {
+        let init = self.globals.get(g).and_then(|g| g.init);
+        matches!(init.and_then(|c| self.consts.get(c)).map(|c| &c.value), Some(Const::Float(_)))
+    }
+
+    /// Whether the floating-point constant global `g` holds is non-zero; an unsupplied one's is
+    /// not.
+    fn float_nonzero(&self, g: GlobalId) -> bool {
+        if self.fcs.get(&g).is_some_and(|f| !f.supplied) {
+            return false;
+        }
+        let init = self.globals.get(g).and_then(|g| g.init);
+        matches!(init.and_then(|c| self.consts.get(c)).map(|c| &c.value), Some(Const::Float(b)) if *b != 0)
+    }
+
     fn resolve(&self, v: &mut AbiInt) -> Result<(), Error> {
         if let AbiInt::Global(g) = *v {
             let x = u32::try_from(self.int(g)?).map_err(|_| not_evaluable())?;
@@ -127,6 +143,9 @@ impl Values<'_> {
     /// Whether the argument or output a predicate gates is present.
     fn present(&self, p: &Option<Predicate>) -> Result<bool, Error> {
         match p {
+            // A function constant that is not a `bool`, of floating-point type, is normalized to
+            // 1.0 where it is supplied and non-zero and to 0.0 otherwise.
+            Some(p) if self.holds_float(p.global) => Ok(self.float_nonzero(p.global)),
             Some(p) => Ok(self.int(p.global)? != 0),
             None => Ok(true),
         }

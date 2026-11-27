@@ -92,7 +92,9 @@ impl BoolReduce {
 pub enum FunctionConstant {
     /// `air.is_function_constant_defined`: `i1 (ptr addrspace(2))`, the constant's global.
     IsDefined,
-    /// `air.normalize_function_constant_predicate.<iN>`: `iN (iN)`.
+    /// `air.normalize_function_constant_predicate.<iN>`: `iN (iN)`; of a float constant, `.f16` or
+    /// `.f32`: the same over a float, 1.0 where it is a known non-zero and 0.0 where it is zero or
+    /// undefined.
     NormalizePredicate(Elem),
     /// The texture operation `t` (a read, sample, gather, query, or atomic) of a texture argument
     /// the pipeline's function constants removed, or through a sampler argument they removed,
@@ -127,7 +129,7 @@ impl FunctionConstant {
             return Some(FunctionConstant::IsDefined);
         }
         let ty = NumTy::parse(rest.strip_prefix("normalize_function_constant_predicate.")?)?;
-        (matches!(ty.elem, Elem::I8 | Elem::I16 | Elem::I32) && !ty.is_vector())
+        (matches!(ty.elem, Elem::I8 | Elem::I16 | Elem::I32 | Elem::F16 | Elem::F32) && !ty.is_vector())
             .then_some(FunctionConstant::NormalizePredicate(ty.elem))
     }
 

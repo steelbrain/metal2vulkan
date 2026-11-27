@@ -1039,7 +1039,7 @@ fn kernel_with_predicate(
 }
 
 #[test]
-fn predicates_name_a_static_initializer_integer_global() {
+fn predicates_name_a_static_initializer_integer_or_float_global() {
     // As the frontend writes them: `internal addrspace(2) global i8 0`, and a few `i16`/`i32`
     // predicates.
     for bits in [8, 16, 32] {
@@ -1050,6 +1050,14 @@ fn predicates_name_a_static_initializer_integer_global() {
         });
         assert!(abi.is_ok(), "i{bits}: {abi:?}");
     }
+    // A function constant that is a `float` (Apple's OpenGL front end's point size) gates an
+    // argument through a floating-point predicate global.
+    let abi = kernel_with_predicate(|b| {
+        let t = b.float();
+        let zero = b.constant(t, Const::Float(0));
+        b.simple_global("pred", t, AddrSpace::Constant, Some(zero))
+    });
+    assert!(abi.is_ok(), "float: {abi:?}");
     let refused = |abi: Result<AirAbi, Error>| {
         let site = Site {
             entry: Some(DiagName::new("k")),
@@ -1064,11 +1072,11 @@ fn predicates_name_a_static_initializer_integer_global() {
     refused(kernel_with_predicate(|b| {
         fc_global(b, "fc0", Some(Section::FcInitializer))
     }));
-    // Not an integer.
+    // Not a number.
     refused(kernel_with_predicate(|b| {
-        let t = b.float();
-        let zero = b.constant(t, Const::Undef);
-        b.simple_global("pred", t, AddrSpace::Constant, Some(zero))
+        let t = b.ptr(AddrSpace::Device);
+        let null = b.constant(t, Const::Null);
+        b.simple_global("pred", t, AddrSpace::Constant, Some(null))
     }));
     // A declaration: the static initializer has nothing to store into.
     refused(kernel_with_predicate(|b| {

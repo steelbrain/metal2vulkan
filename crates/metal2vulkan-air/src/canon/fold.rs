@@ -327,6 +327,33 @@ impl Folder<'_> {
         self.mk_int(ty, v, m)
     }
 
+    /// `air.normalize_function_constant_predicate.<f16|f32>(x)`: 1.0 when `x` is a known non-zero
+    /// float, 0.0 when it is zero or undefined (`None`: a value computed from an unsupplied
+    /// function constant). `None` where `x` is no float or `ty` is neither `half` nor `float`.
+    pub fn normalize_predicate_float(
+        &mut self,
+        ty: TypeId,
+        x: Option<ConstId>,
+        m: &mut Meter,
+    ) -> Result<Option<ConstId>, Error> {
+        let one = match self.types.get(ty) {
+            Some(Type::Float) => 0x3f80_0000u64,
+            Some(Type::Half) => 0x3c00,
+            _ => return Ok(None),
+        };
+        let nonzero = match x {
+            None => false,
+            Some(c) => match self.value(c) {
+                Some(Const::Undef | Const::Poison) => false,
+                _ => match self.float(c) {
+                    Some(v) => v != 0.0,
+                    None => return Ok(None),
+                },
+            },
+        };
+        self.mk(ty, Const::Float(if nonzero { one } else { 0 }), m).map(Some)
+    }
+
     /// `icmp pred a, b` over scalar integers (and null pointers), typed `ty` (`i1`).
     pub fn icmp(
         &mut self,
