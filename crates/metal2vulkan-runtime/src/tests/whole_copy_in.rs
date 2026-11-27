@@ -143,13 +143,13 @@ fn pattern(x: u32, y: u32) -> u8 {
 fn advance(bytes: &mut [u8]) {
     const K: u64 = 0x2525_2525_2525_2525;
     const H: u64 = 0x8080_8080_8080_8080;
-    let mut chunks = bytes.chunks_exact_mut(8);
-    for chunk in &mut chunks {
-        let a = u64::from_ne_bytes((&*chunk).try_into().expect("eight bytes"));
+    let (chunks, rest) = bytes.as_chunks_mut::<8>();
+    for chunk in chunks {
+        let a = u64::from_ne_bytes(*chunk);
         let sum = ((a & !H) + (K & !H)) ^ ((a ^ K) & H);
-        chunk.copy_from_slice(&sum.to_ne_bytes());
+        *chunk = sum.to_ne_bytes();
     }
-    for byte in chunks.into_remainder() {
+    for byte in rest {
         *byte = byte.wrapping_add(37);
     }
 }
