@@ -1310,23 +1310,27 @@ mod on_device {
                     _ => {}
                 }
             }
-            println!(
-                "over copy layouts: {name}: copies in from {into:?}, back from {back:?}, home {:?}",
-                over.home
-            );
+            // Each layout by its number (`VkImageLayout`).
+            let shown = |froms: &[Option<vk::ImageLayout>]| -> Vec<Option<i32>> {
+                froms
+                    .iter()
+                    .map(|from| from.map(vk::ImageLayout::as_raw))
+                    .collect()
+            };
+            let (ins, backs, home) = (shown(&into), shown(&back), over.home.as_raw());
+            println!("over copy layouts: {name}: copies in from {ins:?}, back from {backs:?}, home {home}");
             assert!(
                 into.len() >= 2 && !back.is_empty(),
-                "{name}: two copies in and a copy back: in {into:?}, back {back:?}"
+                "{name}: two copies in and a copy back: in {ins:?}, back {backs:?}"
             );
             assert!(
                 into.iter()
                     .all(|&from| from == Some(vk::ImageLayout::UNDEFINED)),
-                "{name}: each copy in from undefined: {into:?}"
+                "{name}: each copy in from undefined (0): {ins:?}"
             );
             assert!(
                 back.iter().all(|&from| from == Some(over.home)),
-                "{name}: each copy back from home {:?}: {back:?}",
-                over.home
+                "{name}: each copy back from home ({home}): {backs:?}"
             );
             let after = moves(handle);
             assert!(
