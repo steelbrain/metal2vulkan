@@ -640,7 +640,8 @@ exit:
             encoder.set_buffer(Some(&b), 0, 4).expect("b");
             encoder.set_bytes(&N.to_le_bytes(), 6).expect("n");
             encoder.set_bytes(&K.to_le_bytes(), 7).expect("k");
-            let scratch = match tiles {
+            // Held until the work is done.
+            let _scratch = match tiles {
                 Tiles::Local => {
                     (encoder.set_threadgroup_memory_length(tile, 0)).expect("at");
                     (encoder.set_threadgroup_memory_length(tile, 1)).expect("bt");
