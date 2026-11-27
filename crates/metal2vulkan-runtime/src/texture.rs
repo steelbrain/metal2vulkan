@@ -501,7 +501,9 @@ pub(crate) struct Image {
     linear_attachment: bool,
     /// The layout its move home starts from: undefined; preinitialized for a texture over a buffer
     /// in place, whose move home keeps the bytes (over a dma-buf's import, the layout of the
-    /// bytes the host wrote, which the move's acquire names, `foreign`).
+    /// bytes the host wrote, which the move's acquire names, `foreign`). A Direct3D 11 plane's is
+    /// undefined too, the layout it is made in, which its first acquire names
+    /// ([`handed`](Self::handed)).
     first: vk::ImageLayout,
     /// A heap texture's image placed over bytes another resource of its heap reaches
     /// (`crate::alias`): its move home waits for every earlier command's writes. False for every
@@ -512,7 +514,11 @@ pub(crate) struct Image {
     /// queue family (`VK_QUEUE_FAMILY_FOREIGN_EXT`) in one barrier with the image, so that both
     /// keep the bytes. `None` for every other image.
     foreign: Option<(vk::Buffer, u64, u64)>,
-    /// An upload recorded its move from `first` to `home`. Read and set under the work lock.
+    /// An upload recorded its move from `first` to `home`. Read and set under the work lock. A
+    /// Direct3D 11 plane, which no upload moves, is set by its first acquire, which moves it from
+    /// `first`, recorded on the submit thread ([`handed`](Self::handed)), or by the consumer's
+    /// report of Direct3D 11's access, after which Vulkan takes it as general
+    /// ([`external_access`](Self::external_access)).
     homed: AtomicBool,
     /// How the move home zeroes it, for an image the runtime places for a texture of its own
     /// (`Source::Plain` and `Source::Managed`); `None` for every other image.
@@ -742,25 +748,36 @@ impl Image {
     /// (`Device::import_d3d11_surface`, on Windows) not yet there: each `vkQueueSubmit2` that
     /// reaches such an image hands it over at its start and its end ([`handed`](Self::handed)).
     pub(crate) fn keep_plane(self: &Arc<Image>, planes: &mut Vec<Arc<Image>>) {
-        let plane = matches!(self._under, Some(Under::Surface { d3d11: true, .. }));
-        if plane && !planes.iter().any(|kept| Arc::ptr_eq(kept, self)) {
+        if self.d3d11_plane() && !planes.iter().any(|kept| Arc::ptr_eq(kept, self)) {
             planes.push(Arc::clone(self));
         }
     }
 
+    /// Whether it is a Direct3D 11 texture's plane (`Device::import_d3d11_surface`, on Windows).
+    fn d3d11_plane(&self) -> bool {
+        matches!(self._under, Some(Under::Surface { d3d11: true, .. }))
+    }
+
     /// A Direct3D 11 plane's hand-over between `VK_QUEUE_FAMILY_EXTERNAL` and the runtime's
-    /// queue family `family`, the general layout kept
+    /// queue family `family`, to the general layout
     /// (`VUID-VkImageMemoryBarrier-srcQueueFamilyIndex-12332`, `...-dstQueueFamilyIndex-12331`):
     /// its acquire (`acquire`), made visible to every later command, or its release, after every
-    /// earlier command's writes.
+    /// earlier command's writes. The plane's first acquire recorded, where the consumer reported
+    /// no Direct3D 11 access before it ([`external_access`](Self::external_access)), names the
+    /// undefined layout it is made in as its old layout (`VUID-VkImageCreateInfo-pNext-01443`),
+    /// and every later one, and every release, the general layout. Recorded on the submit thread.
     pub(crate) fn handed(&self, family: u32, acquire: bool) -> vk::ImageMemoryBarrier2<'static> {
         let (all, access) = (
             vk::PipelineStageFlags2::ALL_COMMANDS,
             vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
         );
+        let old = match acquire && !self.homed.swap(true, Ordering::Relaxed) {
+            true => self.first,
+            false => self.home,
+        };
         let barrier = vk::ImageMemoryBarrier2::default()
-            .old_layout(vk::ImageLayout::GENERAL)
-            .new_layout(vk::ImageLayout::GENERAL)
+            .old_layout(old)
+            .new_layout(self.home)
             .image(self.image)
             .subresource_range(whole(self.aspects));
         match acquire {
@@ -780,7 +797,9 @@ impl Image {
     /// for each acquire, [`Work::home`](crate::submit::Work::home)), with its zeroing between
     /// two moves where it has one ([`Zero`]). Under the work lock.
     pub(crate) fn homing(&self) -> Option<Homing> {
-        if self.homed.swap(true, Ordering::Relaxed) {
+        // A Direct3D 11 plane moves home in its first acquire, or is general after Direct3D 11's
+        // access ([`handed`](Self::handed)): no upload moves it.
+        if self.d3d11_plane() || self.homed.swap(true, Ordering::Relaxed) {
             return None;
         }
         // A drawable's image moves home at each acquire: from the present layout after a present.
@@ -877,6 +896,14 @@ impl Image {
     /// Whether its move home copies from the zero source ([`Zero::Copy`]).
     pub(crate) fn copies_zeros(&self) -> bool {
         matches!(self.zero, Some(Zero::Copy { .. }))
+    }
+
+    /// A Direct3D 11 plane's access by Direct3D 11 has completed, as the consumer reports it
+    /// ([`Surface::external_writes_done`](crate::Surface::external_writes_done)): Vulkan takes it
+    /// as general from then on (section 12.5.2), so its next acquire names the general layout
+    /// ([`handed`](Self::handed)). On the host alone.
+    pub(crate) fn external_access(&self) {
+        self.homed.store(true, Ordering::Relaxed);
     }
 
     /// Its move home is owed, recorded by the next upload that holds it ([`homing`](Self::homing)):
@@ -6381,9 +6408,9 @@ pub(crate) struct SurfaceImage {
     pub(crate) format: vk::Format,
     pub(crate) view_formats: Vec<vk::Format>,
     pub(crate) block: Option<Arc<Block>>,
-    /// A Direct3D 11 texture's (`Device::import_d3d11_surface`, on Windows): its image is in the
-    /// general layout from its first use, with no move from undefined, which Vulkan takes as
-    /// general after Direct3D 11's access (section 12.5.2).
+    /// A Direct3D 11 texture's (`Device::import_d3d11_surface`, on Windows): no upload moves its
+    /// image, made undefined: its first acquire moves it to the general layout, or Vulkan takes
+    /// it as general after Direct3D 11's access (section 12.5.2, [`Image::handed`]).
     pub(crate) d3d11: bool,
     /// The image is `LINEAR` and its format renders only through
     /// `VK_FORMAT_FEATURE_2_LINEAR_COLOR_ATTACHMENT_BIT_NV` (`crate::surface::Query::plane`):
@@ -6429,10 +6456,11 @@ impl Device {
 
     /// The texture of a surface plane's image, at `index` as for [`Device::new_texture`]: its
     /// home layout general, from undefined in the next upload, which goes ahead of every command
-    /// buffer committed after the make, or already general where the image is (a Direct3D 11
-    /// texture's). Its format is the descriptor's, a view of the image's own where they differ.
-    /// The texture holds the image, which its drop frees with its memory. It takes `unit`'s id in
-    /// the hazard sets, the surface's ([`HeapId::unit`]).
+    /// buffer committed after the make, or, a Direct3D 11 texture's, from undefined in its first
+    /// acquire or general after Direct3D 11's access ([`Image::handed`]). Its format is the
+    /// descriptor's, a view of the image's own where they differ. The texture holds the image,
+    /// which its drop frees with its memory. It takes `unit`'s id in the hazard sets, the
+    /// surface's ([`HeapId::unit`]).
     ///
     /// Err: [`Refusal::TextureIndex`]; [`Gap::SurfaceUsage`] for a usage the texture's uses ask
     /// that the image lacks; [`Error::Vulkan`] where a view cannot be made; what the texture's
@@ -6525,13 +6553,11 @@ impl Device {
             view_formats: made.view_formats,
             cube: false,
             linear_attachment: made.linear_attachment,
-            first: match general {
-                true => home,
-                false => vk::ImageLayout::UNDEFINED,
-            },
+            first: vk::ImageLayout::UNDEFINED,
             over: false,
-            // An image already general owes no move.
-            homed: AtomicBool::new(general),
+            // A Direct3D 11 plane's move from undefined is its first acquire's, or its access by
+            // Direct3D 11 makes it general: no upload moves it (`Image::handed`).
+            homed: AtomicBool::new(false),
             foreign: None,
             zero: None,
             drawable: None,
@@ -6548,8 +6574,8 @@ impl Device {
                 let element = sampled.filter(|_| plan.read).map(|view| (view, home));
                 let looped = sampled.filter(|_| image.looped());
                 // SAFETY: the texture's views are live; its image is in its home layout whenever
-                // work uses it: the upload that moves it goes ahead of that work, or it is general
-                // after the other API's access.
+                // work uses it: the upload that moves it goes ahead of that work, or its acquire
+                // does, or it is general after the other API's access.
                 let owner = unsafe {
                     (core.arrays).place_texture(
                         &core.device,

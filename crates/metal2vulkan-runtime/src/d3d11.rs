@@ -2,11 +2,12 @@
 //! host's: the planes another API decodes or draws into, shared by their NT handles, each
 //! imported as an optimal image of its own and read by rt's shaders in place.
 //!
-//! The import makes no submission and waits for nothing: Vulkan takes such an image as already
-//! in the general layout once Direct3D 11 has accessed it (section 12.5.2, below), so no move out
-//! of the undefined layout comes before its first use. Each `vkQueueSubmit2` that uses a plane
-//! takes it from `VK_QUEUE_FAMILY_EXTERNAL` at its start and gives it back at its end, before its
-//! signals (`crate::submit::parts`).
+//! The import makes no submission and waits for nothing. A plane's image is made undefined, and
+//! Vulkan takes it as general once Direct3D 11 has accessed it (section 12.5.2, below), which the
+//! consumer reports by `Surface::external_writes_done`: no upload moves it, and its first acquire
+//! names the undefined layout where no such access was reported before it. Each `vkQueueSubmit2`
+//! that uses a plane takes it from `VK_QUEUE_FAMILY_EXTERNAL` at its start and gives it back at
+//! its end, before its signals (`crate::submit::parts`).
 
 use crate::counters::Gauge;
 use crate::device::{Core, Device};
@@ -107,18 +108,26 @@ impl Device {
     /// ([`Texture::new_texture_view`](crate::Texture::new_texture_view)) is [`Gap::TextureView`]
     /// of [`TextureViewKind::SurfacePixelFormat`](crate::TextureViewKind::SurfacePixelFormat).
     ///
-    /// **Layout.** The call makes no submission and waits for nothing: no move out of the
-    /// undefined layout comes before a plane's first use. Vulkan 1.4, section 12.5.2 (Image
-    /// Layout Rules with External Memory): "When images created with external memory handle
-    /// types listed in the external image implied layouts table are accessed outside of Vulkan,
-    /// they must be in the layout specified in the table, and can be assumed to be in that layout
-    /// when they are accessed in Vulkan after external access", and its Table 17 gives
+    /// **Layout.** The call makes no submission and waits for nothing, and no upload moves a
+    /// plane. Each plane's image is made in the undefined layout
+    /// (`VUID-VkImageCreateInfo-pNext-01443`). Vulkan 1.4, section 12.5.2 (Image Layout Rules
+    /// with External Memory): "When images created with external memory handle types listed in
+    /// the external image implied layouts table are accessed outside of Vulkan, they must be in
+    /// the layout specified in the table, and can be assumed to be in that layout when they are
+    /// accessed in Vulkan after external access", and its Table 17 gives
     /// `VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT` the layout `VK_IMAGE_LAYOUT_GENERAL`.
+    /// So a plane's first acquire names the undefined layout as its old layout where the
+    /// consumer reported no Direct3D 11 access of it before
+    /// ([`Surface::external_writes_done`]), and the general layout where it did; every later
+    /// acquire names the general layout, the plane being general after rt's own first acquire
+    /// and release. "First" is the first acquire rt records for the plane.
     ///
     /// **Ownership.** Each `vkQueueSubmit2` whose command buffers or uploads use a plane acquires
     /// it from `VK_QUEUE_FAMILY_EXTERNAL` in a command buffer of rt's own ahead of everything in
-    /// it, from and to the general layout (`VUID-VkImageMemoryBarrier-srcQueueFamilyIndex-12332`),
-    /// and releases it to that family in another after everything in it, in the general layout
+    /// it, from the general layout, or from the undefined layout at its first acquire as
+    /// **Layout** says (`VUID-VkImageMemoryBarrier-srcQueueFamilyIndex-12332` allows either), to
+    /// the general layout, and releases it to that family in another after everything in it, in
+    /// the general layout
     /// (`...-dstQueueFamilyIndex-12331`), which takes that call's last signals, its progress value
     /// among them, so it adds no submit info and a command buffer that uses a plane is seen
     /// complete only once the plane's release has run: Direct3D 11 owns the planes' memory
@@ -126,20 +135,27 @@ impl Device {
     /// [`Metrics::d3d11_plane_submissions`](crate::Metrics::d3d11_plane_submissions). A group of
     /// command buffers rt sends member by member, one `vkQueueSubmit2` a member, hands each
     /// member's planes over in that member's call
-    /// ([`Metrics::d3d11_plane_parts`](crate::Metrics::d3d11_plane_parts)). The acquire follows a global barrier from and to every stage, so an earlier submission's
-    /// release on rt's one queue happens before it (Vulkan 1.4, section 7.7.6).
+    /// ([`Metrics::d3d11_plane_parts`](crate::Metrics::d3d11_plane_parts)). The acquire follows
+    /// a global barrier from and to every stage, so an earlier submission's release on rt's one
+    /// queue happens before it (Vulkan 1.4, section 7.7.6).
     /// [`Surface::external_writes_done`] and
     /// [`release_surface_to_external`](crate::BlitCommandEncoder::release_surface_to_external)
-    /// record nothing for such a surface. No keyed mutex is used, by rt or on the textures: each
+    /// record nothing for such a surface; the first marks its planes accessed by Direct3D 11, on
+    /// the host (**Layout**). No keyed mutex is used, by rt or on the textures: each
     /// is made with `D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE`, not
     /// `D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX`, whose mutex the device that makes the texture and
     /// each device that opens it must acquire before rendering to it; the consumer orders the two
     /// APIs' work by its waits.
     ///
     /// **The consumer's precondition.** Direct3D 11's work that accesses a plane has completed
-    /// before the consumer commits the command buffers that use it, and rt's command buffers that
-    /// use a plane have completed before Direct3D 11 accesses it again. A plane rt uses before
-    /// any Direct3D 11 access has undefined contents, as a Metal texture nothing wrote does.
+    /// before the consumer commits the command buffers that use it, the consumer calls
+    /// [`Surface::external_writes_done`] after each such access and before that commit, and rt's
+    /// command buffers that use a plane have completed before Direct3D 11 accesses it again.
+    /// Without the call after Direct3D 11's first access, rt's first acquire of the plane names
+    /// the undefined layout, and a transition from it does not preserve the contents (section
+    /// 12.5.1: "implying that the contents of the image subresource need not be preserved"), so
+    /// the device may discard what Direct3D 11 wrote. A plane rt uses before any Direct3D 11
+    /// access has undefined contents, as a Metal texture nothing wrote does.
     ///
     /// The surface has no buffer: [`Surface::buffer`] is [`Gap::D3d11SurfaceBuffer`], as its
     /// planes lie in memories of their own.
@@ -346,8 +362,9 @@ impl Device {
             .tiling(vk::ImageTiling::OPTIMAL)
             .usage(usage)
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
-            // An external image is made undefined (`VUID-VkImageCreateInfo-pNext-01443`); after
-            // Direct3D 11's access it is in the general layout (section 12.5.2).
+            // An external image is made undefined (`VUID-VkImageCreateInfo-pNext-01443`), which
+            // its first acquire names where no Direct3D 11 access was reported; after one, it is
+            // in the general layout (section 12.5.2, `Image::handed`).
             .initial_layout(vk::ImageLayout::UNDEFINED)
             .push_next(&mut external);
         if !list.is_empty() {

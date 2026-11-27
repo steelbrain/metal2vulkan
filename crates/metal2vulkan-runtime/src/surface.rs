@@ -1649,8 +1649,15 @@ impl Surface {
     /// [`Metrics::external_acquires`](crate::Metrics::external_acquires). In the copy form it is
     /// the block's acquire, and the submissions copy the bytes into the planes' images. The
     /// contract is the block's. For a Direct3D 11 import (`Device::import_d3d11_surface`, on
-    /// Windows) the call records nothing: each `vkQueueSubmit2` that uses its planes acquires
-    /// them itself ([`Metrics::d3d11_plane_submissions`](crate::Metrics::d3d11_plane_submissions)).
+    /// Windows) the call records nothing and makes no GPU work: each `vkQueueSubmit2` that uses
+    /// its planes acquires them itself
+    /// ([`Metrics::d3d11_plane_submissions`](crate::Metrics::d3d11_plane_submissions)), and the
+    /// call marks each plane accessed by Direct3D 11, on the host, so each acquire from then on
+    /// names the general layout, which Vulkan takes such a plane to be in after external access
+    /// (section 12.5.2). The consumer calls it after every Direct3D 11 access, before committing
+    /// the command buffers that use the planes: without it, a plane's first acquire names the
+    /// undefined layout it is made in, which may discard what Direct3D 11 wrote (section
+    /// 12.5.1).
     ///
     /// Err: [`Refusal::InScheduledHandler`] in a scheduled handler; [`Error::Quiesced`]; and
     /// [`Error::Vulkan`] where the upload's command buffer cannot be made.
@@ -1658,8 +1665,12 @@ impl Surface {
         if let Kind::Copy(block, _) = &self.kind {
             return block.external_writes_done();
         }
-        // Each `vkQueueSubmit2` that uses a Direct3D 11 import's planes acquires them itself.
+        // Each `vkQueueSubmit2` that uses a Direct3D 11 import's planes acquires them itself; the
+        // call marks them accessed, so each acquire from now on names the general layout.
         if self.handle.is_none() {
+            for texture in &self.planes {
+                texture.held_image().external_access();
+            }
             return Ok(());
         }
         crate::command::not_in_scheduled_handler()?;
