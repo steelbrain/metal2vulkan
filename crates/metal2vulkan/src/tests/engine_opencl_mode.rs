@@ -1038,3 +1038,95 @@ fn an_opencl_mode_simdgroup_barrier_keeps_metals_flags() {
         assert_eq!(storage, [0x100], "OpenCL mode {open_cl_mode}");
     }
 }
+
+/// The barriers our own passes write keep Metal's flags while the program's are read as OpenCL's.
+/// Specialization writes no `air.wg.barrier` before it reads the program's flags (an asynchronous
+/// copy's wait is a simdgroup barrier); the lockstep pass writes its own after specialization, in
+/// Metal's `mem_flags`, where it runs: under the resident-table domains, here on the 780M's
+/// profile. The kernel holds barriers of `CLK_LOCAL_MEM_FENCE`, `CLK_GLOBAL_MEM_FENCE` and both,
+/// then stores to its `__local` slot again right before it reads it: two threads of one simdgroup
+/// share a slot in a threadgroup narrower than 32, and no barrier orders that pair, so the pass
+/// inserts one. In the ordered entry each barrier the program wrote orders what OpenCL's flags name,
+/// and each the pass inserted what its operand names in Metal's `mem_flags`, threadgroup memory
+/// among it.
+#[test]
+fn an_opencl_mode_kernel_keeps_the_flags_of_the_barriers_we_insert() {
+    use crate::air::intrinsics::{AirIntrinsic, MemFlags, Sync};
+    use crate::air::ir::{Callee, Const, InstKind, Value};
+    use crate::device::DevicePolicy;
+    use crate::library::FunctionConstantValues;
+    use crate::pipeline::compile::{specialized_bitcode_entry, EntryRef};
+    use crate::pipeline::testing::{meter, profile};
+    let calls = format!(
+        "{}  store float 2.000000e+00, ptr addrspace(3) %pt, align 4\n",
+        wrapper_calls(&[1, 2, 3])
+    );
+    let text = barrier_kernel(&calls, BARRIER_TWO_OPERANDS);
+    let bitcode = match metal2vulkan_devtools::llvm_assemble_text(&text) {
+        Ok(b) => b,
+        Err(AssembleError::Missing(why)) => {
+            eprintln!("SKIPPED: {why}");
+            return;
+        }
+        Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected the module: {why}"),
+    };
+    let p = profile("amd-780m-radv", DevicePolicy::RESIDENT_TABLES).expect("the 780M's profile");
+    let mut inputs = LowerInputs::new();
+    inputs.open_cl_mode = true;
+    let consts = FunctionConstantValues::defaults();
+    let entry = specialized_bitcode_entry(
+        &bitcode,
+        EntryRef::Name("__entry_b"),
+        (&consts, &[], &inputs),
+        &p,
+        &mut meter(),
+    )
+    .expect("the ordered entry");
+    let body = (entry.module.func(entry.func))
+        .and_then(|f| f.body.as_ref())
+        .expect("the entry's body");
+    let (mut program, mut inserted) = (Vec::new(), Vec::new());
+    for (id, inst) in body.insts.iter() {
+        let InstKind::Call(call) = &inst.kind else {
+            continue;
+        };
+        let Callee::Air {
+            op: AirIntrinsic::Sync(Sync::Barrier { flags, .. }),
+            ..
+        } = call.callee
+        else {
+            continue;
+        };
+        let raw = match call.args.first() {
+            Some(Value::Const(c)) => match entry.module.consts().get(*c).map(|k| &k.value) {
+                Some(Const::Int(v)) => *v,
+                other => panic!("flags {other:?}"),
+            },
+            other => panic!("flags {other:?}"),
+        };
+        if entry.lockstep.inserted(id) {
+            inserted.push((raw, flags));
+        } else {
+            program.push((raw, flags));
+        }
+    }
+    let local = MemFlags {
+        threadgroup: true,
+        ..MemFlags::default()
+    };
+    let global = MemFlags {
+        device: true,
+        ..MemFlags::default()
+    };
+    let both = MemFlags {
+        device: true,
+        threadgroup: true,
+        ..MemFlags::default()
+    };
+    assert_eq!(program, [(1, local), (2, global), (3, both)]);
+    assert!(!inserted.is_empty(), "the lockstep pass inserted nothing");
+    for (raw, flags) in inserted {
+        assert_eq!(Some(flags), MemFlags::from_raw(raw), "an inserted barrier");
+        assert!(flags.threadgroup, "an inserted barrier: {flags:?}");
+    }
+}
