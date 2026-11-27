@@ -10,14 +10,17 @@
 //! `setThreadgroupMemoryLength` at its own index.
 //!
 //! - **lsum**: each threadgroup of 64 threads sums its `in[i] = i` through `__local` memory and a
-//!   barrier: 2016, 6112, 10208 and 14304, the M3 Max's answers (macOS 27.0.1).
+//!   barrier: 2016, 6112, 10208 and 14304, the M3 Max's answers (macOS 27.0.1). Also in 64
+//!   threadgroups of 256 threads, more than one wave on every lab card, against the CPU's sums.
 //! - **tiled_matmul**: our own `c = a b` through two `__local` tiles of 32 by 32 floats, 4096
 //!   bytes each at threadgroup indices 0 and 1, in threadgroups of 32 by 4 threads, each thread
 //!   accumulating 8 rows of its column, with `barrier(CLK_LOCAL_MEM_FENCE)` after each tile's
 //!   load and another before the next load; dispatched over 160 by 3200 threads, whole
 //!   threadgroups, 8 times in one command buffer, each into its own `c`. Every element is
 //!   compared with the CPU's product, exactly (`value` says why no tolerance is needed), and
-//!   each repeat prints how many elements differ and by how much.
+//!   each repeat prints how many elements differ and by how much. Also behind
+//!   `barrier(CLK_LOCAL_MEM_FENCE | CLK_GLOBAL_MEM_FENCE)`, and with its tiles in each
+//!   threadgroup's own part of a `__global` buffer behind `barrier(CLK_GLOBAL_MEM_FENCE)` alone.
 //!
 //! Both pass OpenCL's barrier flags on to `air.wg.barrier` unchanged, as Apple's compiler does:
 //! `CLK_LOCAL_MEM_FENCE` is 1 in OpenCL's encoding, which Metal's `mem_flags` read as
