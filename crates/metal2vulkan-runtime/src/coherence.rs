@@ -33,9 +33,10 @@
 //! over one, as the command names it (a blit's destination, a binding its function's interface
 //! writes, a `use_resource` with a write, a render pass's attachment, a visibility result buffer,
 //! a synchronize's target); each heap's block it uses; and each texture over a Shared buffer in an
-//! image of its own, whose bytes the runtime's copies write back. A range a command reaches only
-//! through an address, with no binding or declaration naming it, is neither flushed nor
-//! invalidated.
+//! image of its own, whose bytes the runtime's copies write back. A texture over a Shared buffer
+//! counts as the whole buffer it lies over (`TextureObject::shared_range`), not only its own bytes
+//! in it. A range a command reaches only through an address, with no binding or declaration naming
+//! it, is neither flushed nor invalidated.
 //!
 //! Ranges are of the pool's Shared allocations and the runtime's own, which it maps whole,
 //! widened to whole multiples of the device's `nonCoherentAtomSize`: within a block, since a block
