@@ -15,12 +15,22 @@
 //!   `RGBA8Unorm` view of an `RGBA8Unorm` texture made with the identity swizzle, whose writes the
 //!   M3 Max stores as written, and an `RGBA8Unorm` view of an `RGBA8Uint` texture, the texture
 //!   Apple's OpenCL binds for a `CL_RGBA`, `CL_UNORM_INT8` image.
+//! - **atomics**: OpenCL 1.2's `atomic_add` and `atomic_cmpxchg` on `__local` and `__global`
+//!   memory, `air.atomic.{local,global}.{add.s,cmpxchg.weak}.i32` in the AIR 2.9 form, order 0,
+//!   scope 1 on `__local` and 2 on `__global`, `mem_flags` 0, volatile; the exchange through
+//!   its expected value's `alloca`, the old value read back from it. Over 16 work-groups of 128
+//!   work-items, more than one wave on every device: each work-group's work-items add their
+//!   global ids into one `__local` word and count themselves into another through a
+//!   compare-exchange loop, then do the same into two `__global` words, each storing the old
+//!   value its exchange succeeded on as its ticket. Each work-group's sum and count, the total
+//!   sum and count, and the tickets (each work-group's `__local` ones every value below 128 once,
+//!   the `__global` ones every value below 2048 once) are what no lost update can give.
 //!
 //! Under a device cfg, on every device of the cfg's kind. The modules are LLVM text written here;
 //! `llvm-as` assembles them, and without it the tests skip visibly.
 
 use crate::tests::command::on_device::{each_device, finished};
-use crate::tests::opencl_mode::{kernel_list, library, state, words_buffer};
+use crate::tests::opencl_mode::{buffer, kernel_list, library, state, words, words_buffer};
 use crate::{
     Buffer, ComputePipelineState, Device, DispatchType, IndexClass, PixelFormat, Region,
     StorageMode, Texture, TextureDescriptor, TextureSwizzle, TextureSwizzleChannels, TextureType,
@@ -218,5 +228,165 @@ fn opencl_mode_writes_through_an_identity_view_store_the_written_texels() {
             assert_eq!(texels(&at, &parent), want, "{at}");
         }
         println!("{name}: writes through each identity view store the written texels");
+    });
+}
+
+/// The atomics' work-groups and the work-items of each.
+const GROUPS: u32 = 16;
+const GROUP: u32 = 128;
+
+/// `__kernel void ocl_atomics(__global int *g, __global int *per, __global int *tick, __local int
+/// *l)`: `l[0]` and `l[1]` cleared behind a barrier; `atomic_add(&l[0], i)`; `atomic_cmpxchg`
+/// on `l[1]` from 0 until it succeeds, its old value then `tick[2i]`; the same into `g[0]` and
+/// `g[1]`, the old value `tick[2i + 1]`; behind a barrier, work-item 0 of work-group `w` stores
+/// `l[0]` and `l[1]` to `per[2w]` and `per[2w + 1]`.
+fn atomics() -> String {
+    let body = "define void @__entry_ocl_atomics(ptr addrspace(1) %0, ptr addrspace(1) %1, ptr addrspace(1) %2, ptr addrspace(3) %3) #0 {\n\
+entry:\n\
+  tail call fastcc void @ocl_atomics(ptr addrspace(1) %0, ptr addrspace(1) %1, ptr addrspace(1) %2, ptr addrspace(3) %3)\n\
+  ret void\n}\n\
+define internal fastcc void @ocl_atomics(ptr addrspace(1) %g, ptr addrspace(1) %per, ptr addrspace(1) %tick, ptr addrspace(3) %l) #1 {\n\
+entry:\n\
+  %call = tail call fastcc i64 @_Z13get_global_idj(i32 0)\n\
+  %conv = trunc i64 %call to i32\n\
+  %call1 = tail call fastcc i64 @_Z12get_local_idj(i32 0)\n\
+  %conv2 = trunc i64 %call1 to i32\n\
+  %call3 = tail call fastcc i64 @_Z12get_group_idj(i32 0)\n\
+  %conv4 = trunc i64 %call3 to i32\n\
+  %cmp = icmp eq i32 %conv2, 0\n\
+  br i1 %cmp, label %if.then, label %if.end\n\
+if.then:\n\
+  %arrayidx6 = getelementptr inbounds i32, ptr addrspace(3) %l, i64 1\n\
+  store i32 0, ptr addrspace(3) %l, align 4\n\
+  store i32 0, ptr addrspace(3) %arrayidx6, align 4\n\
+  br label %if.end\n\
+if.end:\n\
+  tail call fastcc void @_Z7barrierj(i32 1)\n\
+  %call8 = tail call fastcc i32 @_Z10atomic_addPU7CLlocalVii(ptr addrspace(3) %l, i32 %conv)\n\
+  %arrayidx9 = getelementptr inbounds i32, ptr addrspace(3) %l, i64 1\n\
+  br label %while.cond\n\
+while.cond:\n\
+  %old.0 = phi i32 [ 0, %if.end ], [ %call10, %while.cond ]\n\
+  %add = add nsw i32 %old.0, 1\n\
+  %call10 = tail call fastcc i32 @_Z14atomic_cmpxchgPU7CLlocalViii(ptr addrspace(3) %arrayidx9, i32 %old.0, i32 %add)\n\
+  %cmp11.not = icmp eq i32 %call10, %old.0\n\
+  br i1 %cmp11.not, label %while.end, label %while.cond\n\
+while.end:\n\
+  %mul = shl nsw i32 %conv, 1\n\
+  %idxprom = sext i32 %mul to i64\n\
+  %arrayidx13 = getelementptr inbounds i32, ptr addrspace(1) %tick, i64 %idxprom\n\
+  store i32 %old.0, ptr addrspace(1) %arrayidx13, align 4\n\
+  %call15 = tail call fastcc i32 @_Z10atomic_addPU8CLglobalVii(ptr addrspace(1) %g, i32 %conv)\n\
+  %arrayidx17 = getelementptr inbounds i32, ptr addrspace(1) %g, i64 1\n\
+  br label %while.cond16\n\
+while.cond16:\n\
+  %old.1 = phi i32 [ 0, %while.end ], [ %call19, %while.cond16 ]\n\
+  %add18 = add nsw i32 %old.1, 1\n\
+  %call19 = tail call fastcc i32 @_Z14atomic_cmpxchgPU8CLglobalViii(ptr addrspace(1) %arrayidx17, i32 %old.1, i32 %add18)\n\
+  %cmp20.not = icmp eq i32 %call19, %old.1\n\
+  br i1 %cmp20.not, label %while.end23, label %while.cond16\n\
+while.end23:\n\
+  %add25 = or i32 %mul, 1\n\
+  %idxprom26 = sext i32 %add25 to i64\n\
+  %arrayidx27 = getelementptr inbounds i32, ptr addrspace(1) %tick, i64 %idxprom26\n\
+  store i32 %old.1, ptr addrspace(1) %arrayidx27, align 4\n\
+  tail call fastcc void @_Z7barrierj(i32 1)\n\
+  br i1 %cmp, label %if.then30, label %if.end40\n\
+if.then30:\n\
+  %mul32 = shl nsw i32 %conv4, 1\n\
+  %add37 = or i32 %mul32, 1\n\
+  %idxprom38 = sext i32 %add37 to i64\n\
+  %arrayidx39 = getelementptr inbounds i32, ptr addrspace(1) %per, i64 %idxprom38\n\
+  %idxprom33 = sext i32 %mul32 to i64\n\
+  %arrayidx34 = getelementptr inbounds i32, ptr addrspace(1) %per, i64 %idxprom33\n\
+  %0 = load i32, ptr addrspace(3) %l, align 4\n\
+  store i32 %0, ptr addrspace(1) %arrayidx34, align 4\n\
+  %1 = load i32, ptr addrspace(3) %arrayidx9, align 4\n\
+  store i32 %1, ptr addrspace(1) %arrayidx39, align 4\n\
+  br label %if.end40\n\
+if.end40:\n\
+  ret void\n}\n\
+define internal fastcc i32 @_Z14atomic_cmpxchgPU8CLglobalViii(ptr addrspace(1) %0, i32 %1, i32 %2) #2 {\n\
+  %4 = alloca i32, align 4\n\
+  store i32 %1, ptr %4, align 4\n\
+  %5 = call i32 @air.atomic.global.cmpxchg.weak.i32(ptr addrspace(1) %0, ptr nonnull %4, i32 %2, i32 0, i32 0, i32 2, i32 0, i1 true)\n\
+  %6 = load i32, ptr %4, align 4\n\
+  ret i32 %6\n}\n\
+define internal fastcc i32 @_Z10atomic_addPU8CLglobalVii(ptr addrspace(1) %0, i32 %1) #2 {\n\
+  %3 = call i32 @air.atomic.global.add.s.i32(ptr addrspace(1) %0, i32 %1, i32 0, i32 2, i32 0, i1 true)\n\
+  ret i32 %3\n}\n\
+define internal fastcc i32 @_Z14atomic_cmpxchgPU7CLlocalViii(ptr addrspace(3) %0, i32 %1, i32 %2) #2 {\n\
+  %4 = alloca i32, align 4\n\
+  store i32 %1, ptr %4, align 4\n\
+  %5 = call i32 @air.atomic.local.cmpxchg.weak.i32(ptr addrspace(3) %0, ptr nonnull %4, i32 %2, i32 0, i32 0, i32 1, i32 0, i1 true)\n\
+  %6 = load i32, ptr %4, align 4\n\
+  ret i32 %6\n}\n\
+define internal fastcc i32 @_Z10atomic_addPU7CLlocalVii(ptr addrspace(3) %0, i32 %1) #2 {\n\
+  %3 = call i32 @air.atomic.local.add.s.i32(ptr addrspace(3) %0, i32 %1, i32 0, i32 1, i32 0, i1 true)\n\
+  ret i32 %3\n}\n\
+declare i32 @air.atomic.global.cmpxchg.weak.i32(ptr addrspace(1), ptr, i32, i32, i32, i32, i32, i1) #0\n\
+declare i32 @air.atomic.global.add.s.i32(ptr addrspace(1), i32, i32, i32, i32, i1) #0\n\
+declare i32 @air.atomic.local.cmpxchg.weak.i32(ptr addrspace(3), ptr, i32, i32, i32, i32, i32, i1) #0\n\
+declare i32 @air.atomic.local.add.s.i32(ptr addrspace(3), i32, i32, i32, i32, i1) #0\n";
+    let args = [
+        buffer(0, 0, "read_write", 1, "int", "g"),
+        buffer(1, 1, "read_write", 1, "int", "per"),
+        buffer(2, 2, "read_write", 1, "int", "tick"),
+        buffer(3, 0, "read_write", 3, "int", "l"),
+    ];
+    format!("{body}{}", kernel_list("__entry_ocl_atomics", &args))
+}
+
+#[test]
+fn opencl_mode_atomics_on_local_and_global_memory_lose_no_update() {
+    let Some(atomics) = library(&atomics()) else {
+        return;
+    };
+    let threads = GROUPS * GROUP;
+    let sum = |ids: std::ops::Range<u32>| ids.fold(0u32, u32::wrapping_add);
+    each_device("opencl-shapes-atomics", |name, _, device| {
+        let atomics = state(&device, &atomics, "__entry_ocl_atomics");
+        let g = words_buffer(&device, &[0; 2]);
+        let per = words_buffer(&device, &vec![0xeeee_eeee; 2 * GROUPS as usize]);
+        let tick = words_buffer(&device, &vec![0xeeee_eeee; 2 * threads as usize]);
+        let bound = Bound {
+            textures: &[],
+            buffers: &[&g, &per, &tick],
+            local: &[16],
+        };
+        run(name, &device, &atomics, (threads, GROUP), &bound);
+        assert_eq!(
+            words(&g),
+            [sum(0..threads), threads],
+            "{name}: the __global sum and count"
+        );
+        let (per, tick) = (words(&per), words(&tick));
+        for w in 0..GROUPS {
+            let ids = w * GROUP..(w + 1) * GROUP;
+            let at = 2 * w as usize;
+            assert_eq!(
+                per[at..at + 2],
+                [sum(ids.clone()), GROUP],
+                "{name}: work-group {w}'s __local sum and count"
+            );
+            let mut local: Vec<u32> = ids.map(|i| tick[2 * i as usize]).collect();
+            local.sort_unstable();
+            assert!(
+                local.iter().copied().eq(0..GROUP),
+                "{name}: work-group {w}'s __local tickets {local:?}"
+            );
+        }
+        let mut global: Vec<u32> = (0..threads as usize).map(|i| tick[2 * i + 1]).collect();
+        global.sort_unstable();
+        let missing: Vec<u32> = (0..threads)
+            .filter(|t| global.binary_search(t).is_err())
+            .collect();
+        assert!(
+            global.iter().copied().eq(0..threads),
+            "{name}: the __global tickets miss {} values, the first {:?}",
+            missing.len(),
+            &missing[..missing.len().min(8)]
+        );
+        println!("{name}: {GROUPS} work-groups of {GROUP} lose no __local or __global update");
     });
 }
