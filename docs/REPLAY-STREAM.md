@@ -463,7 +463,9 @@ and the (name id, value) answer pairs.
     indexType, indexBufferIndex}`: the layouts and attributes in the vertex descriptor's form,
     Metal's raw step functions and attribute formats, and the index type and index buffer as
     Metal's `MTLStageInputOutputDescriptor` holds them. A player gives it to the pipeline; an
-    attribute's buffer that no layout names takes Metal's unset layout.
+    attribute's buffer that no layout names takes Metal's unset layout. A player gives
+    `openClMode` to the pipeline too (off where absent), whose kernel then takes the three hidden
+    buffers ahead of its own buffers as Metal's OpenCL mode does.
 - **Keys that are not Metal's property names:**
 
 | key | Metal's |

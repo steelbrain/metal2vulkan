@@ -1943,8 +1943,8 @@ impl NewRuntime {
                 }
             }
         }
-        f.only("openClMode", Fields::bool, false)?;
         let mut d = rt::ComputePipelineDescriptor::new(rt::StageSource::Function(kernel));
+        d.open_cl_mode_enabled = f.bool("openClMode")?.unwrap_or(false);
         d.stage_input = translator::stage_input(call, &f)?;
         if let Some(multiple) = f.bool("threadgroupSizeIsMultipleOfExecutionWidth")? {
             d.threadgroup_size_is_multiple_of_execution_width = multiple;
