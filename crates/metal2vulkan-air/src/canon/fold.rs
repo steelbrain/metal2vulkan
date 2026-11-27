@@ -351,7 +351,8 @@ impl Folder<'_> {
                 },
             },
         };
-        self.mk(ty, Const::Float(if nonzero { one } else { 0 }), m).map(Some)
+        self.mk(ty, Const::Float(if nonzero { one } else { 0 }), m)
+            .map(Some)
     }
 
     /// `icmp pred a, b` over scalar integers (and null pointers), typed `ty` (`i1`).

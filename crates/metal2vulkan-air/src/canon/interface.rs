@@ -114,7 +114,10 @@ impl Values<'_> {
     /// Whether global `g`'s initializer is a floating-point constant.
     fn holds_float(&self, g: GlobalId) -> bool {
         let init = self.globals.get(g).and_then(|g| g.init);
-        matches!(init.and_then(|c| self.consts.get(c)).map(|c| &c.value), Some(Const::Float(_)))
+        matches!(
+            init.and_then(|c| self.consts.get(c)).map(|c| &c.value),
+            Some(Const::Float(_))
+        )
     }
 
     /// Whether the floating-point constant global `g` holds is non-zero; an unsupplied one's is

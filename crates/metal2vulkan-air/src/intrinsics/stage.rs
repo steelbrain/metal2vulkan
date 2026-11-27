@@ -129,8 +129,11 @@ impl FunctionConstant {
             return Some(FunctionConstant::IsDefined);
         }
         let ty = NumTy::parse(rest.strip_prefix("normalize_function_constant_predicate.")?)?;
-        (matches!(ty.elem, Elem::I8 | Elem::I16 | Elem::I32 | Elem::F16 | Elem::F32) && !ty.is_vector())
-            .then_some(FunctionConstant::NormalizePredicate(ty.elem))
+        (matches!(
+            ty.elem,
+            Elem::I8 | Elem::I16 | Elem::I32 | Elem::F16 | Elem::F32
+        ) && !ty.is_vector())
+        .then_some(FunctionConstant::NormalizePredicate(ty.elem))
     }
 
     /// The typed signature.

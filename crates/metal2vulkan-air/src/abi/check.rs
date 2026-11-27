@@ -376,7 +376,10 @@ fn predicate(m: &Module, p: Option<&Predicate>, site: &Site) -> Result<(), Error
             && !g.externally_initialized
             && g.section.is_none()
             && g.init.is_some()
-            && matches!(m.types().get(g.value_ty), Some(Type::Int(_) | Type::Half | Type::Float | Type::Double))
+            && matches!(
+                m.types().get(g.value_ty),
+                Some(Type::Int(_) | Type::Half | Type::Float | Type::Double)
+            )
     });
     if ok {
         Ok(())
