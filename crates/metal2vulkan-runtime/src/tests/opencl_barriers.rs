@@ -2,19 +2,25 @@
 //! fence, `opencl_mode`'s work-item kernel's barrier) whose data crosses waves: threadgroups of 128
 //! threads, more than one wave on every device, in which thread `t` of a threadgroup reads what
 //! thread `t ^ 64` wrote, through threadgroup memory or device memory, synchronized by a barrier or
-//! a fence of each flag alone and of both. Each kernel calls OpenCL C's `barrier(flags)` as Apple's
-//! OpenCL compiler passes it on, `tail call fastcc void @_Z7barrierj(i32 noundef 1)`, to an
+//! a fence of each flag alone and of both. Each kernel calls `barrier(flags)` out of line, as
+//! Apple's OpenCL compiler passes it on, `tail call fastcc void @_Z7barrierj(i32 noundef 1)`, to an
 //! internal wrapper calling `air.wg.barrier` with the flags as they are, and `mem_fence(flags)` to
 //! one that computes `air.atomic.fence`'s flags through `llvm.bitreverse.i2`:
 //!
-//! - **a barrier** of OpenCL's `CLK_LOCAL_MEM_FENCE` (1) alone where threadgroup memory carries the
-//!   data, `CLK_GLOBAL_MEM_FENCE` (2) alone where device memory carries it, and both (3) for each;
-//!   in a plain pipeline through the two-operand `air.wg.barrier(flags, 1)` (the out-of-line
-//!   barrier's form), and in a pipeline of OpenCL mode through that form and through the
+//! - **a barrier in a pipeline of OpenCL mode**, whose flags are OpenCL's: `CLK_LOCAL_MEM_FENCE`
+//!   (1) alone where threadgroup memory carries the data, `CLK_GLOBAL_MEM_FENCE` (2) alone where
+//!   device memory carries it, and both (3) for each; through the two-operand
+//!   `air.wg.barrier(flags, 1)` (the form Apple's OpenCL compiler writes) and through the
 //!   three-operand `air.wg.barrier(flags, 5, 1)` (the work-item kernel's);
-//! - **a fence** of each of the same flags in a plain pipeline: the data crosses through the fence,
-//!   an execution barrier of no flags (`barrier(0)`, which no encoding reads as a memory flag) and
-//!   the fence again, since a fence orders only its own thread's accesses.
+//! - **a barrier in a plain pipeline**, whose flags are Metal's `mem_flags` (`mem_device` 1,
+//!   `mem_threadgroup` 2): `mem_threadgroup` alone where threadgroup memory carries the data,
+//!   `mem_device` alone where device memory carries it, and both (3) for each, through the
+//!   two-operand form (the out-of-line barrier test's);
+//! - **a fence** in a plain pipeline, of OpenCL's flags, which the wrapper's `llvm.bitreverse.i2`
+//!   turns into Metal's (1, local, to `mem_threadgroup`; 2, global, to `mem_device`): 1 alone over
+//!   threadgroup data, 2 alone over device data, and 3 over each. The data crosses through the
+//!   fence, an execution barrier of no flags (`barrier(0)`, which neither encoding reads as a
+//!   memory flag) and the fence again, since a fence orders only its own thread's accesses.
 //!
 //! Every thread runs four rounds, as a tiled kernel's loop does: it writes its slot, synchronizes,
 //! reads its partner's slot into a running value, and synchronizes again before the next round
@@ -127,7 +133,8 @@ enum Carrier {
     Device,
 }
 
-/// One variant: its pipeline, its synchronization, the OpenCL flags it passes and its carrier.
+/// One variant: its pipeline, its synchronization, the flags it passes (Metal's in a plain
+/// pipeline's barrier, OpenCL's otherwise) and its carrier.
 #[derive(Clone, Copy)]
 struct Variant {
     mode: Mode,
@@ -386,10 +393,10 @@ macro_rules! variants {
 }
 
 variants! {
-    a_barrier_of_flags_1_orders_threadgroup_data_across_waves: Plain, Barrier, 1, Threadgroup;
-    a_barrier_of_flags_2_orders_device_data_across_waves: Plain, Barrier, 2, Device;
-    a_barrier_of_flags_3_orders_threadgroup_data_across_waves: Plain, Barrier, 3, Threadgroup;
-    a_barrier_of_flags_3_orders_device_data_across_waves: Plain, Barrier, 3, Device;
+    a_barrier_of_mem_threadgroup_orders_threadgroup_data_across_waves: Plain, Barrier, 2, Threadgroup;
+    a_barrier_of_mem_device_orders_device_data_across_waves: Plain, Barrier, 1, Device;
+    a_barrier_of_both_mem_flags_orders_threadgroup_data_across_waves: Plain, Barrier, 3, Threadgroup;
+    a_barrier_of_both_mem_flags_orders_device_data_across_waves: Plain, Barrier, 3, Device;
     a_fence_of_flags_1_orders_threadgroup_data_across_waves: Plain, Fence, 1, Threadgroup;
     a_fence_of_flags_2_orders_device_data_across_waves: Plain, Fence, 2, Device;
     a_fence_of_flags_3_orders_threadgroup_data_across_waves: Plain, Fence, 3, Threadgroup;
