@@ -61,7 +61,10 @@
 //!    as far as those indices reach; one index with no bound keeps its declared type (`reach`).
 //!    Before SCCP, each OpenCL C vector data load
 //!    or store becomes its element accesses (`vector_data`), and in OpenCL mode each operation of
-//!    a 1D image becomes the 2D texture's that Apple's OpenCL binds for it (`opencl_1d`).
+//!    a 1D image becomes the 2D texture's that Apple's OpenCL binds for it (`opencl_1d`). After
+//!    the last SCCP, in OpenCL mode, each `air.wg.barrier`'s flags, bound to its call site's
+//!    constants where the barrier is out of line, are read as OpenCL C's `cl_mem_fence_flags`
+//!    ([`opencl`]).
 //! 8. **Post-check**: no unknown or unbound intrinsic, indirect call, or call to an undefined
 //!    non-intrinsic function survives, and no reachable branch tests `undef`. A table call's refused candidate,
 //!    a table call no linked function answers, and a function pointer used as a value are refused
@@ -775,6 +778,14 @@ pub fn specialize_dynamic(
     // Each private array of nested arrays allocated as far as its accesses reach, where the
     // constants bound every index of it.
     let body = reach::narrow(body, &mut parts, func, m)?;
+    // OpenCL mode: each threadgroup barrier's flags, its call site's now where it is out of line,
+    // are OpenCL's `cl_mem_fence_flags`, read again as such; the post-check refuses one with a
+    // flag OpenCL does not name.
+    let body = if req.open_cl_mode && matches!(ep.stage, Stage::Kernel { .. }) {
+        opencl::barriers(body, &parts, m)?
+    } else {
+        body
+    };
     matmul2d::refuse_left(&body, &parts, &ep.stage, &name, m)?;
     post_check(&body, &parts, &stubs, &name, &control_points(ep), m)?;
     // A branch's short arms that Metal's backend speculates, where a group operation in them

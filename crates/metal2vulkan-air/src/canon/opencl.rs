@@ -39,6 +39,23 @@
 //!   as. Measured on an M3 Max (macOS 27.0.1) over `image1d_t`, `image1d_array_t`, `image2d_t` and
 //!   `image3d_t` arguments read as float, int, uint and half, written, only queried and unused.
 //!
+//! **Barrier flags.** OpenCL C's `barrier(flags)` takes `cl_mem_fence_flags`, which Apple's
+//! `cl_kernel.h` (OpenCL.framework, "5.9.7 - Synchronization") declares as `CLK_LOCAL_MEM_FENCE =
+//! 1U << 0` and `CLK_GLOBAL_MEM_FENCE = 1U << 1`, with no other flag (a member of bit 31 only
+//! sizes the enum). Apple's OpenCL compiler passes them to `air.wg.barrier` unconverted: `barrier`
+//! is an internal function that passes its parameter on as the barrier's flags, in the
+//! two-operand form (flags, scope) and in the three-operand one (flags, order, scope). Metal's
+//! `mem_flags` read the same bits as `mem_device` (1) and `mem_threadgroup` (2), so decode reads
+//! `CLK_LOCAL_MEM_FENCE` as `mem_device`. In a kernel of OpenCL mode `barriers` reads each
+//! `air.wg.barrier`'s flags again as OpenCL's, once SCCP has bound each call site's own flags to
+//! an out-of-line barrier: `CLK_LOCAL_MEM_FENCE` orders threadgroup memory and
+//! `CLK_GLOBAL_MEM_FENCE` device memory. A barrier whose flags set any other bit is left unknown,
+//! and the post-check refuses it (`UnknownIntrinsic`), as it refuses a value outside Metal's
+//! `mem_flags`. The header declares no other barrier on these flags (no `work_group_barrier` or
+//! `sub_group_barrier`), so an `air.simdgroup.barrier` keeps Metal's reading; `mem_fence(flags)`
+//! reaches `air.atomic.fence` through Apple's own conversion of the two bits
+//! (`llvm.bitreverse.i2`), which is Metal's mask.
+//!
 //! `expand` runs after SCCP, whose constants name each read's dimension, and before the global
 //! built-ins (`global_builtin`) take the reads it leaves. It appends the three buffers to the entry
 //! and rewrites each read of a dimension `c` below 3: `get_global_id(c)` becomes the built-in's
@@ -58,7 +75,8 @@ use crate::abi::{
 };
 use crate::budget::Meter;
 use crate::error::{DiagName, Error};
-use crate::intrinsics::{AirIntrinsic, Elem, GlobalBuiltin, GlobalVar, Query, TexOp, WorkItem};
+use crate::intrinsics::{AirIntrinsic, BarrierName, Elem, GlobalBuiltin, GlobalVar, MemFlags};
+use crate::intrinsics::{Query, Sync, TexOp, WorkItem};
 use crate::ir::{
     AddrSpace, Align, ArgIdx, BinOp, Block, Body, Call, Callee, CastOp, Const, Constant, FastMath,
     FuncId, Idx, Inst, InstId, InstKind, IntFlags, IntPredicate, ModuleParts, Type, TypeId, Value,
@@ -599,6 +617,55 @@ fn rewrite(
     // The body the expansions replaced is freed.
     body.release(m);
     Ok((out, first))
+}
+
+/// Each `air.wg.barrier` of the entry's `body` ordering the memories its flags name as OpenCL C's
+/// `cl_mem_fence_flags` (see the module), which decode and SCCP's binding read as Metal's
+/// `mem_flags`: the flags of the call's first operand, read again. A barrier whose flags set a bit
+/// outside the two becomes an unknown intrinsic, which the post-check refuses. It runs after the
+/// last SCCP, so every barrier out of line has its call site's flags.
+pub(super) fn barriers(mut body: Body, parts: &ModuleParts, m: &mut Meter) -> Result<Body, Error> {
+    for inst in body.insts.values_mut() {
+        m.tick(1)?;
+        let InstKind::Call(call) = &mut inst.kind else {
+            continue;
+        };
+        let Callee::Air {
+            decl,
+            op:
+                AirIntrinsic::Sync(Sync::Barrier {
+                    name: BarrierName::Threadgroup,
+                    order,
+                    scope,
+                    memory,
+                    ..
+                }),
+        } = call.callee
+        else {
+            continue;
+        };
+        let raw = match call.args.first() {
+            Some(Value::Const(c)) => match parts.consts.get(*c).map(|k| &k.value) {
+                Some(Const::Int(v)) => *v,
+                _ => return Err(invariant("a barrier's flags are no integer constant")),
+            },
+            _ => return Err(invariant("a barrier's flags are no constant")),
+        };
+        call.callee = match MemFlags::from_cl_mem_fence_flags(raw) {
+            Some(flags) => Callee::Air {
+                decl,
+                op: AirIntrinsic::Sync(Sync::Barrier {
+                    name: BarrierName::Threadgroup,
+                    flags,
+                    order,
+                    scope,
+                    memory,
+                }),
+            },
+            None => Callee::UnknownIntrinsic(decl),
+        };
+    }
+    Ok(body)
 }
 
 /// Entry point `ep` as a pipeline of OpenCL mode binds it, the three hidden buffers its parameters

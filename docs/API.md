@@ -792,9 +792,19 @@ through buffer arguments it reads at any index.
     buffer 0, `get_local_id`, `get_group_id`, `get_local_size`, `get_global_size` and
     `get_num_groups` are the built-ins of those names, and a dimension the kernel reads from its
     data selects among the three. A dimension past 2 answers OpenCL's 0 for an id or an offset
-    and 1 for a size or a count. A compiled kernel serves only a pipeline of the mode it was
-    compiled in (`RuntimeFact::OpenClMode`, `InvalidDescriptor(OpenClMode)` otherwise). Without
-    the mode Metal refuses the pipeline ("Internal compiler error"); the crate compiles the AIR as
+    and 1 for a size or a count. OpenCL C's `barrier(flags)` passes OpenCL's
+    `cl_mem_fence_flags` to `air.wg.barrier` unconverted, and Apple's `cl_kernel.h` defines them
+    as `CLK_LOCAL_MEM_FENCE = 1U << 0` and `CLK_GLOBAL_MEM_FENCE = 1U << 1`, the bits Metal's
+    `mem_flags` read as `mem_device` (1) and `mem_threadgroup` (2). In the mode each
+    `air.wg.barrier`'s flags are read as OpenCL's, its call site's where the barrier is out of
+    line: `CLK_LOCAL_MEM_FENCE` orders threadgroup memory and `CLK_GLOBAL_MEM_FENCE` device memory.
+    A barrier whose flags set any other bit is refused (`Unsupported` with `UnknownIntrinsic`,
+    naming `air.wg.barrier`), as one whose flags fall outside Metal's `mem_flags` is. The header
+    declares no other barrier on these flags, so `air.simdgroup.barrier` and `air.atomic.fence`
+    (which `mem_fence` reaches with flags Apple's compiler converts itself) keep Metal's. A
+    compiled kernel serves only a pipeline of the mode it was compiled in
+    (`RuntimeFact::OpenClMode`, `InvalidDescriptor(OpenClMode)` otherwise). Without the mode
+    Metal refuses the pipeline ("Internal compiler error"); the crate compiles the AIR as
     Metal AIR, its buffers at their own indices, and refuses a read of `get_global_offset` or
     `get_work_dim` (`Unsupported` with `Lowering(Dispatch)`).
   - Images in OpenCL mode. `get_image_channel_order(image)` and

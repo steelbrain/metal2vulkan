@@ -744,3 +744,265 @@ fn an_opencl_mode_half_store_records_the_devices_nan_encoding() {
     }
     assert!(checked > 0);
 }
+
+/// `__kernel void b(__global float *x, __local float *t)` in the shape Apple's OpenCL compiler
+/// writes it (AIR 2.3): `t[l] = x[i]`, the barriers `calls` makes, then `x[i] = t[l] + 1`, for
+/// `i = get_global_id(0)` and `l = get_local_id(0)`; `defs` are the functions and declarations the
+/// calls reach. Each thread reads only what it wrote, so the program's barriers are the module's
+/// only ones.
+fn barrier_kernel(calls: &str, defs: &str) -> String {
+    format!(
+        "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\n\
+target triple = \"air64_v23-apple-macosx14.0.0\"\n\
+define void @__entry_b(ptr addrspace(1) %0, ptr addrspace(3) %1) #0 {{\n\
+entry:\n\
+  tail call fastcc void @b(ptr addrspace(1) %0, ptr addrspace(3) %1)\n\
+  ret void\n}}\n\
+define internal fastcc void @b(ptr addrspace(1) %x, ptr addrspace(3) %t) #1 {{\n\
+entry:\n\
+  %i = tail call fastcc i64 @_Z13get_global_idj(i32 0)\n\
+  %l = tail call fastcc i64 @_Z12get_local_idj(i32 0)\n\
+  %px = getelementptr inbounds float, ptr addrspace(1) %x, i64 %i\n\
+  %vx = load float, ptr addrspace(1) %px, align 4\n\
+  %pt = getelementptr inbounds float, ptr addrspace(3) %t, i64 %l\n\
+  store float %vx, ptr addrspace(3) %pt, align 4\n\
+{calls}\
+  %vt = load float, ptr addrspace(3) %pt, align 4\n\
+  %r = fadd float %vt, 1.000000e+00\n\
+  store float %r, ptr addrspace(1) %px, align 4\n\
+  ret void\n}}\n\
+define internal fastcc i64 @_Z13get_global_idj(i32 %0) #2 {{\n\
+  %2 = tail call i32 @air.get_global_id.i32(i32 %0) #3\n\
+  %3 = zext i32 %2 to i64\n\
+  ret i64 %3\n}}\n\
+define internal fastcc i64 @_Z12get_local_idj(i32 %0) #2 {{\n\
+  %2 = tail call i32 @air.get_local_id.i32(i32 %0) #3\n\
+  %3 = zext i32 %2 to i64\n\
+  ret i64 %3\n}}\n\
+{defs}\
+declare i32 @air.get_global_id.i32(i32) #3\n\
+declare i32 @air.get_local_id.i32(i32) #3\n\
+attributes #0 = {{ nounwind }}\n\
+attributes #1 = {{ convergent nounwind }}\n\
+attributes #2 = {{ nounwind optsize }}\n\
+attributes #3 = {{ nounwind readnone willreturn }}\n\
+attributes #4 = {{ convergent noinline nounwind }}\n\
+attributes #5 = {{ convergent nounwind willreturn }}\n\
+!air.kernel = !{{!0}}\n\
+!air.version = !{{!5}}\n\
+!air.language_version = !{{!6}}\n\
+!0 = !{{ptr @__entry_b, !1, !2}}\n\
+!1 = !{{}}\n\
+!2 = !{{!3, !4}}\n\
+!3 = !{{i32 0, !\"air.buffer\", !\"air.location_index\", i32 0, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"float\", !\"air.arg_name\", !\"x\"}}\n\
+!4 = !{{i32 1, !\"air.buffer\", !\"air.location_index\", i32 0, i32 1, !\"air.read_write\", !\"air.address_space\", i32 3, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"float\", !\"air.arg_name\", !\"t\"}}\n\
+!5 = !{{i32 2, i32 3, i32 0}}\n\
+!6 = !{{!\"Metal\", i32 1, i32 1, i32 0}}\n"
+    )
+}
+
+/// OpenCL C's `barrier(flags)` as Apple's OpenCL compiler writes it: an internal function passing
+/// its parameter on as `air.wg.barrier`'s flags, in the two-operand form (flags, threadgroup).
+const BARRIER_TWO_OPERANDS: &str = "define internal fastcc void @_Z7barrierj(i32 %0) #4 {\n\
+  tail call void @air.wg.barrier(i32 %0, i32 1) #5\n\
+  ret void\n}\n\
+declare void @air.wg.barrier(i32, i32) #5\n";
+
+/// The same in the three-operand form (flags, `seq_cst`, threadgroup).
+const BARRIER_THREE_OPERANDS: &str = "define internal fastcc void @_Z7barrierj(i32 %0) #4 {\n\
+  call void @air.wg.barrier(i32 %0, i32 5, i32 1) #5\n\
+  ret void\n}\n\
+declare void @air.wg.barrier(i32, i32, i32) #5\n";
+
+/// `barrier(flags)` for each of OpenCL's flags `flags`, through the wrapper.
+fn wrapper_calls(flags: &[u32]) -> String {
+    flags
+        .iter()
+        .map(|f| format!("  tail call fastcc void @_Z7barrierj(i32 noundef {f})\n"))
+        .collect()
+}
+
+/// The barrier routes of a kernel's flags, each `(route, calls, defs)` of [`barrier_kernel`] with
+/// barriers of `CLK_LOCAL_MEM_FENCE` (1), `CLK_GLOBAL_MEM_FENCE` (2) and both (3), in that order:
+/// `air.wg.barrier` called with the constant; the wrapper of two operands and of three; and a
+/// function of the kernel passing its own parameter on to a wrapper (of another name), each of its
+/// three call sites binding its own flags.
+fn barrier_routes() -> [(&'static str, String, String); 4] {
+    let passed = "define internal fastcc void @step(i32 %f) #4 {\n\
+  tail call fastcc void @wait(i32 %f)\n\
+  ret void\n}\n\
+define internal fastcc void @wait(i32 %0) #4 {\n\
+  tail call void @air.wg.barrier(i32 %0, i32 1) #5\n\
+  ret void\n}\n\
+declare void @air.wg.barrier(i32, i32) #5\n";
+    [
+        (
+            "inline",
+            (1..=3)
+                .map(|f| format!("  tail call void @air.wg.barrier(i32 {f}, i32 1) #5\n"))
+                .collect(),
+            "declare void @air.wg.barrier(i32, i32) #5\n".to_owned(),
+        ),
+        (
+            "wrapper of two operands",
+            wrapper_calls(&[1, 2, 3]),
+            BARRIER_TWO_OPERANDS.to_owned(),
+        ),
+        (
+            "wrapper of three operands",
+            wrapper_calls(&[1, 2, 3]),
+            BARRIER_THREE_OPERANDS.to_owned(),
+        ),
+        (
+            "passed through a call site",
+            (1..=3)
+                .map(|f| format!("  tail call fastcc void @step(i32 {f})\n"))
+                .collect(),
+            passed.to_owned(),
+        ),
+    ]
+}
+
+/// `UniformMemory`, `WorkgroupMemory` and `ImageMemory`: the storage classes a barrier's semantics
+/// name.
+const STORAGE: u32 = 0x40 | 0x100 | 0x800;
+
+/// Each `OpControlBarrier` of module `words`, in order: its execution scope, its memory scope, the
+/// storage classes its semantics name ([`STORAGE`]), and whether its order is `AcquireRelease`.
+fn control_barriers(words: &[u32]) -> Vec<(u32, u32, u32, bool)> {
+    use crate::spirv_binary::{parse_bytes, Operand};
+    use crate::spv::Op;
+    use std::collections::BTreeMap;
+    let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+    let module = parse_bytes(&bytes).expect("the module parses");
+    let constants: BTreeMap<u32, u32> = (module.instructions.iter())
+        .filter(|i| i.opcode == Op::Constant)
+        .filter_map(|i| match (i.result_id, i.operands.as_slice()) {
+            (Some(id), [Operand::Word(v)]) => Some((id, *v)),
+            _ => None,
+        })
+        .collect();
+    let value = |o: &Operand| match o {
+        Operand::IdScope(id) | Operand::IdMemorySemantics(id) => *constants
+            .get(id)
+            .unwrap_or_else(|| panic!("%{id} is no 32-bit constant")),
+        other => panic!("{other:?} is no scope or semantics"),
+    };
+    (module.instructions.iter())
+        .filter(|i| i.opcode == Op::ControlBarrier)
+        .map(|i| {
+            let [exec, memory, semantics] = i.operands.as_slice() else {
+                panic!("{i:?}");
+            };
+            let s = value(semantics);
+            (value(exec), value(memory), s & STORAGE, s & 0x8 != 0)
+        })
+        .collect()
+}
+
+/// Every committed profile's device under the runtime's policy (`DevicePolicy::default`), by
+/// stem; one the policy refuses is left out.
+fn runtime_devices() -> Vec<(String, crate::device::Device)> {
+    crate::metal::format::tests::committed_descriptions()
+        .into_iter()
+        .filter_map(|(stem, desc)| {
+            let policy = crate::device::DevicePolicy::default();
+            Some((
+                stem,
+                crate::device::Device::from_queries(desc, policy).ok()?,
+            ))
+        })
+        .collect()
+}
+
+/// In OpenCL mode an `air.wg.barrier`'s flags are OpenCL's `cl_mem_fence_flags`, as Apple's
+/// `cl_kernel.h` defines them: `CLK_LOCAL_MEM_FENCE` (1) orders threadgroup memory
+/// (`WorkgroupMemory`, and no `UniformMemory`), `CLK_GLOBAL_MEM_FENCE` (2) device memory
+/// (`UniformMemory`) and both (3) both, by every route the flags reach the barrier: a constant, a
+/// wrapper of two operands or of three, and a parameter each call site binds. Without the mode the
+/// same AIR's flags are Metal's `mem_flags`: 1 is `mem_device` and 2 `mem_threadgroup`. Each
+/// barrier is `OpControlBarrier(Workgroup, Workgroup, AcquireRelease | ..)` in the pipeline's
+/// module, on every committed profile that takes threadgroup memory, under the runtime's policy.
+#[test]
+fn an_opencl_mode_barrier_orders_the_memory_its_opencl_flags_name() {
+    let b = Budget::standard();
+    let devices = runtime_devices();
+    let (uniform, workgroup) = (0x40, 0x100);
+    let barrier = |storage| (2, 2, storage, true);
+    let opencl = [
+        barrier(workgroup),
+        barrier(uniform),
+        barrier(uniform | workgroup),
+    ];
+    let metal = [
+        barrier(uniform),
+        barrier(workgroup),
+        barrier(uniform | workgroup),
+    ];
+    let mut compiled = std::collections::BTreeSet::new();
+    for (route, calls, defs) in barrier_routes() {
+        let Some(k) = function(&barrier_kernel(&calls, &defs), "__entry_b") else {
+            return;
+        };
+        for (stem, dev) in &devices {
+            for (open_cl_mode, want) in [(true, &opencl), (false, &metal)] {
+                let what = format!("{route}, OpenCL mode {open_cl_mode}, on {stem}");
+                let d = descriptor(StageSource::Function(k.clone()), open_cl_mode);
+                let p = match dev.compile_compute_pipeline(&d, &b) {
+                    Ok(p) => p,
+                    Err(e)
+                        if crate::spirv::testing::refuses_threadgroup_memory(&e, dev.profile()) =>
+                    {
+                        continue;
+                    }
+                    Err(e) => panic!("{what}: {e}"),
+                };
+                assert_eq!(control_barriers(&p.stage.spirv), want, "{what}");
+                compiled.insert(stem.clone());
+            }
+        }
+    }
+    for stem in ["amd-780m-radv", "nvidia-rtx50-linux", "lavapipe"] {
+        assert!(compiled.contains(stem), "{stem}: {compiled:?}");
+    }
+}
+
+/// In OpenCL mode a barrier whose flags set a bit `cl_mem_fence_flags` does not name (4, which
+/// Metal's `mem_flags` read as `mem_texture`) is refused as an intrinsic outside the modeled set,
+/// as a constant and through the wrapper; without the mode the same AIR orders texture memory
+/// (`ImageMemory`).
+#[test]
+fn an_opencl_mode_barrier_of_a_flag_opencl_does_not_name_is_refused() {
+    let b = Budget::standard();
+    let dev = device("amd-780m-radv");
+    let routes = [
+        (
+            "inline",
+            "  tail call void @air.wg.barrier(i32 4, i32 1) #5\n".to_owned(),
+            "declare void @air.wg.barrier(i32, i32) #5\n",
+        ),
+        ("wrapper", wrapper_calls(&[4]), BARRIER_TWO_OPERANDS),
+    ];
+    for (route, calls, defs) in routes {
+        let Some(k) = function(&barrier_kernel(&calls, defs), "__entry_b") else {
+            return;
+        };
+        let refused = dev
+            .compile_compute_pipeline(&descriptor(StageSource::Function(k.clone()), true), &b)
+            .map(|_| ());
+        match refused {
+            Err(Error::Unsupported(u)) => {
+                assert_eq!(u.feature, Feature::UnknownIntrinsic, "{route}: {u:?}");
+            }
+            other => panic!("{route}: {other:?}"),
+        }
+        let metal = dev
+            .compile_compute_pipeline(&descriptor(StageSource::Function(k), false), &b)
+            .unwrap_or_else(|e| panic!("{route} without the mode: {e}"));
+        assert_eq!(
+            control_barriers(&metal.stage.spirv),
+            [(2, 2, 0x800, true)],
+            "{route} without the mode"
+        );
+    }
+}

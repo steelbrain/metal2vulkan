@@ -19,6 +19,10 @@
 //! `threadgroup_barrier(..., thread_scope_simdgroup)` as `air.wg.barrier` with scope 4). Metal's
 //! headers pass the name's own scope in every language before MSL 4.1, so the two readings agree on
 //! every barrier those spell. A value outside the modeled enumerations leaves the call unknown.
+//!
+//! In a kernel of Metal's OpenCL mode an `air.wg.barrier`'s flags are OpenCL C's
+//! `cl_mem_fence_flags`, not Metal's mask ([`MemFlags::from_cl_mem_fence_flags`]): decode reads
+//! every barrier as Metal's, and specialization reads such a kernel's again (`canon::opencl`).
 
 use super::atomic::{MemoryOrder, ThreadScope};
 use super::sig::{ImmKind, Immediates, Operand, Signature};
@@ -50,6 +54,19 @@ impl MemFlags {
             texture: v & 4 != 0,
             threadgroup_imageblock: v & 8 != 0,
             object_data: v & 16 != 0,
+        })
+    }
+
+    /// The flags of OpenCL C's `cl_mem_fence_flags` mask `v`, which a threadgroup barrier of a
+    /// kernel of Metal's OpenCL mode takes in place of Metal's mask (`canon::opencl`):
+    /// `CLK_LOCAL_MEM_FENCE` (1) is `mem_threadgroup` and `CLK_GLOBAL_MEM_FENCE` (2) is
+    /// `mem_device`. `None` when a bit outside the two is set: Apple's `cl_kernel.h` names no
+    /// other.
+    pub(crate) fn from_cl_mem_fence_flags(v: u64) -> Option<MemFlags> {
+        (v & !0x3 == 0).then_some(MemFlags {
+            device: v & 2 != 0,
+            threadgroup: v & 1 != 0,
+            ..MemFlags::default()
         })
     }
 }
