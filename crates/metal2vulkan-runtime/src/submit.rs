@@ -2548,6 +2548,90 @@ pub(crate) fn put_ahead<S, C>(
     kept
 }
 
+/// A submission's parts, each one `vkQueueSubmit2` with the progress value it signals, from its
+/// `segments`, the first `ahead` of them its uploads': one part, or, where the group goes member
+/// by member, `leads` holding where each command buffer that leads in it begins among the
+/// segments past the uploads, one ahead of the first lead's, with the uploads, and one for each
+/// lead (`WorkState::close`). The last part's value is `progress`'s `value`, which also covers
+/// the parts left empty, and each part's one above the one before. A segment with no commands
+/// and no signals is left out, and so is a part left empty.
+///
+/// `planes[p]` holds the Direct3D 11 planes part `p` uses, and `hand` the command buffer that
+/// acquires (`true`) or releases (`false`) such planes ([`Upload::hand_over`]), None where its
+/// make failed: the planes of every part are acquired ahead of everything and released after
+/// everything, the release taking the last part's last signals, so it adds no submit info
+/// ([`infos`]).
+pub(crate) fn parts<P: Clone>(
+    mut segments: Vec<Staged>,
+    ahead: usize,
+    leads: &[usize],
+    (progress, value): (vk::Semaphore, u64),
+    planes: &[Vec<P>],
+    mut hand: impl FnMut(&[P], bool) -> Option<vk::CommandBuffer>,
+) -> Vec<(u64, Vec<Staged>)> {
+    let staged = |command: vk::CommandBuffer| Staged {
+        command: Some(vk::CommandBufferSubmitInfo::default().command_buffer(command)),
+        ..Staged::default()
+    };
+    let all: Vec<P> = planes.iter().flatten().cloned().collect();
+    let (head, tail) = match all.is_empty() {
+        true => (None, None),
+        false => (hand(&all, true), hand(&all, false)),
+    };
+    let mut ahead = ahead;
+    if let Some(head) = head {
+        segments.insert(0, staged(head));
+        ahead += 1;
+    }
+    // Each part's progress value: the part ahead of the first lead's `value` less the leads,
+    // each lead's one above the one before.
+    let count = leads.len();
+    let mut parts: Vec<(u64, Vec<Staged>)> = Vec::with_capacity(1);
+    for (lead, &start) in leads.iter().enumerate().rev() {
+        let at = value - (count - 1 - lead) as u64;
+        parts.push((at, segments.split_off(start + ahead)));
+    }
+    parts.push((value - count as u64, segments));
+    parts.reverse();
+    for (_, part) in &mut parts {
+        part.retain(|staged| staged.command.is_some() || !staged.signals.is_empty());
+    }
+    parts.retain(|(_, part)| !part.is_empty());
+    // The release goes after every segment and takes its last signals, so it adds no submit info
+    // (`infos`).
+    if let Some(tail) = tail {
+        let last = (parts.last_mut())
+            .and_then(|(_, part)| part.pop())
+            .unwrap_or_default();
+        let release = Staged {
+            signals: last.signals,
+            ..staged(tail)
+        };
+        let last = Staged {
+            signals: Vec::new(),
+            ..last
+        };
+        match parts.last_mut() {
+            Some((_, part)) => part.extend([last, release]),
+            None => parts.push((value, vec![last, release])),
+        }
+    }
+    match parts.last_mut() {
+        Some((last, _)) => *last = value,
+        None => parts.push((value, vec![Staged::default()])),
+    }
+    for (at, part) in &mut parts {
+        let signal = vk::SemaphoreSubmitInfo::default()
+            .semaphore(progress)
+            .value(*at)
+            .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS);
+        if let Some(last) = part.last_mut() {
+            last.signals.push(signal);
+        }
+    }
+    parts
+}
+
 /// Orders the zero fills of the uploads one submission carries, oldest first: where a fill an
 /// upload records before any barrier of its own meets bytes a fill of an earlier one wrote since
 /// the last barrier, a barrier ends the upload before it, so the two do not write the same bytes
@@ -2676,20 +2760,6 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
             }
         }
     }
-    let (head, tail) = match planes.is_empty() {
-        true => (None, None),
-        false => {
-            let (head, began) = Upload::hand_over(core, &planes, true);
-            let (tail, ended) = Upload::hand_over(core, &planes, false);
-            ok = ok.and(began).and(ended);
-            (head, tail)
-        }
-    };
-    if let Some(head) = head {
-        uploads.insert(0, head);
-        core.counters.count(Metric::D3d11PlaneSubmissions);
-    }
-    let ahead = uploads.len();
     segments.splice(
         0..0,
         uploads.iter().map(|upload| Staged {
@@ -2697,60 +2767,34 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
             ..Staged::default()
         }),
     );
-    // One part, or, where the group goes member by member, one for each command buffer that leads
-    // in it, the uploads with the first; each with its progress value (`WorkState::close`): the
-    // part ahead of the first lead's `value` less the leads, each lead's one above the one before.
     let leads = match apart {
-        true => starts.len(),
-        false => 0,
+        true => &starts[..],
+        false => &[][..],
     };
-    let mut parts: Vec<(u64, Vec<Staged>)> = Vec::with_capacity(1);
-    for (lead, &start) in starts[..leads].iter().enumerate().rev() {
-        let at = value - (leads - 1 - lead) as u64;
-        parts.push((at, segments.split_off(start + ahead)));
-    }
-    parts.push((value - leads as u64, segments));
-    parts.reverse();
-    for (_, part) in &mut parts {
-        part.retain(|staged| staged.command.is_some() || !staged.signals.is_empty());
-    }
-    parts.retain(|(_, part)| !part.is_empty());
-    // The release goes after every segment and takes its last signals, so it adds no submit info
-    // (`infos`).
-    if let Some(mut tail) = tail {
-        let last = (parts.last_mut())
-            .and_then(|(_, part)| part.pop())
-            .unwrap_or_default();
-        let release = Staged {
-            waits: Vec::new(),
-            command: Some(vk::CommandBufferSubmitInfo::default().command_buffer(tail.command)),
-            signals: last.signals,
-        };
-        let last = Staged {
-            signals: Vec::new(),
-            ..last
-        };
-        match parts.last_mut() {
-            Some((_, part)) => part.extend([last, release]),
-            None => parts.push((value, vec![last, release])),
-        }
-        tail.held.extend(planes.into_iter().map(Held::Texture));
-        uploads.push(tail);
-    }
-    // Each part signals its value, the last `value`, which also covers the parts left empty.
-    match parts.last_mut() {
-        Some((last, _)) => *last = value,
-        None => parts.push((value, vec![Staged::default()])),
-    }
-    for (at, part) in &mut parts {
-        let progress = vk::SemaphoreSubmitInfo::default()
-            .semaphore(core.done.progress)
-            .value(*at)
-            .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS);
-        if let Some(last) = part.last_mut() {
-            last.signals.push(progress);
-        }
-    }
+    let mut handed = Vec::new();
+    let planes = [planes];
+    let mut parts = self::parts(
+        segments,
+        uploads.len(),
+        leads,
+        (core.done.progress, value),
+        &planes,
+        |planes, acquire| {
+            let (upload, done) = Upload::hand_over(core, planes, acquire);
+            if let (true, Err(loss)) = (ok.is_ok(), done) {
+                ok = Err(loss);
+            }
+            let mut upload = upload?;
+            match acquire {
+                true => core.counters.count(Metric::D3d11PlaneSubmissions),
+                false => (upload.held).extend(planes.iter().cloned().map(Held::Texture)),
+            }
+            let command = upload.command;
+            handed.push(upload);
+            Some(command)
+        },
+    );
+    uploads.extend(handed);
     if ok.is_ok() {
         // The host's writes to the Shared memory its command buffers and copy-ins reach are the
         // GPU's before it runs, where the Shared type is not host-coherent (`crate::coherence`).

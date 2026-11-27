@@ -91,6 +91,7 @@ mod patch;
 mod pixel_format_info;
 mod pixel_interlock;
 mod places;
+mod plane_parts;
 mod pool_reach;
 mod present;
 mod private_arena;

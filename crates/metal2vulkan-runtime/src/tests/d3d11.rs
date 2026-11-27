@@ -124,12 +124,15 @@ mod on_device {
     mod picture {
         use super::d3d::{self, D3d, SharedTexture};
         use super::{RENDER_TARGET, SHADER_RESOURCE};
-        use crate::tests::command::on_device::{each_device, finished, on_each_device, within};
+        use crate::submit::IN_FLIGHT;
+        use crate::tests::command::on_device::{
+            behind_busy, each_device, finished, on_each_device, within,
+        };
         use crate::texture::TextureObject;
         use crate::{
-            Buffer, BufferLayout, CommandBuffer, D3d11Plane, Device, Error, Gap, IndexClass,
-            MemoryClass, PixelFormat, Surface, TextureDescriptor, TexturePlace, TextureSwizzle,
-            TextureSwizzleChannels, TextureType, TextureUsage, TextureViewKind,
+            Buffer, BufferLayout, CommandBuffer, CommandBufferStatus, D3d11Plane, Device, Error,
+            Gap, IndexClass, MemoryClass, PixelFormat, Surface, TextureDescriptor, TexturePlace,
+            TextureSwizzle, TextureSwizzleChannels, TextureType, TextureUsage, TextureViewKind,
         };
         use ash::vk;
         use metal2vulkan::metal::format::srgb_sibling;
@@ -543,6 +546,119 @@ mod on_device {
                     [2, 2, 2],
                     "{name}: each read's submission hands the planes over once"
                 );
+            });
+        }
+
+        /// The planes' hand-over in each part of a group sent member by member. On one queue,
+        /// behind as many busy submissions as a queue keeps in flight, a read of the planes
+        /// Direct3D 11 drew (A) and a second command buffer join one group: a second read (B), or
+        /// a copy between two buffers that uses no plane (F). Sent at once at the queue's run
+        /// (`CommandQueue::send_now`), A and B go as one part: one `vkQueueSubmit2`, one acquire
+        /// and one release. Sent once a run of 1 s was seen (`QueueInner::ran`, the state the
+        /// completion thread sets as a command buffer retires), the group goes member by member,
+        /// one `vkQueueSubmit2` a member and none more: A and B each acquire the planes at their
+        /// part's head and release them at its end, two of each; A and F acquire and release
+        /// once, in A's part, so A, seen complete at its own part's value, is seen complete after
+        /// the planes' release. Every read is picture 1's exactly. The order within each part is
+        /// the part builder's (`plane_parts`).
+        #[test]
+        fn every_device_hands_direct3d_11_planes_over_in_each_part_of_a_group_sent_apart() {
+            each_device("import_d3d11_surface_apart", |name, _, device| {
+                let luid = luid(&device).unwrap_or_else(|| panic!("{name}: no valid LUID"));
+                let d3d = D3d::on_luid(luid)
+                    .unwrap_or_else(|| panic!("{name}: no DXGI adapter of LUID {luid:02x?}"));
+                let textures = PLANES
+                    .each_ref()
+                    .map(|p| d3d.shared_texture(p.width, p.height, p.dxgi, BOUND));
+                let surface = import(name, &device, &textures);
+                d3d_draw(&d3d, &textures, 1);
+                surface.external_writes_done().expect("the acquire");
+                let one = picture(1);
+                let ahead = IN_FLIGHT as u64;
+                let counters = device.counters();
+                // Each case: its name, whether the second member reads the planes, whether the
+                // group goes member by member, and the hand-overs and submissions it makes.
+                let cases = [
+                    ("A and B as one part", true, false, 1, 1),
+                    ("A and B apart", true, true, 2, 2),
+                    ("A and F apart", false, true, 1, 2),
+                ];
+                for (case, reads, apart, hands, parts) in cases {
+                    let outs = [picture_buffer(&device), picture_buffer(&device)];
+                    let from = picture_buffer(&device);
+                    let queue = device.new_command_queue(64).expect("a queue");
+                    behind_busy(name, &device, &queue, |busy, submitted, _| {
+                        let before = counters.metrics();
+                        let a = queue.command_buffer().expect("a command buffer");
+                        encode_read(name, &a, &surface, &outs[0]);
+                        a.commit().expect("a commit");
+                        let second = queue.command_buffer().expect("a command buffer");
+                        match reads {
+                            true => encode_read(name, &second, &surface, &outs[1]),
+                            false => {
+                                let mut blit = second.blit_command_encoder().expect("an encoder");
+                                (blit.copy_from_buffer_to_buffer(&from, 0, &outs[1], 0, 256))
+                                    .expect("a copy");
+                                blit.end_encoding();
+                            }
+                        }
+                        second.commit().expect("a commit");
+                        for command_buffer in [&a, &second] {
+                            within(name, || {
+                                command_buffer.status() != CommandBufferStatus::Committed
+                            });
+                        }
+                        let sent = || counters.metrics().submissions - submitted;
+                        assert_eq!(sent(), ahead, "{name}: {case}: held in one group");
+                        match apart {
+                            true => second.queue().ran(1_000_000_000),
+                            false => {
+                                queue.send_now(&second);
+                                within(name, || sent() > ahead);
+                            }
+                        }
+                        busy.open();
+                        let got = [
+                            read_bytes(name, (a.clone(), outs[0].clone())),
+                            read_bytes(name, (second.clone(), outs[1].clone())),
+                        ];
+                        let metrics = counters.metrics();
+                        let handed = [
+                            metrics.d3d11_plane_submissions - before.d3d11_plane_submissions,
+                            metrics.external_acquires - before.external_acquires,
+                            metrics.external_releases - before.external_releases,
+                        ];
+                        let group = sent() - ahead;
+                        println!(
+                            "d3d11-apart: {name}: {case}: the group's vkQueueSubmit2 calls {group}; \
+                             plane-keeping submissions, acquires, releases {handed:?}"
+                        );
+                        assert_eq!(
+                            compare(&one, &got[0]).0,
+                            None,
+                            "{name}: {case}: A read picture 1"
+                        );
+                        if reads {
+                            assert_eq!(
+                                compare(&one, &got[1]).0,
+                                None,
+                                "{name}: {case}: B read picture 1"
+                            );
+                        }
+                        if apart {
+                            assert!(group >= 2, "{name}: {case}: went member by member");
+                        }
+                        assert_eq!(
+                            handed, [hands; 3],
+                            "{name}: {case}: one acquire and one release in each part that uses \
+                             the planes"
+                        );
+                        assert_eq!(
+                            group, parts,
+                            "{name}: {case}: one vkQueueSubmit2 a part, and no more"
+                        );
+                    });
+                }
             });
         }
 
