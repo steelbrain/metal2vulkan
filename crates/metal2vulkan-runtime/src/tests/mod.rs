@@ -152,6 +152,7 @@ mod take_split;
 mod texture;
 mod texture_accesses;
 mod texture_buffers;
+mod times;
 mod translate;
 mod translator_fields;
 mod unattached_colors;
