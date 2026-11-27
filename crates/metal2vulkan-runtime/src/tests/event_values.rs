@@ -54,6 +54,20 @@ fn counter(event: &Event) -> u64 {
     (event.inner().reached(None)).expect("the semaphore's value")
 }
 
+/// The device's `maxTimelineSemaphoreValueDifference`: how far a timeline semaphore's signal or
+/// wait may lie from its value and from every signal and wait pending on it.
+fn timeline_limit(device: &Device) -> u64 {
+    let core = device.core();
+    let mut vulkan12 = ash::vk::PhysicalDeviceVulkan12Properties::default();
+    let mut properties = ash::vk::PhysicalDeviceProperties2::default().push_next(&mut vulkan12);
+    // SAFETY: the physical device is the instance's and of Vulkan 1.3, which defines the
+    // structure, and both structures live through the call.
+    unsafe {
+        (core.instance.vk()).get_physical_device_properties2(core.physical, &mut properties);
+    }
+    vulkan12.max_timeline_semaphore_value_difference
+}
+
 /// The holds for an event's value the submit thread made, of every length.
 fn holds(device: &Device) -> u64 {
     device.counters().metrics().event_holds.iter().sum()
@@ -182,10 +196,18 @@ fn a_host_set_above_a_pending_signal_reaches_every_wait_below_it() {
 /// is left out, and a host set of it changes nothing. Metal's values are `uint64_t` (MTLEvent.h's
 /// `signaledValue`). The validation layer checks the semaphore's signal of it, which Vulkan bounds
 /// by the device's `maxTimelineSemaphoreValueDifference` from the semaphore's value
-/// (`VUID-VkSubmitInfo2-semaphore-03883`).
+/// (`VUID-VkSubmitInfo2-semaphore-03883`). So it runs only where that limit covers the jump from
+/// 0 to `u64::MAX`, and prints the limit; on a device whose limit is lower (Vulkan lets it be as
+/// low as 2,147,483,647) it prints that it did not run and checks nothing.
 #[test]
 fn the_largest_value_is_kept() {
     each_device("event_largest_value", |name, _, device| {
+        let limit = timeline_limit(&device);
+        if limit < u64::MAX {
+            println!("{name}: not run: the device's limit is {limit}");
+            return;
+        }
+        println!("{name}: the device's limit is {limit}");
         let event = shared_event(&device);
         let queue = queue(&device);
         let first = signal(name, &device, &queue, event.as_event(), u64::MAX);
