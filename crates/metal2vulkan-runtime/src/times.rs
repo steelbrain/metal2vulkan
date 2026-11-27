@@ -138,9 +138,10 @@ impl Ticks {
         }
     }
 
-    /// Whole nanoseconds from timestamp `start` to `end`, 0 where `end` is the earlier.
+    /// Nanoseconds from timestamp `start` to `end`, to the nearest whole one, 0 where `end` is
+    /// the earlier.
     pub(crate) fn span(&self, start: u64, end: u64) -> u64 {
-        self.nanos(start, end) as u64
+        self.nanos(start, end).round() as u64
     }
 
     /// Nanoseconds from timestamp `from` to `to`, negative where `to` is the earlier, within the
@@ -229,9 +230,10 @@ impl Calibration {
     }
 
     /// The host time of timestamp `tick` by this calibration as it stands, which moves nothing:
-    /// for the spans of the runtime's own command buffers ([`Spans`]).
+    /// for the spans of the runtime's own command buffers ([`Spans`]). To the nearest whole
+    /// nanosecond.
     pub(crate) fn at(&self, ticks: &Ticks, tick: u64) -> u64 {
-        (self.host as f64 + ticks.nanos(self.tick, tick)) as u64
+        (self.host as f64 + ticks.nanos(self.tick, tick)).round() as u64
     }
 }
 
