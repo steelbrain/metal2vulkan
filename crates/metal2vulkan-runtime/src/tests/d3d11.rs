@@ -1,6 +1,6 @@
 //! The Direct3D 11 surface import, a Windows host's, under a device cfg. On every device of the
-//! cfg's kind, its typed refusals: no plane, five planes, and a plane whose image format's texel
-//! is not its descriptor's. Under `m2v_gpu`, on every device: a picture's two planes made as shared
+//! cfg's kind, its typed refusals: no plane, five planes, a plane whose image format's texel is
+//! not its descriptor's, and a plane wider than the import query's `maxExtent` for its image. Under `m2v_gpu`, on every device: a picture's two planes made as shared
 //! Direct3D 11 textures on the DXGI adapter of the device's LUID (luma `R8_UNORM` at 64x32, chroma
 //! `R16_UINT` at 32x16, which rt's texture views as `RG8Unorm`), imported by their NT handles
 //! with no submission. Direct3D 11 draws picture 1 (one triangle a plane, its pixel shader
@@ -40,6 +40,7 @@
 
 #[cfg(all(windows, any(m2v_gpu, m2v_cpu_icd)))]
 mod on_device {
+    use crate::d3d11::import_query;
     use crate::tests::command::on_device::each_device;
     use crate::{
         D3d11Plane, Error, ImportHandle, Limit, PixelFormat, Refusal, TextureDescriptor,
@@ -100,6 +101,38 @@ mod on_device {
                         }))
                     ),
                     "{name}: a two-byte view of a one-byte texture: {error:?}"
+                );
+                // A plane one texel wider than the import query's `maxExtent` for its image with
+                // the handle: `Limit::TextureSize`, at that answer or the plain query's below it.
+                let core = device.core();
+                let (usage, list) =
+                    (device.d3d11_plane_form(core, &luma)).expect("the luma's form");
+                let format = (device.plane_plan(&luma.descriptor))
+                    .expect("a plan")
+                    .format;
+                let (_, made) =
+                    (import_query(core, format, usage, &list)).expect("the import query");
+                let most = made.max_extent.width;
+                let mut past = luma;
+                past.descriptor.width = most + 1;
+                let error = device.import_d3d11_surface(&[past]).err();
+                println!(
+                    "d3d11: {name}: the import query's maxExtent for the luma {:?}; a plane {} wide: \
+                     {error:?}",
+                    made.max_extent,
+                    most + 1
+                );
+                assert!(
+                    matches!(
+                        error,
+                        Some(Error::Limit(Limit::TextureSize {
+                            extent: [width, 32, 1],
+                            layers: 1,
+                            max_extent: [max, ..],
+                            ..
+                        })) if width == most + 1 && max <= most
+                    ),
+                    "{name}: a plane past the import's maxExtent: {error:?}"
                 );
             } else {
                 assert!(
@@ -1223,7 +1256,7 @@ mod on_device {
                 held.contains(feature)
             };
             let imports = |usage: vk::ImageUsageFlags, list: &[vk::Format]| {
-                (import_query(core, format, usage, list)).is_ok_and(|features| {
+                (import_query(core, format, usage, list)).is_ok_and(|(features, _)| {
                     features.contains(vk::ExternalMemoryFeatureFlags::IMPORTABLE)
                 })
             };

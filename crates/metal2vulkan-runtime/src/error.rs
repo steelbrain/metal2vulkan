@@ -2149,10 +2149,12 @@ pub enum Limit {
     },
     /// A texture whose extent or array layers are past what the device makes of its format,
     /// type, usage and sample count. A cube's layers are six a cube. A texture buffer's width past
-    /// the device's texel buffer elements, its extent `[width, 1, 1]` in 1 layer.
+    /// the device's texel buffer elements, its extent `[width, 1, 1]` in 1 layer. A Direct3D 11
+    /// plane's extent past what the device makes of its image imported from the plane's handle
+    /// (`Device::import_d3d11_surface`, on Windows).
     ///
-    /// Basis: device (the image format query's `maxExtent` and `maxArrayLayers`, and
-    /// `maxTexelBufferElements`).
+    /// Basis: device (the image format query's `maxExtent` and `maxArrayLayers`, an import's with
+    /// its handle type, and `maxTexelBufferElements`).
     TextureSize {
         /// The extent asked for.
         extent: [u32; 3],

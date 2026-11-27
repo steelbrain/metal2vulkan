@@ -2367,6 +2367,29 @@ pub(crate) fn kept_features(usage: vk::ImageUsageFlags) -> vk::FormatFeatureFlag
     kept
 }
 
+/// Whether an image of `extent` in `layers` layers is within what an image format query answered
+/// (`properties`), its `maxExtent` and `maxArrayLayers` (`VUID-VkImageCreateInfo-extent-02252`,
+/// `...-arrayLayers-02256`).
+///
+/// Err: [`Limit::TextureSize`] where it is past either.
+pub(crate) fn size_within(
+    extent: [u32; 3],
+    layers: u32,
+    properties: &vk::ImageFormatProperties,
+) -> Result<(), Error> {
+    let max = properties.max_extent;
+    let max_extent = [max.width, max.height, max.depth];
+    if extent.iter().zip(max_extent).any(|(&e, m)| e > m) || layers > properties.max_array_layers {
+        return Err(Error::Limit(Limit::TextureSize {
+            extent,
+            layers,
+            max_extent,
+            max_layers: properties.max_array_layers,
+        }));
+    }
+    Ok(())
+}
+
 /// The largest extent of a linear image of `plan`'s format and usage of `shape`'s type, where the
 /// device makes one; made for memory of the import `handle`, where the device makes one that such
 /// memory binds at any place: its external query (`VkPhysicalDeviceExternalImageFormatInfo`)
@@ -2750,18 +2773,7 @@ fn planned(
         }
     }
     let properties = properties.ok_or_else(gap)?;
-    let max = properties.max_extent;
-    let max_extent = [max.width, max.height, max.depth];
-    if shape.extent.iter().zip(max_extent).any(|(&e, m)| e > m)
-        || shape.layers > properties.max_array_layers
-    {
-        return Err(Error::Limit(Limit::TextureSize {
-            extent: shape.extent,
-            layers: shape.layers,
-            max_extent,
-            max_layers: properties.max_array_layers,
-        }));
-    }
+    size_within(shape.extent, shape.layers, &properties)?;
     if !d.sample_count.is_power_of_two() || !properties.sample_counts.contains(plan.samples) {
         return Err(Error::Limit(Limit::TextureSamples {
             sample_count: d.sample_count,

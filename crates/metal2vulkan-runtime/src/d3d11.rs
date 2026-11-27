@@ -15,7 +15,7 @@ use crate::hazard::HeapId;
 use crate::import::ImportHandle;
 use crate::memory;
 use crate::surface::{Surface, MAX_PLANES};
-use crate::texture::{Backing, SurfaceImage, Texture, TextureDescriptor};
+use crate::texture::{size_within, Backing, SurfaceImage, Texture, TextureDescriptor};
 use crate::PixelFormat;
 use ash::vk;
 use metal2vulkan::metal::format as formats;
@@ -153,7 +153,10 @@ impl Device {
     /// not import the handle (`vkGetPhysicalDeviceImageFormatProperties2`); [`Gap::SurfaceUsage`]
     /// for a usage the descriptor asks that the texture's bind flags do not give or the import
     /// does not offer (`ShaderWrite` on a texture made without `D3D11_BIND_UNORDERED_ACCESS`);
-    /// [`Limit::ImportType`]
+    /// [`Limit::TextureSize`] where a plane's extent is past the `maxExtent` the image format
+    /// query answers of its image with the Direct3D 11 handle type
+    /// (`VkPhysicalDeviceExternalImageFormatInfo`), which can be less than the query's without
+    /// it; [`Limit::ImportType`]
     /// where the handle's properties and the image's requirements share no memory type;
     /// [`Limit::MemoryAllocations`]; [`Error::Vulkan`] where the handle's properties, the image,
     /// its import or its binding fail; what the texture's index takes; [`Error::Quiesced`].
@@ -188,8 +191,9 @@ impl Device {
     }
 
     /// One plane's image usage and the formats it lists, which the plane's bind flags and
-    /// descriptor give ([`Device::import_d3d11_surface`]).
-    fn d3d11_plane_form(
+    /// descriptor give ([`Device::import_d3d11_surface`]), its extent within what the import
+    /// query answers of that image.
+    pub(crate) fn d3d11_plane_form(
         &self,
         core: &Arc<Core>,
         plane: &D3d11Plane<'_>,
@@ -253,8 +257,9 @@ impl Device {
             held.contains(feature)
         };
         let imports = |usage: vk::ImageUsageFlags, list: &[vk::Format]| {
-            (import_query(core, format, usage, list))
-                .is_ok_and(|features| features.contains(vk::ExternalMemoryFeatureFlags::IMPORTABLE))
+            (import_query(core, format, usage, list)).is_ok_and(|(features, _)| {
+                features.contains(vk::ExternalMemoryFeatureFlags::IMPORTABLE)
+            })
         };
         // The usage the texture's bind flags give, no other.
         let wanted = bound_usage(plane.bind_flags);
@@ -288,6 +293,13 @@ impl Device {
             Some(siblings) if imports(usage, &siblings) => siblings,
             _ => pair,
         };
+        // The plane's extent within what the query answers of its image with the handle, which
+        // can be less than the plain query's that `plane_plan` checked
+        // (`VUID-VkImageCreateInfo-extent-02252`: its limit is the query's with the image's
+        // external memory handle type).
+        let (_, made) = (import_query(core, format, usage, &list))
+            .map_err(|_| Error::Limit(Limit::NoImport { handle }))?;
+        size_within([d.width, d.height, 1], 1, &made)?;
         Ok((usage, list))
     }
 
@@ -429,13 +441,15 @@ impl Device {
 
 /// What `vkGetPhysicalDeviceImageFormatProperties2` answers of an optimal 2D image of `format`
 /// and `usage` imported from a Direct3D 11 texture, mutable and listing `list` where it is not
-/// empty: the handle's external memory features, or the query's error.
+/// empty: the handle's external memory features and the image's properties with the handle
+/// (its `maxExtent` the limit of such an image's extent, `VUID-VkImageCreateInfo-extent-02252`),
+/// or the query's error.
 pub(crate) fn import_query(
     core: &Core,
     format: vk::Format,
     usage: vk::ImageUsageFlags,
     list: &[vk::Format],
-) -> Result<vk::ExternalMemoryFeatureFlags, vk::Result> {
+) -> Result<(vk::ExternalMemoryFeatureFlags, vk::ImageFormatProperties), vk::Result> {
     let (instance, physical) = (core.instance.vk(), core.physical);
     let mut external = vk::PhysicalDeviceExternalImageFormatInfo::default().handle_type(HANDLE);
     let mut listed = vk::ImageFormatListCreateInfo::default().view_formats(list);
@@ -455,7 +469,9 @@ pub(crate) fn import_query(
     // SAFETY: `physical` is `instance`'s, and the handle's extension is enabled (the caller holds
     // the device's `VK_KHR_external_memory_win32`).
     unsafe { instance.get_physical_device_image_format_properties2(physical, &info, &mut out) }?;
-    Ok(external_out
+    let properties = out.image_format_properties;
+    let features = external_out
         .external_memory_properties
-        .external_memory_features)
+        .external_memory_features;
+    Ok((features, properties))
 }
