@@ -4310,8 +4310,10 @@ impl Texture {
     /// `newTextureViewWithPixelFormat:textureType:levels:slices:`: a texture over `levels` and
     /// `slices` of this one's image, of `texture_type`, at `index`, with elements of set 1 of its
     /// own and no copy; `newTextureViewWithPixelFormat:` is the call with the texture's own type,
-    /// every level and every slice. The view keeps this texture, as Metal's `parentTexture`, and
-    /// its descriptor is a view's in Metal: the extent of its first level, `levels.len()` levels
+    /// every level and every slice. The view keeps the texture that owns the image (this one, or
+    /// for a view of a view the texture under it); Metal's `parentTexture` answers the texture the
+    /// view was made from, which the consumer answers to the guest. Its descriptor is a view's in
+    /// Metal: the extent of its first level, `levels.len()` levels
     /// and `slices.len()` slices (a cube's six faces each one). Copies and encoders that name the
     /// view reach the levels and slices under it; its hazards are its parent's own. A view of a
     /// Managed texture names the texture's bytes of those levels and slices, so the CPU's reads
