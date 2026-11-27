@@ -135,6 +135,7 @@ pub mod pass_bound_pairs;
 pub mod pass_bytes;
 pub mod pass_sequence_actions;
 pub mod pass_start_reads;
+pub mod pass_unattached_colors;
 pub mod pipeline_descriptors;
 pub mod pipeline_facts;
 pub mod pipeline_functions;
@@ -642,6 +643,7 @@ pub fn all() -> Vec<Box<dyn Case>> {
     cases.extend(pass_sequence_actions::all());
     cases.extend(resolve_then_load::all());
     cases.extend(pass_start_reads::all());
+    cases.push(Box::new(pass_unattached_colors::PassUnattachedColor));
     cases.extend(render_residency::all());
     cases.extend(frame_chains::boxed());
     cases.extend(shared_creator_formats::all());
