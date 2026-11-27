@@ -2432,7 +2432,11 @@ made, with no lock, and never rewritten for layouts.
   the semaphore only rises and never races a host set.
   `signaled_value` is the higher of the semaphore and the floor. `notify_listener` runs its
   listener on the completion thread when the value is reached, at a signal in the middle of a
-  command buffer as well as at its end; `wait_until_signaled_value` wakes then too.
+  command buffer as well as at its end; `wait_until_signaled_value` wakes then too. A value the
+  host sees that a GPU signal raised (`signaled_value`, `wait_until_signaled_value`, a
+  listener's value) is one a host wait with a timeout of 0 (`vkWaitSemaphores`) confirmed after
+  the semaphore's counter read found it, never the counter read alone; a read at or below the
+  value last confirmed asks for no wait.
 - `Fence` is `MTLFence`, and `update_fence` and `wait_for_fence` on compute and blit encoders are
   `updateFence:` and `waitForFence:`, on one queue or across queues. They record nothing: every
   queue's command buffers go to the device's one `VkQueue`, and each encoder's writes reach every
@@ -2629,10 +2633,7 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   retires only once a host wait has seen its submission's progress value: with one value pending
   the completion thread asks only that wait, and with more, where the semaphore's counter read
   runs ahead of the wait, `Metrics::waits_behind_counter` counts the round, and nothing retires
-  until the wait agrees. An event's value the host sees that a GPU signal raised
-  (`SharedEvent::signaled_value`, `wait_until_signaled_value`, a listener's value) is likewise
-  one a wait with a timeout of 0 confirmed, after the counter read found it; a read at or below
-  the value last confirmed asks for no wait. The device tests, the harness and the replay player
+  until the wait agrees. The device tests, the harness and the replay player
   report both counts. Vulkan states no most queries a pool may hold or most pools a device may
   make; the runtime's 4,096 a pool is the smallest met: Mesa's Apple-GPU driver makes each pool a
   Metal counter heap, of at most 4,096 entries and at most 32 live in a process, so there at most
