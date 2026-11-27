@@ -1407,7 +1407,7 @@
           "D296.2",
           "D296.6"
         ],
-        "note": "Metal pipeline creation names GPUFamily10, which the reference device (Apple M3 Max, apple-m3-max-macos26.7) does not support; both passes of EV ORC-metal-qual recorded the reference gap. No reference device here has the family (the M4 minis lack it too), so no Metal answer exists to compare against.",
+        "note": "Metal pipeline creation names GPUFamily10, which the reference device (Apple M3 Max, apple-m3-max-macos27.0.1) does not support; both passes of EV ORC-metal-qual recorded the reference gap. No reference device here has the family (the M4 minis lack it too), so no Metal answer exists to compare against.",
         "sign_off": {
           "state": "signed_off",
           "decision": "C3 reference gap: accept (the user's answer of 2026-10-03)",
@@ -1424,7 +1424,7 @@
           "D296.2",
           "D296.6"
         ],
-        "note": "Metal pipeline creation names GPUFamily10, which the reference device (Apple M3 Max, apple-m3-max-macos26.7) does not support; both passes of EV ORC-metal-qual recorded the reference gap. No reference device here has the family (the M4 minis lack it too), so no Metal answer exists to compare against.",
+        "note": "Metal pipeline creation names GPUFamily10, which the reference device (Apple M3 Max, apple-m3-max-macos27.0.1) does not support; both passes of EV ORC-metal-qual recorded the reference gap. No reference device here has the family (the M4 minis lack it too), so no Metal answer exists to compare against.",
         "sign_off": {
           "state": "signed_off",
           "decision": "C3 reference gap: accept (the user's answer of 2026-10-03)",
@@ -1441,7 +1441,7 @@
           "D296.2",
           "D296.6"
         ],
-        "note": "Metal pipeline creation names GPUFamily10 (\"simdgroup_matrix<T,16,16x16> operations are supported by GPUFamily10 and later\"): q4q8_gemm's live path uses 16x16 integer simdgroup matrices. The reference device (Apple M3 Max, apple-m3-max-macos26.7) does not support the family; Metal qualification recorded the reference gap on the M3 Max (EV RVC-b2-m3) and on an M4 mini (EV RVC-b2-m4), so no reference device here has the family and no Metal answer exists to compare against. Listed after the parity snapshot of 2026-10-07 (docs/TODO.md 9) found it recorded but unlisted.",
+        "note": "Metal pipeline creation names GPUFamily10 (\"simdgroup_matrix<T,16,16x16> operations are supported by GPUFamily10 and later\"): q4q8_gemm's live path uses 16x16 integer simdgroup matrices. The reference device (Apple M3 Max, apple-m3-max-macos27.0.1) does not support the family; Metal qualification recorded the reference gap on the M3 Max (EV RVC-b2-m3) and on an M4 mini (EV RVC-b2-m4), so no reference device here has the family and no Metal answer exists to compare against. Listed after the parity snapshot of 2026-10-07 (docs/TODO.md 9) found it recorded but unlisted.",
         "sign_off": {
           "state": "signed_off",
           "decision": "C3 reference gap: accept, as the three GPU-family-10 conv2d cases of 2026-10-03 (the user's answer of 2026-10-07)",
@@ -1458,7 +1458,7 @@
           "D296.2",
           "D296.6"
         ],
-        "note": "Metal pipeline creation names GPUFamily10, which the reference device (Apple M3 Max, apple-m3-max-macos26.7) does not support; both passes of EV ORC-metal-qual recorded the reference gap. No reference device here has the family (the M4 minis lack it too), so no Metal answer exists to compare against.",
+        "note": "Metal pipeline creation names GPUFamily10, which the reference device (Apple M3 Max, apple-m3-max-macos27.0.1) does not support; both passes of EV ORC-metal-qual recorded the reference gap. No reference device here has the family (the M4 minis lack it too), so no Metal answer exists to compare against.",
         "sign_off": {
           "state": "signed_off",
           "decision": "C3 reference gap: accept (the user's answer of 2026-10-03)",
