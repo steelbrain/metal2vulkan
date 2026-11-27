@@ -2417,6 +2417,20 @@ pub(crate) fn size_within(
     Ok(())
 }
 
+/// Whether a surface plane of `d`, one 2D layer, is within what the image format query answered
+/// of its image with its import's handle type (`import`): a Direct3D 11 plane's
+/// (`Device::import_d3d11_surface`, on Windows), whose import can make a smaller image than the
+/// query without the handle answers (`VUID-VkImageCreateInfo-extent-02252`).
+///
+/// Err: [`Limit::TextureSize`] carrying the import's `maxExtent` where the plane is past it.
+#[cfg(any(windows, test))]
+pub(crate) fn plane_within(
+    d: &TextureDescriptor,
+    import: &vk::ImageFormatProperties,
+) -> Result<(), Error> {
+    size_within([d.width, d.height, 1], 1, import)
+}
+
 /// The largest extent of a linear image of `plan`'s format and usage of `shape`'s type, where the
 /// device makes one; made for memory of the import `handle`, where the device makes one that such
 /// memory binds at any place: its external query (`VkPhysicalDeviceExternalImageFormatInfo`)

@@ -716,7 +716,10 @@ mod on_device {
         /// that read is picture 3's exactly. On a surface Direct3D 11 draws first, reported by
         /// `external_writes_done`, every acquire names the general layout, the first included,
         /// and rt reads picture 1 exactly. The acquires are read from the record the hand-over
-        /// keeps for the device tests (`Work::acquired`).
+        /// keeps for the device tests (`Work::acquired`). The Khronos validation layer does not
+        /// track this import's layout, so it is no check here: on the UHD 630 its 1.4.363.0
+        /// reported neither the old form's first acquire from the general layout (job
+        /// m3-max-76170) nor this form's from the undefined layout (job m3-max-76174).
         #[test]
         fn every_device_acquires_a_direct3d_11_plane_from_undefined_only_before_any_access() {
             each_device("import_d3d11_surface_first_use", |name, _, device| {

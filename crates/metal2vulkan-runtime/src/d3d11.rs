@@ -16,7 +16,7 @@ use crate::hazard::HeapId;
 use crate::import::ImportHandle;
 use crate::memory;
 use crate::surface::{Surface, MAX_PLANES};
-use crate::texture::{size_within, Backing, SurfaceImage, Texture, TextureDescriptor};
+use crate::texture::{plane_within, Backing, SurfaceImage, Texture, TextureDescriptor};
 use crate::PixelFormat;
 use ash::vk;
 use metal2vulkan::metal::format as formats;
@@ -120,7 +120,10 @@ impl Device {
     /// consumer reported no Direct3D 11 access of it before
     /// ([`Surface::external_writes_done`]), and the general layout where it did; every later
     /// acquire names the general layout, the plane being general after rt's own first acquire
-    /// and release. "First" is the first acquire rt records for the plane.
+    /// and release. "First" is the first acquire rt records for the plane. The Khronos validation
+    /// layer does not track this import's layout: on the UHD 630 its 1.4.363.0 reported neither
+    /// a first acquire from the general layout nor one from the undefined layout, so its silence
+    /// is no evidence of either.
     ///
     /// **Ownership.** Each `vkQueueSubmit2` whose command buffers or uploads use a plane acquires
     /// it from `VK_QUEUE_FAMILY_EXTERNAL` in a command buffer of rt's own ahead of everything in
@@ -315,7 +318,7 @@ impl Device {
         // external memory handle type).
         let (_, made) = (import_query(core, format, usage, &list))
             .map_err(|_| Error::Limit(Limit::NoImport { handle }))?;
-        size_within([d.width, d.height, 1], 1, &made)?;
+        plane_within(d, &made)?;
         Ok((usage, list))
     }
 

@@ -37,8 +37,8 @@
 //!   device.
 
 use crate::arrays::Grants;
-use crate::error::{Error, Refusal};
-use crate::texture::{combined, components, linear_rounding, shape};
+use crate::error::{Error, Limit, Refusal};
+use crate::texture::{combined, components, linear_rounding, plane_within, shape};
 use crate::{IndexClass, PixelFormat, TextureDescriptor, TextureType};
 use ash::vk;
 use metal2vulkan::metal::{TextureSwizzle, TextureSwizzleChannels};
@@ -264,6 +264,45 @@ fn a_views_components_are_the_swizzle_over_the_formats_mapping() {
     assert_eq!(
         components(alpha_in_red, alpha_everywhere),
         parts(Some(mapping(C::R, C::R, C::ZERO, C::ONE)))
+    );
+}
+
+/// A surface plane is checked against what the image format query answers of its image with its
+/// import's handle type (a Direct3D 11 plane's, `d3d11_plane_form`), which can be less than the
+/// query without the handle answers: a plane 64 wide where the import answers 63 is
+/// `Limit::TextureSize` carrying the import's extent, as is one 32 high where it answers 31; one
+/// the import answers exactly passes. The check is the import's answer alone: no card in the lab
+/// answers less with the handle than without it.
+#[test]
+fn a_plane_past_its_import_s_max_extent_is_texture_size() {
+    let plane = TextureDescriptor::new(TextureType::Type2D, PixelFormat::R8Unorm, 64, 32);
+    let answer = |width: u32, height: u32| vk::ImageFormatProperties {
+        max_extent: vk::Extent3D {
+            width,
+            height,
+            depth: 1,
+        },
+        max_array_layers: 2048,
+        ..vk::ImageFormatProperties::default()
+    };
+    for (max, case) in [([63, 16384], "narrower"), ([16384, 31], "shorter")] {
+        let refused = plane_within(&plane, &answer(max[0], max[1])).err();
+        assert!(
+            matches!(
+                refused,
+                Some(Error::Limit(Limit::TextureSize {
+                    extent: [64, 32, 1],
+                    layers: 1,
+                    max_extent,
+                    max_layers: 2048,
+                })) if max_extent == [max[0], max[1], 1]
+            ),
+            "an import answer {case} than the plane: {refused:?}"
+        );
+    }
+    assert!(
+        plane_within(&plane, &answer(64, 32)).is_ok(),
+        "an import answer of the plane's own extent"
     );
 }
 
