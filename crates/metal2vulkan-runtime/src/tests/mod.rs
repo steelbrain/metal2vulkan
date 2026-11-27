@@ -17,6 +17,8 @@ mod cache;
 mod choice;
 mod coherence;
 pub(crate) mod command;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod completion_orders;
 mod compute;
 mod copy_out;
 mod copy_over;
@@ -33,6 +35,8 @@ mod device;
 mod dispatch_tiles;
 mod dma_bufs;
 mod draw;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod event_values;
 mod export;
 mod exported_overs;
 mod fault;
