@@ -33,23 +33,26 @@ pub struct DomTree<N> {
 /// Count one dominator tree ([`trees_computed`]).
 #[cfg(test)]
 fn note_computed() {
-    TREES_COMPUTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    TREES_COMPUTED.with(|n| n.set(n.get() + 1));
 }
 
 /// Count one tree; nothing outside the crate's own tests.
 #[cfg(not(test))]
 fn note_computed() {}
 
-/// The dominator trees computed in this process, which the tests that hold a stage to one tree a
-/// body read: a specialization must compute no tree the verification of its own pruned module
-/// already built.
 #[cfg(test)]
-static TREES_COMPUTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+std::thread_local! {
+    /// The dominator trees computed on this thread, which the tests that hold a stage to one tree
+    /// a body read: a specialization must compute no tree the verification of its own pruned
+    /// module already built. Per thread, so tests the harness runs side by side in one process
+    /// do not count each other's trees (the crate computes every tree on its caller's thread).
+    static TREES_COMPUTED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
 
 /// [`TREES_COMPUTED`].
 #[cfg(test)]
 pub(crate) fn trees_computed() -> u64 {
-    TREES_COMPUTED.load(std::sync::atomic::Ordering::Relaxed)
+    TREES_COMPUTED.with(std::cell::Cell::get)
 }
 
 impl<N: NodeId> DomTree<N> {
