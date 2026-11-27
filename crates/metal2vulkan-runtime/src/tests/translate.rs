@@ -4354,6 +4354,75 @@ define void @nil_read_kernel(ptr addrspace(1) %in, ptr addrspace(1) %out, i32 %t
         });
     }
 
+    /// The harness fixture's `row_barrier` (see the test above) in threadgroups of 128 and 256
+    /// threads whose rows are 64 or 128 threads wide, so that the row a thread reads past its
+    /// `threadgroup_barrier(mem_flags::mem_device)` lies in another SIMD group on every device,
+    /// wave64 included: thread `t` of a threadgroup reads the word thread `t ^ 64` stored (rows
+    /// of 64) or thread `t ^ 128` stored (rows of 128), carried in the device buffer `cells`. Grids
+    /// 512 x 4 and 512 x 3 in 64 x 2 (the second ragged in y, its last row's pair outside the
+    /// grid), 200 x 4 in 64 x 2 (ragged in x), 512 x 4 in 128 x 2 and 192 x 8 in 64 x 4. Every
+    /// read sees the other row's word, the answer the barrier's `mem_device` orders for the
+    /// threads of a threadgroup (MSL §6.10.1, Table 6.13), computed here.
+    #[test]
+    fn every_device_reads_another_simd_groups_device_word_past_a_device_memory_barrier() {
+        let Some(descriptor) = harness_kernel("row_barrier") else {
+            return;
+        };
+        const FILL: u32 = 0xEEEE_EEEE;
+        each_device("compute_row_barrier_across_waves", |name, _, device| {
+            let state = state(name, &device, &descriptor);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let grids = [
+                ([512, 4, 1], [64, 2, 1]),
+                ([512, 3, 1], [64, 2, 1]),
+                ([200, 4, 1], [64, 2, 1]),
+                ([512, 4, 1], [128, 2, 1]),
+                ([192, 8, 1], [64, 4, 1]),
+            ];
+            for (grid, size) in grids {
+                let count = grid[0] * grid[1];
+                let mut buffers = Buffers::new(&device, 1 << 20);
+                let cells = buffers.buffer(4 * u64::from(count));
+                let seen = buffers.buffer(4 * u64::from(count));
+                write(&cells, 0, &le_bytes(&vec![0; count as usize]));
+                write(&seen, 0, &le_bytes(&vec![FILL; count as usize]));
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = command_buffer
+                    .compute_command_encoder(DispatchType::Serial)
+                    .expect("an encoder");
+                encoder.set_compute_pipeline_state(&state).expect("a state");
+                encoder.set_buffer(Some(&cells), 0, 0).expect("a buffer");
+                encoder.set_buffer(Some(&seen), 0, 1).expect("a buffer");
+                (encoder.dispatch_threads(grid, size))
+                    .unwrap_or_else(|error| panic!("{name}: {grid:?} in {size:?}: {error}"));
+                encoder.end_encoding();
+                command_buffer.commit().expect("a commit");
+                finished(name, &command_buffer);
+                assert_eq!(command_buffer.error(), None, "{name}");
+                let want: Vec<u32> = (0..grid[1])
+                    .flat_map(|y| {
+                        (0..grid[0]).map(move |x| match y ^ 1 {
+                            other if other < grid[1] => ((other << 16) | x) + 1,
+                            _ => FILL,
+                        })
+                    })
+                    .collect();
+                let got = words(&seen, 0, want.len());
+                let first = got.iter().zip(&want).position(|(got, want)| got != want);
+                assert_eq!(
+                    first.map(|cell| (cell, got[cell], want[cell])),
+                    None,
+                    "{name}: {grid:?} in {size:?}: the first cell that differs, its word and \
+                     the other row's"
+                );
+            }
+            println!(
+                "{name}: row barrier reads across SIMD groups checked in 512 x 4, 512 x 3 and \
+                 200 x 4 in 64 x 2, 512 x 4 in 128 x 2 and 192 x 8 in 64 x 4"
+            );
+        });
+    }
+
     /// `compute_thread_limit_64` declares `[[max_total_threads_per_threadgroup(64)]]` and observes
     /// its threadgroups, with no required size: its state makes the pipelines a whole and a
     /// ragged grid run at 64 x 1 x 1, the plain module's and the partial-threadgroups variant's,
@@ -4842,6 +4911,419 @@ declare void @air.wg.barrier(i32, i32)
             println!(
                 "{name}: a float arena of {limit} bytes, the device's limit, answered all {} words",
                 want.len()
+            );
+        });
+    }
+
+    /// [`FLOAT_ARENA`] as `float_arena_reader`, whose last loop reads device memory across the
+    /// kernel's `threadgroup_barrier(mem_flags::mem_device)`: for each of its `uint4`s `j`, a
+    /// thread writes to `out[params[0] + j]` the sum of the words `4 j` to `4 j + 3` of `out`,
+    /// which the loop before the barrier stored, in place of the arena's `float4`.
+    fn float_arena_reader() -> String {
+        let start = FLOAT_ARENA
+            .find("  %q4 = ")
+            .expect("the arena's vector load");
+        let sum = "  %yo = fptoui float %ys to i32\n";
+        let end = FLOAT_ARENA.find(sum).expect("the vector's sum") + sum.len();
+        let reads = "  %q4 = getelementptr inbounds i32, ptr addrspace(1) %out, i32 %j4
+  %y = load <4 x i32>, ptr addrspace(1) %q4, align 16
+  %y0 = extractelement <4 x i32> %y, i32 0
+  %y1 = extractelement <4 x i32> %y, i32 1
+  %y2 = extractelement <4 x i32> %y, i32 2
+  %y3 = extractelement <4 x i32> %y, i32 3
+  %ya = add i32 %y0, %y1
+  %yb = add i32 %y2, %y3
+  %yo = add i32 %ya, %yb
+";
+        format!("{}{reads}{}", &FLOAT_ARENA[..start], &FLOAT_ARENA[end..])
+            .replace("@float_arena", "@float_arena_reader")
+    }
+
+    /// [`float_arena_reader`] in one threadgroup of 256 threads, its region at the device's
+    /// `maxComputeSharedMemorySize` as the test above sets it: past the `mem_device` barrier,
+    /// thread `t` reads the device words threads `4 t` to `4 t + 3` (mod 256) stored before it, so
+    /// most threads read another SIMD group's words (three in four on a device of 64-wide SIMD
+    /// groups, more on narrower ones). Every word is the program's, which the barrier's
+    /// `mem_device` orders for the threads of a threadgroup (MSL §6.10.1, Table 6.13), computed
+    /// here: `out[k] = n - 1 - k` and `out[n + j] = 4 n - 16 j - 10`, `n` the region's words.
+    #[test]
+    fn every_device_reads_another_simd_groups_device_words_across_a_float_arenas_barrier() {
+        let text = float_arena_reader();
+        let bitcode = match metal2vulkan_devtools::llvm_assemble_text(&text) {
+            Ok(bitcode) => bitcode,
+            Err(AssembleError::Missing(why)) => {
+                eprintln!("SKIPPED: {why}");
+                return;
+            }
+            Err(error) => panic!("float_arena_reader: {error:?}"),
+        };
+        let library = Library::from_air(&bitcode).expect("the library");
+        let function = library.function("float_arena_reader").expect("the kernel");
+        let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
+            FunctionDescriptor::new(function),
+        ));
+        each_device("compute_float_arena_reader", |name, _, device| {
+            let limit = device.core().limits.max_shared_memory;
+            let n = limit / 4;
+            let state = state(name, &device, &descriptor);
+            let mut buffers = Buffers::new(&device, 1 << 20);
+            let out = buffers.buffer(5 * u64::from(limit) / 4);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = command_buffer
+                .compute_command_encoder(DispatchType::Serial)
+                .expect("an encoder");
+            encoder.set_compute_pipeline_state(&state).expect("a state");
+            encoder
+                .set_threadgroup_memory_length(limit, 0)
+                .expect("a length");
+            encoder.set_buffer(Some(&out), 0, 0).expect("a buffer");
+            encoder
+                .set_bytes(&le_bytes(&[n]), 1)
+                .expect("the parameters");
+            encoder
+                .dispatch_threadgroups([1, 1, 1], [256, 1, 1])
+                .unwrap_or_else(|error| panic!("{name}: a region of {limit} bytes: {error}"));
+            encoder.end_encoding();
+            command_buffer.commit().expect("a commit");
+            finished(name, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+            let want: Vec<u32> = (0..n)
+                .map(|k| n - 1 - k)
+                .chain((0..n / 4).map(|j| 4 * n - 16 * j - 10))
+                .collect();
+            let got = words(&out, 0, want.len());
+            let first = got.iter().zip(&want).position(|(got, want)| got != want);
+            assert_eq!(
+                first.map(|word| (word, got[word], want[word])),
+                None,
+                "{name}: the first word that differs, its value and the program's"
+            );
+            println!(
+                "{name}: a float arena of {limit} bytes read its device words across its \
+                 mem_device barrier and answered all {} words",
+                want.len()
+            );
+        });
+    }
+
+    /// A kernel that orders threadgroup and device memory through one barrier flag word,
+    /// `threadgroup_barrier(mem_flags::mem_device | mem_flags::mem_threadgroup)`, in a loop of four
+    /// iterations, with both memories carrying words between SIMD groups: each iteration thread
+    /// `t` (`g` in the grid) stores its `a` to word `t` of a declared threadgroup array and its `b`
+    /// to `dev[g]`; past a barrier it reads word `t ^ 64` of the array and `dev[g - t + (t + 64) %
+    /// 256]`, and past another barrier takes three times the first plus the iteration's index as
+    /// its next `a` and five times the second plus the index plus one as its next `b`. It starts
+    /// at `a = g` and `b = g ^ 0x5555`, and writes its last `a` and `b` to `out[2 g]` and
+    /// `out[2 g + 1]`.
+    const BOTH_FLAGS: &str = r#"target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
+target triple = "air64_v28-apple-macosx26.0.0"
+
+@tg = internal addrspace(3) global [1024 x i32] undef, align 4
+
+define void @both_flags(ptr addrspace(1) %dev, ptr addrspace(1) %out, i32 %t, i32 %g) {
+entry:
+  %pa = getelementptr inbounds i32, ptr addrspace(3) @tg, i32 %t
+  %tx = xor i32 %t, 64
+  %pn = getelementptr inbounds i32, ptr addrspace(3) @tg, i32 %tx
+  %pd = getelementptr inbounds i32, ptr addrspace(1) %dev, i32 %g
+  %base = sub i32 %g, %t
+  %t64 = add i32 %t, 64
+  %tw = and i32 %t64, 255
+  %dn = add i32 %base, %tw
+  %pe = getelementptr inbounds i32, ptr addrspace(1) %dev, i32 %dn
+  %b0 = xor i32 %g, 21845
+  br label %loop
+
+loop:
+  %i = phi i32 [ 0, %entry ], [ %i1, %loop ]
+  %a = phi i32 [ %g, %entry ], [ %a2, %loop ]
+  %b = phi i32 [ %b0, %entry ], [ %b2, %loop ]
+  store i32 %a, ptr addrspace(3) %pa, align 4
+  store i32 %b, ptr addrspace(1) %pd, align 4
+  tail call void @air.wg.barrier(i32 3, i32 1)
+  %x = load i32, ptr addrspace(3) %pn, align 4
+  %y = load i32, ptr addrspace(1) %pe, align 4
+  tail call void @air.wg.barrier(i32 3, i32 1)
+  %i1 = add i32 %i, 1
+  %x3 = mul i32 %x, 3
+  %a2 = add i32 %x3, %i
+  %y5 = mul i32 %y, 5
+  %b2 = add i32 %y5, %i1
+  %more = icmp ult i32 %i1, 4
+  br i1 %more, label %loop, label %done
+
+done:
+  %o = shl i32 %g, 1
+  %po = getelementptr inbounds i32, ptr addrspace(1) %out, i32 %o
+  store i32 %a2, ptr addrspace(1) %po, align 4
+  %o1 = or i32 %o, 1
+  %pp = getelementptr inbounds i32, ptr addrspace(1) %out, i32 %o1
+  store i32 %b2, ptr addrspace(1) %pp, align 4
+  ret void
+}
+
+declare void @air.wg.barrier(i32, i32)
+
+!air.kernel = !{!0}
+!air.version = !{!7}
+!air.language_version = !{!8}
+!0 = !{ptr @both_flags, !1, !2}
+!1 = !{}
+!2 = !{!3, !4, !5, !6}
+!3 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"dev"}
+!4 = !{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"out"}
+!5 = !{i32 2, !"air.thread_index_in_threadgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"t"}
+!6 = !{i32 3, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"g"}
+!7 = !{i32 2, i32 8, i32 0}
+!8 = !{!"Metal", i32 4, i32 0, i32 0}
+"#;
+
+    /// The words [`BOTH_FLAGS`] writes for `groups` threadgroups of `size` threads, by `out`'s
+    /// index.
+    fn both_flags_answers(groups: u32, size: u32) -> Vec<u32> {
+        let mut out = Vec::with_capacity(2 * (groups * size) as usize);
+        for group in 0..groups {
+            let first = group * size;
+            let mut a: Vec<u32> = (first..first + size).collect();
+            let mut b: Vec<u32> = (first..first + size).map(|g| g ^ 0x5555).collect();
+            for i in 0..4 {
+                let x: Vec<u32> = (0..size as usize).map(|t| a[t ^ 64]).collect();
+                let y: Vec<u32> = (0..size as usize).map(|t| b[(t + 64) % 256]).collect();
+                a = x
+                    .iter()
+                    .map(|x| x.wrapping_mul(3).wrapping_add(i))
+                    .collect();
+                b = y
+                    .iter()
+                    .map(|y| y.wrapping_mul(5).wrapping_add(i + 1))
+                    .collect();
+            }
+            out.extend(a.iter().zip(&b).flat_map(|(&a, &b)| [a, b]));
+        }
+        out
+    }
+
+    /// [`BOTH_FLAGS`] in 8 threadgroups of 256 threads and 4 of 1,024: thread `t` reads the
+    /// threadgroup word thread `t ^ 64` stored and the device word thread `(t + 64) % 256` stored,
+    /// each in another SIMD group on every device, wave64 included, both carried past one barrier
+    /// whose flags name both memories. Every word is the program's, which the barrier orders for
+    /// both memories among the threads of a threadgroup (MSL §6.10.1, Table 6.13), computed here.
+    #[test]
+    fn every_device_orders_both_memories_across_simd_groups_through_one_barrier() {
+        let bitcode = match metal2vulkan_devtools::llvm_assemble_text(BOTH_FLAGS) {
+            Ok(bitcode) => bitcode,
+            Err(AssembleError::Missing(why)) => {
+                eprintln!("SKIPPED: {why}");
+                return;
+            }
+            Err(error) => panic!("both_flags: {error:?}"),
+        };
+        let library = Library::from_air(&bitcode).expect("the library");
+        let function = library.function("both_flags").expect("the kernel");
+        let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
+            FunctionDescriptor::new(function),
+        ));
+        each_device("compute_both_flags", |name, _, device| {
+            let state = state(name, &device, &descriptor);
+            let queue = device.new_command_queue(4).expect("a queue");
+            for (groups, size) in [(8, 256), (4, 1024)] {
+                let threads = groups * size;
+                let mut buffers = Buffers::new(&device, 1 << 20);
+                let dev = buffers.buffer(4 * u64::from(threads));
+                let out = buffers.buffer(8 * u64::from(threads));
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = command_buffer
+                    .compute_command_encoder(DispatchType::Serial)
+                    .expect("an encoder");
+                encoder.set_compute_pipeline_state(&state).expect("a state");
+                encoder.set_buffer(Some(&dev), 0, 0).expect("a buffer");
+                encoder.set_buffer(Some(&out), 0, 1).expect("a buffer");
+                encoder
+                    .dispatch_threadgroups([groups, 1, 1], [size, 1, 1])
+                    .unwrap_or_else(|error| panic!("{name}: {groups} of {size}: {error}"));
+                encoder.end_encoding();
+                command_buffer.commit().expect("a commit");
+                finished(name, &command_buffer);
+                assert_eq!(command_buffer.error(), None, "{name}");
+                let want = both_flags_answers(groups, size);
+                let got = words(&out, 0, want.len());
+                let first = got.iter().zip(&want).position(|(got, want)| got != want);
+                assert_eq!(
+                    first.map(|word| (word, got[word], want[word])),
+                    None,
+                    "{name}: {groups} threadgroups of {size}: the first word that differs (even: \
+                     threadgroup memory's, odd: device memory's), its value and the program's"
+                );
+            }
+            println!(
+                "{name}: threadgroup and device words read across SIMD groups past one barrier \
+                 of both flags, in 8 threadgroups of 256 and 4 of 1,024"
+            );
+        });
+    }
+
+    /// Metal's fence pattern, the last to arrive gathers (MSL §6.16.1, §6.16.3): each thread `t`
+    /// of a threadgroup of 256 (`g` in the grid, `w` its threadgroup's position) stores its word
+    /// `v(g) = (g * 2654435761) ^ 0x5A5A5A5A` to `data[g]`, then
+    /// `atomic_thread_fence(mem_flags::mem_device, memory_order_seq_cst, $SCOPE)`, then adds one
+    /// to `count[w]` with a relaxed `atomic_fetch_add_explicit`. The thread that reads 255 there,
+    /// the last of its threadgroup, fences again and copies its threadgroup's 256 words of `data`
+    /// to the same words of `out`. No thread waits for another and no barrier orders anything:
+    /// the copy sees every word because each other thread's fence and add came before the last
+    /// thread's add, and the last thread's fence comes after it. `$NAME` and `$SCOPE` are filled
+    /// by [`fence_kernel`].
+    const FENCE_LAST: &str = r#"target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
+target triple = "air64_v28-apple-macosx26.0.0"
+
+define void @$NAME(ptr addrspace(1) %data, ptr addrspace(1) %count, ptr addrspace(1) %out, i32 %t, i32 %g, i32 %w) {
+entry:
+  %h = mul i32 %g, -1640531535
+  %v = xor i32 %h, 1515870810
+  %pd = getelementptr inbounds i32, ptr addrspace(1) %data, i32 %g
+  store i32 %v, ptr addrspace(1) %pd, align 4
+  tail call void @air.atomic.fence(i32 1, i32 5, i32 $SCOPE)
+  %pc = getelementptr inbounds i32, ptr addrspace(1) %count, i32 %w
+  %old = tail call i32 @air.atomic.global.add.u.i32(ptr addrspace(1) %pc, i32 1, i32 0, i32 2, i1 true)
+  %last = icmp eq i32 %old, 255
+  br i1 %last, label %gather, label %done
+
+gather:
+  tail call void @air.atomic.fence(i32 1, i32 5, i32 $SCOPE)
+  %base = sub i32 %g, %t
+  br label %copy
+
+copy:
+  %k = phi i32 [ 0, %gather ], [ %k2, %copy ]
+  %i = add i32 %base, %k
+  %ps = getelementptr inbounds i32, ptr addrspace(1) %data, i32 %i
+  %x = load i32, ptr addrspace(1) %ps, align 4
+  %po = getelementptr inbounds i32, ptr addrspace(1) %out, i32 %i
+  store i32 %x, ptr addrspace(1) %po, align 4
+  %k2 = add i32 %k, 1
+  %more = icmp ult i32 %k2, 256
+  br i1 %more, label %copy, label %done
+
+done:
+  ret void
+}
+
+declare void @air.atomic.fence(i32, i32, i32)
+declare i32 @air.atomic.global.add.u.i32(ptr addrspace(1), i32, i32, i32, i1)
+
+!air.kernel = !{!0}
+!air.version = !{!9}
+!air.language_version = !{!10}
+!0 = !{ptr @$NAME, !1, !2}
+!1 = !{}
+!2 = !{!3, !4, !5, !6, !7, !8}
+!3 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"data"}
+!4 = !{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"count"}
+!5 = !{i32 2, !"air.buffer", !"air.location_index", i32 2, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"out"}
+!6 = !{i32 3, !"air.thread_index_in_threadgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"t"}
+!7 = !{i32 4, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"g"}
+!8 = !{i32 5, !"air.threadgroup_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"w"}
+!9 = !{i32 2, i32 8, i32 0}
+!10 = !{!"Metal", i32 4, i32 0, i32 0}
+"#;
+
+    /// [`FENCE_LAST`] as `name`, its fences at the AIR `thread_scope` `scope` (threadgroup 1,
+    /// device 2).
+    fn fence_kernel(name: &str, scope: u32) -> String {
+        FENCE_LAST
+            .replace("$NAME", name)
+            .replace("$SCOPE", &scope.to_string())
+    }
+
+    /// [`FENCE_LAST`] with its fences at `thread_scope_threadgroup` and at `thread_scope_device`,
+    /// each in 16 threadgroups of 256 threads: the last thread of each threadgroup to add reads
+    /// the words its threadgroup's every thread stored, the other SIMD groups' included on every
+    /// device. Every word it copies is the one its thread stored, `count` reads 256 for each
+    /// threadgroup, and `data` holds every thread's word: the answers the fences promise (MSL
+    /// §6.16.1: with `memory_order_seq_cst` on `atomic_thread_fence`, everything that happens
+    /// before a store in one thread is visible to the thread that performs the load), computed
+    /// here. Which thread is last is the device's; the answer does not depend on it.
+    #[test]
+    fn every_device_gathers_every_simd_groups_word_past_a_fence_and_an_atomic_count() {
+        const GROUPS: u32 = 16;
+        const SIZE: u32 = 256;
+        const FILL: u32 = 0xEEEE_EEEE;
+        let kernels: Vec<(&str, ComputePipelineDescriptor)> =
+            [("fence_threadgroup", 1), ("fence_device", 2)]
+                .into_iter()
+                .filter_map(|(entry, scope)| {
+                    let bitcode = match llvm_assemble_text(&fence_kernel(entry, scope)) {
+                        Ok(bitcode) => bitcode,
+                        Err(AssembleError::Missing(why)) => {
+                            eprintln!("SKIPPED: {why}");
+                            return None;
+                        }
+                        Err(error) => panic!("{entry}: {error:?}"),
+                    };
+                    let library = Library::from_air(&bitcode).expect("the library");
+                    let function = library.function(entry).expect("the kernel");
+                    Some((
+                        entry,
+                        ComputePipelineDescriptor::new(StageSource::Function(
+                            FunctionDescriptor::new(function),
+                        )),
+                    ))
+                })
+                .collect();
+        if kernels.is_empty() {
+            return;
+        }
+        let threads = GROUPS * SIZE;
+        let stored: Vec<u32> = (0..threads)
+            .map(|g| g.wrapping_mul(2_654_435_761) ^ 0x5A5A_5A5A)
+            .collect();
+        each_device("compute_fence_last", |name, _, device| {
+            let queue = device.new_command_queue(4).expect("a queue");
+            for (entry, descriptor) in &kernels {
+                let state = state(name, &device, descriptor);
+                let mut buffers = Buffers::new(&device, 1 << 20);
+                let data = buffers.buffer(4 * u64::from(threads));
+                let count = buffers.buffer(4 * u64::from(GROUPS));
+                let out = buffers.buffer(4 * u64::from(threads));
+                write(&count, 0, &le_bytes(&[0; GROUPS as usize]));
+                write(&out, 0, &le_bytes(&vec![FILL; threads as usize]));
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = command_buffer
+                    .compute_command_encoder(DispatchType::Serial)
+                    .expect("an encoder");
+                encoder.set_compute_pipeline_state(&state).expect("a state");
+                encoder.set_buffer(Some(&data), 0, 0).expect("a buffer");
+                encoder.set_buffer(Some(&count), 0, 1).expect("a buffer");
+                encoder.set_buffer(Some(&out), 0, 2).expect("a buffer");
+                encoder
+                    .dispatch_threadgroups([GROUPS, 1, 1], [SIZE, 1, 1])
+                    .unwrap_or_else(|error| panic!("{name}: {entry}: {error}"));
+                encoder.end_encoding();
+                command_buffer.commit().expect("a commit");
+                finished(name, &command_buffer);
+                assert_eq!(command_buffer.error(), None, "{name}: {entry}");
+                assert_eq!(
+                    words(&count, 0, GROUPS as usize),
+                    [SIZE; GROUPS as usize],
+                    "{name}: {entry}: each threadgroup's count"
+                );
+                assert_eq!(
+                    words(&data, 0, stored.len()),
+                    stored,
+                    "{name}: {entry}: the stored words"
+                );
+                let got = words(&out, 0, stored.len());
+                let first = got.iter().zip(&stored).position(|(got, want)| got != want);
+                assert_eq!(
+                    first.map(|word| (word, got[word], stored[word])),
+                    None,
+                    "{name}: {entry}: the first copied word that differs, its value and the \
+                     stored one"
+                );
+            }
+            println!(
+                "{name}: the last thread of each of {GROUPS} threadgroups of {SIZE} read every \
+                 thread's word past a fence at threadgroup and at device scope"
             );
         });
     }
