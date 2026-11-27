@@ -1277,9 +1277,13 @@ fn recursion(body: &Body, parts: &ModuleParts, name: &DiagName) -> Error {
 /// undeclared index or a value of another type is `InvalidRequest`). With no `globals` the
 /// static initializers are not run: only the constants are checked.
 ///
+/// A `half` or `float` global, the predicate of a function constant of that type, answers its
+/// truth as the predicate gates: 1 where its bits are not all zero (`-0.0` and a NaN included), 0
+/// where they are or the constant is unsupplied.
+///
 /// Each entry of the result answers the global at the same position: `NeedsInput
 /// (FunctionConstant)` when it is computed from an unsupplied constant, and
-/// `Unsupported{StaticInitializer}` when it does not hold an integer or is computed through a
+/// `Unsupported{StaticInitializer}` when it holds neither an integer nor such a predicate or is computed through a
 /// pure operation the interpreter does not evaluate (float arithmetic outside the operations it
 /// models). Such an operation taints only the globals it reaches: a global computed without it
 /// still resolves. A branch on its result, an address computed from it, or any other construct the
@@ -1325,7 +1329,7 @@ pub fn static_values(
         .iter()
         .map(|&g| match evaluated.opaque.contains(&g) {
             true => Err(interface::not_evaluable()),
-            false => values.int(g),
+            false => values.static_value(g),
         })
         .collect())
 }

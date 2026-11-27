@@ -1607,6 +1607,42 @@ fn static_values_resolve_abi_globals_without_canonicalizing_a_body() {
     );
 }
 
+#[test]
+fn static_values_answer_a_float_predicate_by_its_bits() {
+    for half in [false, true] {
+        let (module, abi) = float_predicate(half, true);
+        let pred = abi.entries[0].params[1].predicate.as_ref().unwrap().global;
+        let value = |constants: BTreeMap<u32, ConstValue>| {
+            static_values(module.clone(), &abi, &constants, &[pred], &mut meter()).unwrap()
+        };
+        let c = |f: f32, h: u16| match half {
+            true => half_constant(h),
+            false => float_constant(f),
+        };
+        assert_eq!(
+            value([(0, c(1.5, 0x3e00))].into()),
+            [Ok(1)],
+            "1.5, half {half}"
+        );
+        assert_eq!(
+            value([(0, c(0.0, 0x0000))].into()),
+            [Ok(0)],
+            "0.0, half {half}"
+        );
+        assert_eq!(
+            value([(0, c(-0.0, 0x8000))].into()),
+            [Ok(1)],
+            "-0.0, half {half}"
+        );
+        assert_eq!(
+            value([(0, c(f32::NAN, 0x7e00))].into()),
+            [Ok(1)],
+            "NaN, half {half}"
+        );
+        assert_eq!(value(BTreeMap::new()), [Ok(0)], "unsupplied, half {half}");
+    }
+}
+
 /// A module whose static initializer computes `pred` from function constant 0 and `bits` through
 /// float arithmetic the interpreter does not evaluate (`frem`, then a bitcast), with `branch`
 /// choosing whether it then branches on the float result.

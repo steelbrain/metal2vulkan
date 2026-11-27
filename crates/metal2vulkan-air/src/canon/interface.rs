@@ -113,6 +113,16 @@ impl Values<'_> {
         }
     }
 
+    /// What [`static_values`](super::static_values) answers for global `g`: a `half` or `float`
+    /// predicate's truth as 1 or 0, by its bits as [`Self::present`] reads it, else the integer it
+    /// holds ([`Self::int`]).
+    pub(super) fn static_value(&self, g: GlobalId) -> Result<u64, Error> {
+        match self.holds_float(g) {
+            true => self.float_nonzero(g).map(u64::from),
+            false => self.int(g),
+        }
+    }
+
     /// Whether global `g`'s initializer is a floating-point constant.
     fn holds_float(&self, g: GlobalId) -> bool {
         let init = self.globals.get(g).and_then(|g| g.init);
