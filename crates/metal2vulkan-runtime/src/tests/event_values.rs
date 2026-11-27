@@ -259,8 +259,8 @@ fn a_value_the_host_sees_is_one_a_host_wait_confirmed() {
         // A signal pending: the completion thread waits on the GPU for it.
         let busy = Busy::new(&device);
         // A value no progress value of the device's reaches, so the GPU wait's values name it
-        // alone.
-        let later = 1 << 40;
+        // alone, and within the device's limit of the event's value 5 (at least 2^31 - 1).
+        let later = 5 + timeline_limit(&device).min(1 << 40);
         let second = signal(name, &device, &queue, event.as_event(), later);
         assert_eq!(pending(event.as_event()), [later], "{name}");
         within(name, || {
