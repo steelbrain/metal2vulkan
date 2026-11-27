@@ -1008,3 +1008,33 @@ fn an_opencl_mode_barrier_of_a_flag_opencl_does_not_name_is_refused() {
         );
     }
 }
+
+/// In OpenCL mode an `air.simdgroup.barrier` keeps Metal's flags: Apple's `cl_kernel.h` declares no
+/// barrier of a simdgroup on `cl_mem_fence_flags`, and the simdgroup barrier canonicalization
+/// writes itself (an asynchronous copy's wait, `mem_threadgroup`) is Metal's. `mem_threadgroup`
+/// (2) orders threadgroup memory (`WorkgroupMemory`) alone in both modes, on the 780M's profile
+/// under the runtime's policy.
+#[test]
+fn an_opencl_mode_simdgroup_barrier_keeps_metals_flags() {
+    let b = Budget::standard();
+    let (_, dev) = (runtime_devices().into_iter())
+        .find(|(stem, _)| stem == "amd-780m-radv")
+        .expect("the 780M's profile");
+    let calls = "  tail call void @air.simdgroup.barrier(i32 2, i32 4) #5\n";
+    let defs = "declare void @air.simdgroup.barrier(i32, i32) #5\n";
+    let Some(k) = function(&barrier_kernel(calls, defs), "__entry_b") else {
+        return;
+    };
+    for open_cl_mode in [true, false] {
+        let p = dev
+            .compile_compute_pipeline(
+                &descriptor(StageSource::Function(k.clone()), open_cl_mode),
+                &b,
+            )
+            .unwrap_or_else(|e| panic!("OpenCL mode {open_cl_mode}: {e}"));
+        let storage: Vec<u32> = (control_barriers(&p.stage.spirv).into_iter())
+            .map(|(_, _, storage, _)| storage)
+            .collect();
+        assert_eq!(storage, [0x100], "OpenCL mode {open_cl_mode}");
+    }
+}
