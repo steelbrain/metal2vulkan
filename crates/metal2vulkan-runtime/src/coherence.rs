@@ -45,10 +45,15 @@
 //! pages the consumer writes through its own cached mapping, which no flush reaches.
 //! Each call is counted, with its bytes, in [`Metrics`](crate::Metrics)'s `shared_flushes`,
 //! `shared_flushed_bytes`, `shared_invalidates` and `shared_invalidated_bytes`; a call that fails
-//! in `shared_coherence_failures`.
+//! in `shared_coherence_failures`. Each flush's bytes are counted once more by its [`Point`], so
+//! `shared_reach_flushed_bytes`, `shared_retire_flushed_bytes`, `shared_event_flushed_bytes`
+//! and `shared_staging_flushed_bytes` sum to `shared_flushed_bytes`, a settle's flush counted
+//! once at its point; and the host time inside each call, read by [`host_time`] at its call and
+//! at its return, in `shared_flush_nanos` or `shared_invalidate_nanos`.
 
 use crate::device::{lock, Core};
 use crate::memory::{Memory, MemoryClass};
+use crate::times::host_time;
 use ash::vk;
 use std::sync::{Arc, Mutex, Weak};
 
@@ -290,42 +295,51 @@ impl Coherence {
             ranges.extend_from_slice(&held.written);
         }
         merge(&mut ranges);
-        self.settle(core, &ranges);
+        self.settle(core, Point::EventSeen, &ranges);
     }
 
-    /// Flushes `ranges` (`vkFlushMappedMemoryRanges`), counted; nothing for none.
-    pub(crate) fn flush(&self, core: &Core, ranges: &[Range]) {
+    /// Flushes `ranges` (`vkFlushMappedMemoryRanges`) at `point`, counted and timed; nothing for
+    /// none.
+    pub(crate) fn flush(&self, core: &Core, point: Point, ranges: &[Range]) {
         if ranges.is_empty() {
             return;
         }
         // SAFETY: each range is of an allocation the runtime maps whole and keeps while the range
         // is named (a block a command buffer or upload keeps, the staging region, a staging
         // buffer, the zero source), its ends at atoms or the allocation's end.
-        let failed = with_mapped(ranges, |mapped| unsafe {
-            core.device.flush_mapped_memory_ranges(mapped).is_err()
+        let (failed, nanos) = with_mapped(ranges, |mapped| unsafe {
+            let called = host_time();
+            let failed = core.device.flush_mapped_memory_ranges(mapped).is_err();
+            (failed, host_time().saturating_sub(called))
         });
-        core.counters.coherence(Call::Flush, bytes(ranges), failed);
+        let call = Call::Flush(point);
+        core.counters.coherence(call, bytes(ranges), nanos, failed);
     }
 
-    /// Flushes `ranges`, then invalidates them (`vkInvalidateMappedMemoryRanges`), counted: the
-    /// GPU's writes there are visible to the host's reads after it, and the host's own writes made
-    /// before it are kept. Nothing for none.
-    pub(crate) fn settle(&self, core: &Core, ranges: &[Range]) {
+    /// Flushes `ranges`, then invalidates them (`vkInvalidateMappedMemoryRanges`), at `point`,
+    /// counted and each call timed: the GPU's writes there are visible to the host's reads after
+    /// it, and the host's own writes made before it are kept. Nothing for none.
+    pub(crate) fn settle(&self, core: &Core, point: Point, ranges: &[Range]) {
         if ranges.is_empty() {
             return;
         }
         // SAFETY: as in `flush`.
-        let (flushed, invalidated) = with_mapped(ranges, |mapped| unsafe {
-            let flushed = core.device.flush_mapped_memory_ranges(mapped).is_err();
-            (
-                flushed,
-                core.device.invalidate_mapped_memory_ranges(mapped).is_err(),
-            )
-        });
+        let [(flushed, flush_nanos), (invalidated, invalidate_nanos)] =
+            with_mapped(ranges, |mapped| unsafe {
+                let called = host_time();
+                let flushed = core.device.flush_mapped_memory_ranges(mapped).is_err();
+                let returned = host_time();
+                let invalidated = core.device.invalidate_mapped_memory_ranges(mapped).is_err();
+                let after = host_time();
+                [
+                    (flushed, returned.saturating_sub(called)),
+                    (invalidated, after.saturating_sub(returned)),
+                ]
+            });
         let bytes = bytes(ranges);
-        core.counters.coherence(Call::Flush, bytes, flushed);
-        core.counters
-            .coherence(Call::Invalidate, bytes, invalidated);
+        let counters = &core.counters;
+        counters.coherence(Call::Flush(point), bytes, flush_nanos, flushed);
+        counters.coherence(Call::Invalidate, bytes, invalidate_nanos, invalidated);
     }
 }
 
@@ -343,11 +357,30 @@ fn with_mapped<R>(ranges: &[Range], call: impl FnOnce(&[vk::MappedMemoryRange]) 
     call(&mapped)
 }
 
-/// Which call was made.
+/// Which call was made: a flush at its point, or an invalidate, which only a settle makes, after
+/// its flush of the same ranges.
 #[derive(Clone, Copy)]
 pub(crate) enum Call {
-    Flush,
+    Flush(Point),
     Invalidate,
+}
+
+/// Where a flush, or a settle's flush and invalidate, is made: each counts its bytes in its own
+/// field of [`Metrics`](crate::Metrics).
+#[derive(Clone, Copy)]
+pub(crate) enum Point {
+    /// Before a submission, over the Shared memory its command buffers reach and its Managed
+    /// copy-ins read (`shared_reach_flushed_bytes`).
+    Reach,
+    /// As a command buffer retires, over what its commands may write
+    /// (`shared_retire_flushed_bytes`).
+    Retirement,
+    /// Before the host sees a shared event's value a GPU signal raised, over what every command
+    /// buffer in flight may write (`shared_event_flushed_bytes`).
+    EventSeen,
+    /// The runtime's own host accesses: `replace_region`'s staging span, `upload_region`'s named
+    /// bytes, `get_bytes`'s staging span and the zero source (`shared_staging_flushed_bytes`).
+    Staging,
 }
 
 /// The bytes `ranges` name.

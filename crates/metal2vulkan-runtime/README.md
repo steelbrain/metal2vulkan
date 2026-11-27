@@ -571,7 +571,15 @@ Each range is widened to whole multiples of the device's `nonCoherentAtomSize`, 
 pool's allocation, which the runtime maps whole. `Metrics::shared_flushes` and
 `shared_invalidates` count the calls, `shared_flushed_bytes` and `shared_invalidated_bytes` their
 bytes, and `shared_coherence_failures` the calls that did not return success; the work goes on
-after one. On a device whose Shared type is host-coherent all five stay 0.
+after one. `shared_reach_flushed_bytes`, `shared_retire_flushed_bytes`,
+`shared_event_flushed_bytes` and `shared_staging_flushed_bytes` count each flush's bytes again by
+the point that made it (before a submission, as a command buffer completes, before a shared
+event's value is seen, around the runtime's own host accesses), a settle's flush at its settle's
+point, so they sum to `shared_flushed_bytes`; `shared_invalidated_bytes` is the completions' and
+the events' plus what `get_bytes` settled. `shared_flush_nanos` and `shared_invalidate_nanos` are
+the host time inside the calls, read at each call and its return. These are the runtime's own
+measures; Metal has no counterpart. On a device whose Shared type is host-coherent all eleven stay
+0, and no clock is read for them.
 
 On a device whose Shared type is not host-coherent, a range that a command buffer reaches only
 through an address, with no binding or `use_resource` declaration naming its buffer, is neither
@@ -1083,7 +1091,10 @@ the Direct3D 11 texture's payload until it is freed.
   cached and not coherent can. The device tests run the calls on our devices through a view that
   reads their cached types as not coherent (`--cfg m2v_shared_view`, docs/VALIDATION.md), on memory
   that is coherent in fact; neither the calls' time nor their effect has been measured on a device
-  whose memory is not.
+  whose memory is not. On a device that makes the calls, `Metrics::shared_reach_flushed_bytes`,
+  `shared_retire_flushed_bytes`, `shared_event_flushed_bytes` and `shared_staging_flushed_bytes`
+  measure which of those points carries their bytes, and `shared_flush_nanos` and
+  `shared_invalidate_nanos` the host time inside them.
 - On a device whose Shared type is not host-coherent, every dma-buf import is refused
   (`Limit::ImportCoherence`, Imported blocks), so pages that only a dma-buf imports there (a
   mapping no pointer import takes) have no no-copy route. The refusal is a proxy, and where the

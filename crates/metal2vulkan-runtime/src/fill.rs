@@ -315,8 +315,11 @@ impl Filler {
                     .memory(self.zeros_memory)
                     .offset(0)
                     .size(vk::WHOLE_SIZE)];
+                let called = crate::times::host_time();
                 let flushed = device.flush_mapped_memory_ranges(&zeros);
-                counters.coherence(crate::coherence::Call::Flush, ZEROS, flushed.is_err());
+                let nanos = crate::times::host_time().saturating_sub(called);
+                let call = crate::coherence::Call::Flush(crate::coherence::Point::Staging);
+                counters.coherence(call, ZEROS, nanos, flushed.is_err());
             }
             device.unmap_memory(self.zeros_memory);
         }

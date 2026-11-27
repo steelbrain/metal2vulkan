@@ -1958,7 +1958,7 @@ pub(crate) fn retire(
     let held = gpu.coherence;
     if let Some(held) = held {
         if let (Some(reach), Some(coherence)) = (&held.reach, &core.coherence) {
-            coherence.settle(core, &reach.written);
+            coherence.settle(core, coherence::Point::Retirement, &reach.written);
             coherence.retired(reach);
         }
     }

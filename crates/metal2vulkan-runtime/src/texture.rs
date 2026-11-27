@@ -41,6 +41,7 @@
 use crate::alias::{Moved, Placement};
 use crate::arrays::{Owner, ResourceId};
 use crate::buffer::{Buffer, BufferInner, BufferObject};
+use crate::coherence::Point;
 use crate::copy_out;
 use crate::counters::{Counters, Gauge, Metric, OverCause, OverCopyKind, Part, Site};
 use crate::device::{lock, Core, Device};
@@ -4734,7 +4735,7 @@ impl Texture {
         // The rows written are the GPU's before the copy runs (`crate::coherence`).
         if let Some(coherence) = &core.coherence {
             let written = stage.range(copy.len(), coherence.atom);
-            coherence.flush(core, written.as_slice());
+            coherence.flush(core, Point::Staging, written.as_slice());
         }
         core.counters.copied(copy.len());
         core.work.upload(
@@ -4811,7 +4812,7 @@ impl Texture {
         // (`crate::coherence`).
         if let Some(coherence) = &core.coherence {
             let read = bytes.shared_span(start, copy.extent(), coherence.atom);
-            coherence.flush(core, read.as_slice());
+            coherence.flush(core, Point::Staging, read.as_slice());
         }
         core.work.upload(
             core,
@@ -4936,7 +4937,7 @@ impl Texture {
             // What the copy wrote is the host's before it reads it (`crate::coherence`).
             if let Some(coherence) = &core.coherence {
                 let written = stage.range(copy.len(), coherence.atom);
-                coherence.settle(core, written.as_slice());
+                coherence.settle(core, Point::Staging, written.as_slice());
             }
             // SAFETY: the stage holds every row packed, the copy into it completed and its writes
             // are visible to the host, and no other call takes its span while this one reads it;

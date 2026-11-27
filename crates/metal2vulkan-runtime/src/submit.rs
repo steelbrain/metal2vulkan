@@ -63,7 +63,7 @@
 use crate::alias;
 use crate::buffer::{BufferInner, BufferObject, DeviceCopy};
 use crate::capture::{self, Changes, CopyIn, Modified};
-use crate::coherence::{self, Range, Ranges};
+use crate::coherence::{self, Point, Range, Ranges};
 use crate::command::{self, CbInner, CommandBufferError, DeviceLoss, Handler, Pending, Segment};
 use crate::complete;
 use crate::counters::{Counters, Gauge, Metric, Part, Site};
@@ -2759,14 +2759,14 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
             let Flushes { reached, copied } = *flushes;
             if let Some(coherence) = &core.coherence {
                 match (copied.is_empty(), &reached[..]) {
-                    (true, [one]) => coherence.flush(core, &one.reached),
+                    (true, [one]) => coherence.flush(core, Point::Reach, &one.reached),
                     _ => {
                         let mut flushed = copied;
                         flushed.extend(
                             (reached.iter()).flat_map(|ranges| ranges.reached.iter().copied()),
                         );
                         coherence::merge(&mut flushed);
-                        coherence.flush(core, &flushed);
+                        coherence.flush(core, Point::Reach, &flushed);
                     }
                 }
             }

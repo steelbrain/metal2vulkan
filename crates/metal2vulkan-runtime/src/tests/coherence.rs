@@ -10,6 +10,15 @@
 //! with its bytes, and none fails. A device whose one host-visible, host-cached buffer type also
 //! holds the parameter ring is refused under the view, with its refusal.
 //!
+//! Every count also checks the points' identity: the flushed bytes by point (before a
+//! submission, at a retirement, before an event's value is seen, around the runtime's own host
+//! accesses) sum to the flushed bytes, and the invalidated bytes are the retirements' and the
+//! events' plus at most the staging's. Each site below asserts its bytes at its own point. A
+//! device with no coherence state counts nothing at any point and no time in a call; where calls
+//! ran, the host time inside the flushes and the invalidates is not zero. On every device,
+//! lavapipe among them, a coherence state the test makes over the viewed Shared type counts a
+//! flush and a settle of a Shared buffer's range at each point alone.
+//!
 //! Under the view, each of these sites makes its calls too, each counted by its ranges' bytes
 //! widened to the device's atom, with no call failing, and the bytes read after them are the
 //! bytes written:
@@ -58,15 +67,44 @@ mod on_device {
     use metal2vulkan_devtools::{engine_dir, llvm_assemble, AssembleError};
     use std::sync::atomic::Ordering;
 
-    /// From `before` to `after`: the flushes, their bytes, the invalidates, their bytes, and the
-    /// calls that failed.
-    fn calls(before: &Metrics, after: &Metrics) -> [u64; 5] {
-        [
+    /// From `before` to `after`: the flushes, their bytes, the invalidates, their bytes, the
+    /// calls that failed, then the flushed bytes by point: before a submission, at a retirement,
+    /// before an event's value is seen, and around the runtime's own host accesses
+    /// (`crate::coherence::Point`). Asserts the identity between them: the points' bytes sum to
+    /// the flushed bytes, and the invalidated bytes are the retirements' and the events' plus at
+    /// most the staging's.
+    fn calls(before: &Metrics, after: &Metrics) -> [u64; 9] {
+        let made = [
             after.shared_flushes - before.shared_flushes,
             after.shared_flushed_bytes - before.shared_flushed_bytes,
             after.shared_invalidates - before.shared_invalidates,
             after.shared_invalidated_bytes - before.shared_invalidated_bytes,
             after.shared_coherence_failures - before.shared_coherence_failures,
+            after.shared_reach_flushed_bytes - before.shared_reach_flushed_bytes,
+            after.shared_retire_flushed_bytes - before.shared_retire_flushed_bytes,
+            after.shared_event_flushed_bytes - before.shared_event_flushed_bytes,
+            after.shared_staging_flushed_bytes - before.shared_staging_flushed_bytes,
+        ];
+        let [_, flushed, _, invalidated, _, reach, retire, event, staging] = made;
+        assert_eq!(
+            reach + retire + event + staging,
+            flushed,
+            "the points' flushed bytes sum to the flushed bytes: {made:?}"
+        );
+        assert!(
+            (retire + event..=retire + event + staging).contains(&invalidated),
+            "the invalidated bytes are the retirements' and the events' settles, and get_bytes's: \
+             {made:?}"
+        );
+        made
+    }
+
+    /// From `before` to `after`: the host nanoseconds inside the flushes, then inside the
+    /// invalidates.
+    fn nanos(before: &Metrics, after: &Metrics) -> [u64; 2] {
+        [
+            after.shared_flush_nanos - before.shared_flush_nanos,
+            after.shared_invalidate_nanos - before.shared_invalidate_nanos,
         ]
     }
 
@@ -78,10 +116,21 @@ mod on_device {
 
     /// The calls of one command buffer that runs in one submission, reaching `reached` bytes of
     /// Shared memory and maybe writing `written` of them: the submission's flush of every byte it
-    /// reaches, then, where it may write any, its completion's flush and invalidate of those.
-    fn one_submission(reached: u64, written: u64) -> [u64; 5] {
+    /// reaches, then, where it may write any, its completion's flush and invalidate of those; the
+    /// first counted at the submission's point, the settle at the retirement's.
+    fn one_submission(reached: u64, written: u64) -> [u64; 9] {
         let settles = u64::from(written > 0);
-        [1 + settles, reached + written, settles, written, 0]
+        [
+            1 + settles,
+            reached + written,
+            settles,
+            written,
+            0,
+            reached,
+            written,
+            0,
+            0,
+        ]
     }
 
     /// The device's `nonCoherentAtomSize`, held by the coherence state the view built.
@@ -230,7 +279,7 @@ mod on_device {
         );
         assert!(bytes.iter().all(|&byte| byte == 0x5a), "{name}: the fill");
         assert_eq!(read, texels, "{name}: the texture's bytes");
-        assert_eq!(into_private, [0; 5], "{name}: a fill into a Private buffer");
+        assert_eq!(into_private, [0; 9], "{name}: a fill into a Private buffer");
         let Some(atom) = atom else {
             assert_eq!(
                 (made.shared_flushes, made.shared_invalidates),
@@ -242,8 +291,19 @@ mod on_device {
                 ("replace_region", staged_in),
                 ("get_bytes", staged_out),
             ] {
-                assert_eq!(calls, [0; 5], "{name}: {work}, with no coherence state");
+                assert_eq!(calls, [0; 9], "{name}: {work}, with no coherence state");
             }
+            let total = counters.metrics();
+            assert_eq!(
+                calls(&Metrics::default(), &total),
+                [0; 9],
+                "{name}: no call over the device's life, with no coherence state"
+            );
+            assert_eq!(
+                nanos(&Metrics::default(), &total),
+                [0; 2],
+                "{name}: no time in a call, with no coherence state"
+            );
             return;
         };
         assert!(
@@ -255,9 +315,10 @@ mod on_device {
         let widened = atoms(OFFSET, LEN, atom);
         assert_eq!(
             into_shared,
-            [2, 2 * widened, 1, widened, 0],
+            [2, 2 * widened, 1, widened, 0, widened, widened, 0, 0],
             "{name}: a fill into a Shared buffer: its submission's flush, then its completion's \
-             flush and invalidate, each over the buffer's atoms ({widened} bytes)"
+             flush and invalidate, each over the buffer's atoms ({widened} bytes), at the \
+             submission's point and the retirement's"
         );
         assert_eq!(
             [staged_in[0], staged_in[2], staged_in[4]],
@@ -269,6 +330,11 @@ mod on_device {
             "{name}: replace_region flushed its 64 bytes"
         );
         assert_eq!(
+            staged_in[5..],
+            [0, 0, 0, staged_in[1]],
+            "{name}: replace_region's flush, at the staging point"
+        );
+        assert_eq!(
             [staged_out[0], staged_out[2], staged_out[4]],
             [1, 1, 0],
             "{name}: get_bytes's flushes, invalidates and failures"
@@ -276,6 +342,34 @@ mod on_device {
         assert!(
             staged_out[1] >= 64 && staged_out[3] >= 64,
             "{name}: get_bytes flushed and invalidated its 64 bytes"
+        );
+        assert_eq!(
+            [
+                staged_out[5],
+                staged_out[6],
+                staged_out[7],
+                staged_out[8],
+                staged_out[3]
+            ],
+            [0, 0, 0, staged_out[1], staged_out[1]],
+            "{name}: get_bytes's settle, at the staging point, invalidating what it flushed"
+        );
+        let total = counters.metrics();
+        assert!(
+            made.shared_staging_flushed_bytes >= crate::fill::ZEROS,
+            "{name}: the zero source's flush, at the staging point: {made:?}"
+        );
+        calls(&Metrics::default(), &total);
+        let [flush, invalidate] = nanos(&Metrics::default(), &total);
+        println!(
+            "coherence: {name}: over the device's life, {} flushes in {flush} ns, {} invalidates \
+             in {invalidate} ns",
+            total.shared_flushes, total.shared_invalidates
+        );
+        assert!(
+            flush > 0 && invalidate > 0,
+            "{name}: the host time inside the flushes ({flush} ns) and the invalidates \
+             ({invalidate} ns)"
         );
     }
 
@@ -313,6 +407,88 @@ mod on_device {
                 "{name}: under m2v_shared_view every device builds the coherence state"
             );
             calls_of_the_work(name, &device, atom);
+        });
+    }
+
+    /// Every device of the cfg's kind, lavapipe among them, with a coherence state the test makes
+    /// of its own over the device's Shared type read through the refused device's view
+    /// (`crate::tests::command::on_device::viewed`), which leaves that type not coherent: the
+    /// device itself is made as the device tests make it, so this runs where the floor refuses
+    /// the view. At each point, a flush and then a settle of a Shared buffer's range count its
+    /// atoms at that point alone and at no other, the settle's invalidate among the invalidated
+    /// bytes, with no call failing; and the host time inside the calls is counted, the flushes'
+    /// apart from the invalidates'.
+    #[test]
+    fn a_coherence_state_counts_each_call_at_its_point_and_times_it() {
+        use crate::buffer::BufferObject;
+        use crate::coherence::{Coherence, Point};
+        const OFFSET: u64 = 320;
+        const LEN: u64 = 100;
+        let runtime = crate::tests::validation::instance(&[]);
+        let (_, vk_instance) = runtime.raw();
+        on_each_device("coherence_points", &runtime, |name, _, device| {
+            let physical = device.raw().physical_device;
+            // SAFETY: the device's physical device is one of the instance's.
+            let (memory, limits) = unsafe {
+                (
+                    vk_instance.get_physical_device_memory_properties(physical),
+                    vk_instance.get_physical_device_properties(physical).limits,
+                )
+            };
+            let memory = crate::tests::command::on_device::viewed(memory);
+            let atom = limits.non_coherent_atom_size;
+            let coherence = (Coherence::of(&memory, device.memory_types(), atom))
+                .unwrap_or_else(|| panic!("{name}: the view leaves the Shared type not coherent"));
+            settled(&device);
+            let counters = device.counters();
+            let block = (device.take_block(MemoryClass::Shared, 4096)).expect("a Shared block");
+            let buffer = (device.new_buffer(block.id, OFFSET, LEN, Some(0))).expect("a buffer");
+            let range = (buffer.shared_range(coherence.atom))
+                .unwrap_or_else(|| panic!("{name}: the buffer's range in mapped Shared memory"));
+            let widened = atoms(block.offset + OFFSET, LEN, coherence.atom);
+            let core = device.core();
+            let start = counters.metrics();
+            let points = [
+                ("the submission's", Point::Reach),
+                ("the retirement's", Point::Retirement),
+                ("the event's", Point::EventSeen),
+                ("the staging's", Point::Staging),
+            ];
+            for (at, (what, point)) in points.into_iter().enumerate() {
+                let mut alone = [1, widened, 0, 0, 0, 0, 0, 0, 0];
+                alone[5 + at] = widened;
+                let mut settled_alone = alone;
+                settled_alone[2..4].copy_from_slice(&[1, widened]);
+                let before = counters.metrics();
+                coherence.flush(core, point, &[range]);
+                let flushed = counters.metrics();
+                coherence.settle(core, point, &[range]);
+                let settled = counters.metrics();
+                let flush = calls(&before, &flushed);
+                let settle = calls(&flushed, &settled);
+                println!(
+                    "coherence_points: {name}: at {what} point, a flush {flush:?}, a settle \
+                     {settle:?}; the buffer {widened} bytes"
+                );
+                assert_eq!(
+                    flush, alone,
+                    "{name}: a flush at {what} point, counted there alone"
+                );
+                assert_eq!(
+                    settle, settled_alone,
+                    "{name}: a settle at {what} point, its flush counted there alone"
+                );
+            }
+            let [flush, invalidate] = nanos(&start, &counters.metrics());
+            println!(
+                "coherence_points: {name}: 8 flushes in {flush} ns, 4 invalidates in {invalidate} \
+                 ns"
+            );
+            assert!(
+                flush > 0 && invalidate > 0,
+                "{name}: the host time inside the flushes ({flush} ns) and the invalidates \
+                 ({invalidate} ns)"
+            );
         });
     }
 
@@ -454,7 +630,7 @@ mod on_device {
         (queue, state): (&CommandQueue, &ComputePipelineState),
         [held, out]: [&Buffer; 2],
         declare: impl FnOnce(&mut ComputeCommandEncoder),
-    ) -> [u64; 5] {
+    ) -> [u64; 9] {
         let counters = device.counters();
         let before = counters.metrics();
         let command_buffer = queue.command_buffer().expect("a command buffer");
@@ -787,9 +963,10 @@ mod on_device {
                 );
                 assert_eq!(
                     at_sight,
-                    [2, 2 * widened, 1, widened, 0],
+                    [2, 2 * widened, 1, widened, 0, widened, 0, widened, 0],
                     "{name}: {way}: the submission's flush, then the settle before the value is \
-                     seen, each over the buffer's atoms"
+                     seen, each over the buffer's atoms, at the submission's point and the \
+                     event's"
                 );
                 assert!(
                     bytes.iter().all(|&byte| byte == value),
@@ -799,6 +976,11 @@ mod on_device {
                     [at_completion[2], at_completion[3], at_completion[4]],
                     [1, widened, 0],
                     "{name}: {way}: the completion's invalidate"
+                );
+                assert_eq!(
+                    at_completion[5..],
+                    [0, widened, 0, 0],
+                    "{name}: {way}: the completion's settle, at the retirement's point"
                 );
             }
         });

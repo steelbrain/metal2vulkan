@@ -975,6 +975,12 @@ struct Atomics {
     shared_invalidates: AtomicU64,
     shared_invalidated_bytes: AtomicU64,
     shared_coherence_failures: AtomicU64,
+    shared_reach_flushed_bytes: AtomicU64,
+    shared_retire_flushed_bytes: AtomicU64,
+    shared_event_flushed_bytes: AtomicU64,
+    shared_staging_flushed_bytes: AtomicU64,
+    shared_flush_nanos: AtomicU64,
+    shared_invalidate_nanos: AtomicU64,
     /// Segment ends whose barrier reaches the host, for the tests.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     host_reaches: AtomicU64,
@@ -1196,18 +1202,44 @@ impl Counters {
     }
 
     /// A `vkFlushMappedMemoryRanges` or `vkInvalidateMappedMemoryRanges` call over `bytes` bytes
-    /// of Shared memory ([`Metrics::shared_flushes`] and the three after it), `failed` where it
-    /// did not return success ([`Metrics::shared_coherence_failures`]).
-    pub(crate) fn coherence(&self, call: crate::coherence::Call, bytes: u64, failed: bool) {
+    /// of Shared memory ([`Metrics::shared_flushes`] and the three after it) that took `nanos`
+    /// nanoseconds ([`Metrics::shared_flush_nanos`], [`Metrics::shared_invalidate_nanos`]), a
+    /// flush's bytes counted again by its point ([`Metrics::shared_reach_flushed_bytes`] and the
+    /// three after it), `failed` where it did not return success
+    /// ([`Metrics::shared_coherence_failures`]).
+    pub(crate) fn coherence(
+        &self,
+        call: crate::coherence::Call,
+        bytes: u64,
+        nanos: u64,
+        failed: bool,
+    ) {
+        use crate::coherence::{Call, Point};
         let a = &self.atomics;
-        let (calls, total) = match call {
-            crate::coherence::Call::Flush => (&a.shared_flushes, &a.shared_flushed_bytes),
-            crate::coherence::Call::Invalidate => {
-                (&a.shared_invalidates, &a.shared_invalidated_bytes)
+        let (calls, total, time) = match call {
+            Call::Flush(point) => {
+                let at = match point {
+                    Point::Reach => &a.shared_reach_flushed_bytes,
+                    Point::Retirement => &a.shared_retire_flushed_bytes,
+                    Point::EventSeen => &a.shared_event_flushed_bytes,
+                    Point::Staging => &a.shared_staging_flushed_bytes,
+                };
+                at.fetch_add(bytes, Relaxed);
+                (
+                    &a.shared_flushes,
+                    &a.shared_flushed_bytes,
+                    &a.shared_flush_nanos,
+                )
             }
+            Call::Invalidate => (
+                &a.shared_invalidates,
+                &a.shared_invalidated_bytes,
+                &a.shared_invalidate_nanos,
+            ),
         };
         calls.fetch_add(1, Relaxed);
         total.fetch_add(bytes, Relaxed);
+        time.fetch_add(nanos, Relaxed);
         if failed {
             a.shared_coherence_failures.fetch_add(1, Relaxed);
         }
@@ -1901,6 +1933,12 @@ impl Counters {
             shared_invalidates: a.shared_invalidates.load(Relaxed),
             shared_invalidated_bytes: a.shared_invalidated_bytes.load(Relaxed),
             shared_coherence_failures: a.shared_coherence_failures.load(Relaxed),
+            shared_reach_flushed_bytes: a.shared_reach_flushed_bytes.load(Relaxed),
+            shared_retire_flushed_bytes: a.shared_retire_flushed_bytes.load(Relaxed),
+            shared_event_flushed_bytes: a.shared_event_flushed_bytes.load(Relaxed),
+            shared_staging_flushed_bytes: a.shared_staging_flushed_bytes.load(Relaxed),
+            shared_flush_nanos: a.shared_flush_nanos.load(Relaxed),
+            shared_invalidate_nanos: a.shared_invalidate_nanos.load(Relaxed),
             submit_call_nanos: a.submit_call_nanos.load(Relaxed),
             submit_call_max_nanos: a.submit_call_max_nanos.load(Relaxed),
             pipeline_creation_nanos: a.pipeline_creation_nanos.load(Relaxed),
@@ -2246,7 +2284,7 @@ pub struct Metrics {
     /// ([`shared_invalidates`](Self::shared_invalidates)), one after each `replace_region` through
     /// a staging span, one at each `upload_region` of named bytes in Shared memory, and one at the
     /// zero source's make. Only a device whose Shared type is not host-coherent makes them; on
-    /// one whose type is, this and the four after it stay 0 (the runtime README, "Shared memory's
+    /// one whose type is, this and the ten after it stay 0 (the runtime README, "Shared memory's
     /// coherence").
     pub shared_flushes: u64,
     /// The bytes those calls named, each range widened to whole multiples of the device's
@@ -2264,6 +2302,49 @@ pub struct Metrics {
     /// (`VK_ERROR_OUT_OF_HOST_MEMORY` or `VK_ERROR_OUT_OF_DEVICE_MEMORY`): the work went on as
     /// it would after a success.
     pub shared_coherence_failures: u64,
+    /// No Metal counterpart, the runtime's own measure: of
+    /// [`shared_flushed_bytes`](Self::shared_flushed_bytes), those the flush before each
+    /// submission named, over the Shared memory its command buffers reach (each buffer, buffer
+    /// under a texture and heap block they keep, whole) and the bytes its Managed copy-ins read.
+    ///
+    /// This and the three after it count each flush's bytes once, at the point that made it, so
+    /// they sum to [`shared_flushed_bytes`](Self::shared_flushed_bytes); a settle's flush counts
+    /// at its settle's point. Every invalidate follows a settle's flush of the same ranges, so
+    /// [`shared_invalidated_bytes`](Self::shared_invalidated_bytes) is
+    /// [`shared_retire_flushed_bytes`](Self::shared_retire_flushed_bytes) and
+    /// [`shared_event_flushed_bytes`](Self::shared_event_flushed_bytes), plus the part of
+    /// [`shared_staging_flushed_bytes`](Self::shared_staging_flushed_bytes) that `get_bytes`
+    /// settled. Both hold for a read made while no call is under way, and for the difference of
+    /// two such reads.
+    pub shared_reach_flushed_bytes: u64,
+    /// No Metal counterpart, the runtime's own measure: of
+    /// [`shared_flushed_bytes`](Self::shared_flushed_bytes), those the settle as each command
+    /// buffer retires named, over what its commands may write, before its status reads completed
+    /// or its handlers run; each is invalidated after its flush.
+    pub shared_retire_flushed_bytes: u64,
+    /// No Metal counterpart, the runtime's own measure: of
+    /// [`shared_flushed_bytes`](Self::shared_flushed_bytes), those the settles before a shared
+    /// event's value a GPU signal raised reaches the host named, each over what every command
+    /// buffer then committed and not yet retired may write, once for each value seen above the
+    /// last; each is invalidated after its flush.
+    pub shared_event_flushed_bytes: u64,
+    /// No Metal counterpart, the runtime's own measure: of
+    /// [`shared_flushed_bytes`](Self::shared_flushed_bytes), those the runtime's own host
+    /// accesses named: the staging span `Texture::replace_region` writes, the named bytes
+    /// `Texture::upload_region` copies, the staging span `Texture::get_bytes` reads (flushed,
+    /// then invalidated) and the zero source of fills, at its make.
+    pub shared_staging_flushed_bytes: u64,
+    /// No Metal counterpart, the runtime's own measure: the nanoseconds of
+    /// [`host_time`](crate::host_time) the `vkFlushMappedMemoryRanges` calls over Shared memory
+    /// took, from each call to its return, in total: the time inside the driver, on the thread
+    /// that made the call. A device whose Shared type is host-coherent makes none and reads no
+    /// clock for them, so this and the one after it stay 0 there.
+    pub shared_flush_nanos: u64,
+    /// No Metal counterpart, the runtime's own measure: the nanoseconds of
+    /// [`host_time`](crate::host_time) the `vkInvalidateMappedMemoryRanges` calls over Shared
+    /// memory took, from each call to its return, in total, as
+    /// [`shared_flush_nanos`](Self::shared_flush_nanos) counts the flushes'.
+    pub shared_invalidate_nanos: u64,
     /// The nanoseconds of [`host_time`](crate::host_time) those calls took, from each call to
     /// its return, in total: the time inside the driver, which a driver may spend holding the call
     /// while another thread is inside a memory call
